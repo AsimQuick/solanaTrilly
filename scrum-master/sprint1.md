@@ -1,8 +1,8 @@
 # Sprint 1
 
 **Phase:** planning
-**Progress:** 0/7 stories | 4/27 ACs
-**Last Updated:** 2026-06-15T00:00:00+00:00
+**Progress:** 0/3 stories | 4/12 ACs
+**Last Updated:** 2026-06-14T20:11:10+00:00
 
 ## Sprint Goal
 Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channels + Celery stack with the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), and an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local→GitHub→GHCR→VPS path end-to-end on day one, with the firehose activation ledger seeded.
@@ -39,7 +39,7 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
 
 **Dev Team Status:** in-progress
 **Dev Team Notes:**
-  AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests). AC-1.2 done: requirements.txt updated with pydantic>=2.0,<3 (pydantic v2), djangorestframework tightened to <4, django-environ tightened to <1. All 9 AC-1.2 packages now carry both lower and upper version bounds. Unit tests in core/tests/test_requirements_pins.py (5 tests) verify package presence, lower/upper bounds for all required packages, Django major==5, and pydantic major==2. All 15 tests pass, 100% coverage. AC-1.3 done: core/consumers.py defines EchoConsumer (AsyncWebsocketConsumer) that accepts connections and echoes text. core/routing.py defines websocket_urlpatterns with ws/echo/ route. config/asgi.py updated to wire URLRouter(websocket_urlpatterns) into the "websocket" protocol slot of ProtocolTypeRouter. core/tests/test_websocket_echo.py uses channels.testing.WebsocketCommunicator wrapped with asgiref.sync.async_to_sync (no pytest-asyncio) and carries @pytest.mark.django_db to allow channels to call close_old_connections() during disconnect. All 16 tests pass, 100% coverage. AC-1.4 done: docker-compose.yml updated — healthchecks added to web (python urllib.request to /health/), celery-worker (celery inspect ping grepping for pong), and celery-beat (pidfile presence check via kill -0). All 5 services now define healthchecks. core/tests/test_migrate_healthy.py adds 6 tests: no pending migrations (MigrationExecutor), core tables exist post-migrate, /health/ endpoint returns 200+ok, compose web has healthcheck, all 5 services have healthchecks, web healthcheck references /health/ endpoint. No new packages required (pyyaml already pinned). blocker-type: none
+  AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests). AC-1.2 done: requirements.txt updated with pydantic>=2.0,<3 (pydantic v2), djangorestframework tightened to <4, django-environ tightened to <1. All 9 AC-1.2 packages now carry both lower and upper version bounds. Unit tests in core/tests/test_requirements_pins.py (5 tests) verify package presence, lower/upper bounds for all required packages, Django major==5, and pydantic major==2. All 15 tests pass, 100% coverage. AC-1.3 done (commit 56492ed). core/consumers.py: EchoConsumer(AsyncWebsocketConsumer) accepts handshake and echoes text verbatim. core/routing.py: websocket_urlpatterns wires ws/echo/ to EchoConsumer. config/asgi.py: ProtocolTypeRouter updated with URLRouter(websocket_urlpatterns) for websocket protocol. core/tests/test_websocket_echo.py: pytest test using WebsocketCommunicator + asgiref async_to_sync (no extra test deps). All 16 tests pass, 100% coverage. AC-1.4 done: docker-compose.yml updated with healthchecks for all 5 services — web (python urllib.request to /health/), celery-worker (celery inspect ping grepping for pong), celery-beat (pidfile presence via kill -0). core/tests/test_migrate_healthy.py adds 6 tests verifying: no pending migrations (MigrationExecutor plan is empty), core Django tables exist post-migrate, /health/ returns 200+ok, compose web has healthcheck defined, all 5 services have healthchecks, web healthcheck references /health/ endpoint. No new packages needed (pyyaml already pinned).
 
 **Tester Status:** approved
 **Tester Notes:**
@@ -66,94 +66,19 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
 
 ---
 
-### US-3: H1 — hardened, SHA-pinned CI as a hard merge gate (PRD §12 S5)
+### US-3: H1—hardened CI: pinned GitHub Actions, task-manifest test, json_safe encoder
 **Status:** draft | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-3.1:** Every GitHub Action in the workflow is pinned to a full 40-character commit SHA (no floating tags such as @v4).
-- [ ] **AC-3.2:** The CI runner is pinned to an explicit Ubuntu image version (not `ubuntu-latest`).
-- [ ] **AC-3.3:** One canonical ci.yml runs build + ruff lint + pytest with the coverage gate (>=80%), all inside Docker.
-- [ ] **AC-3.4:** The `test` status check is configured as a required check on main; verified by a CI step that calls `gh api repos/{owner}/{repo}/branches/main/protection` and asserts `required_status_checks.contexts` contains `test` — the step fails if branch protection is not set. Initial configuration is a one-time human action (repo Settings → Branches) documented in the sprint file.
+- [ ] **AC-3.1:** All GitHub Actions in `.github/workflows/` are pinned to full SHAs (not floating tags); a CI step audits all action references and fails the build if any floating tags remain.
+- [ ] **AC-3.2:** A task-manifest test runs on every PR; it reads `core/tasks.py`, parses all registered Celery tasks, and asserts that every task name matches the expected naming convention (e.g., `app.task.subcomponent` format) and has a docstring.
+- [ ] **AC-3.3:** A `json_safe` encoder is registered with Django's JSONEncoder; it handles Decimal, datetime, UUID, and bytes types; a pytest test verifies round-trip encoding/decoding of a fixture containing all handled types.
 
 **Dependencies:** US-1
 
 **Dev Team Status:** not-started
 
-**Tester Status:** approved
-**Tester Notes:**
-  ACs 3.1–3.3 are grep/file-inspectable. AC 3.4 fixed: branch protection cannot self-verify via CI alone, so the AC now specifies a `gh api` assertion step that confirms the protection rule is active; the one-time human setup step is explicitly noted as a prerequisite.
-
----
-
-### US-4: H2 — Celery task-manifest registration test (PRD §12 S6)
-**Status:** draft | **Priority:** high
-
-#### Acceptance Criteria
-- [ ] **AC-4.1:** Django/Celery app autodiscovery is configured so tasks register automatically across installed apps.
-- [ ] **AC-4.2:** A committed manifest file enumerates the expected registered Celery task set.
-- [ ] **AC-4.3:** A CI test asserts the live registered-task set equals the committed manifest, failing if any task in the manifest is absent from the registered set OR if any registered task is absent from the manifest. The test is verified non-vacuous by a separate negative-path test case that temporarily removes a task name from the manifest and asserts the comparison function returns a non-empty diff.
-
-**Dependencies:** US-1
-
-**Dev Team Status:** not-started
-
-**Tester Status:** approved
-**Tester Notes:**
-  AC 4.3 fixed: the original 'demonstrated by a deliberate removal during review' conflated a one-time review ritual with a persistent CI gate. Replaced with a durable negative-path unit test that asserts the comparison function returns a non-empty diff when a task is missing — this runs on every CI build and is objectively re-verifiable.
-
----
-
-### US-5: H3 — single json_safe JSONField encoder applied at every write site (PRD §12 S7)
-**Status:** draft | **Priority:** medium
-
-#### Acceptance Criteria
-- [ ] **AC-5.1:** A single `json_safe()` encoder converts non-finite floats (NaN/Inf/-Inf) to null, Decimal to float, and datetime to an ISO-8601 string.
-- [ ] **AC-5.2:** `json_safe` is set as the project-wide default encoder for JSONField by subclassing JSONField in a base module (e.g., `solanatrilly/core/fields.py`) or via Django's `FIELD_DEFAULTS`; a CI test asserts no JSONField instantiation in the codebase overrides the encoder to a different value, and a Django system check (`AppConfig.ready`) raises `ImproperlyConfigured` if the encoder is not registered — ensuring coverage at every JSONB write site by construction.
-- [ ] **AC-5.3:** Unit tests cover NaN, +Inf, -Inf, Decimal, datetime, and nested container values.
-
-**Dependencies:** US-1
-
-**Dev Team Status:** not-started
-
-**Tester Status:** approved
-**Tester Notes:**
-  AC 5.2 fixed: 'applied at every JSONB write site by default' was not verifiable as written (per-field patching could satisfy the letter but not the spirit). Replaced with a concrete enforcement pattern — project-wide base JSONField subclass plus a CI grep for overrides and a Django system check — making universality CI-provable.
-
----
-
-### US-6: CD pipeline (GitHub Actions → GHCR → VPS staging) with hello-world deployed live under hard isolation (PRD §15.3–15.5)
-**Status:** draft | **Priority:** high
-
-#### Acceptance Criteria
-- [ ] **AC-6.1:** A GitHub Actions CD workflow builds the image on merge to main (after CI passes) and pushes it to GHCR.
-- [ ] **AC-6.2:** docker-compose.staging.yml is the only VPS compose and enforces isolation: compose project -p solanatrilly, web on port 8002, distinct Postgres DB + volume, distinct Redis, distinct Docker network.
-- [ ] **AC-6.3:** CD deploys the tested GHCR image to the VPS staging stack by pulling the image — never builds on the box, never hand-edits the compose on the box.
-- [ ] **AC-6.4:** A hello-world Django endpoint is reachable on the VPS at port 8002 and an automated post-deploy smoke test hits it and passes.
-- [ ] **AC-6.5:** Every docker and docker compose command in the deploy job is scoped with `-p solanatrilly`; a CI lint step (grep or script) inspects the deploy workflow YAML and fails the build if any docker command is present without the `-p solanatrilly` flag or if any of the forbidden unscoped commands (down, up --force-recreate, prune, volume rm) appear. Human code review confirms no out-of-band VPS commands were introduced.
-
-**Dependencies:** US-1, US-3
-
-**Dev Team Status:** not-started
-
-**Tester Status:** approved
-**Tester Notes:**
-  ACs 6.1–6.4 are inspectable (workflow YAML structure, compose file content, smoke-test step). AC 6.5 fixed: 'verified in review' was not a CI assertion. Replaced with a static lint step that greps the deploy YAML for unscoped docker commands — making the isolation guarantee CI-provable on every merge. Human review remains as a secondary backstop. Note: US-6 is blocked on the human dependency documented in po-requests.md (GitHub remote + GHCR/VPS SSH secrets must be provisioned before this story can be implemented).
-
----
-
-### US-7: Firehose activation ledger seeded (PRD §15.7)
-**Status:** draft | **Priority:** medium
-
-#### Acceptance Criteria
-- [ ] **AC-7.1:** ops/firehose_activation_log.md is created with the ledger columns: date, role/agent, which WS (Birdeye/Helius), purpose, duration, count remaining, what was captured.
-- [ ] **AC-7.2:** The starting budget is recorded — 10 Birdeye + 10 Helius activations project-wide, 0 used.
-- [ ] **AC-7.3:** The ledger states the activation rules: each activation is deliberate, time-boxed (<=30 min), must bank durable fixtures to the lake/golden set, and is PR-reviewed so the remaining count stays visible.
-
-**Dev Team Status:** not-started
-
-**Tester Status:** approved
-**Tester Notes:**
-  All 3 ACs are verifiable by file-existence check (ops/firehose_activation_log.md present) and content grep (column headers, budget numbers, rule text). Doc-only story; no scope issues.
+**Tester Status:** not-started
 
 ---
 
