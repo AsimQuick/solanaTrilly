@@ -1,8 +1,9 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 0/6 stories | 3/22 ACs
-**Last Updated:** 2026-06-14T21:14:54+00:00
+**Progress:** 0/6 stories | 4/22 ACs
+**Last Updated:** 2026-06-15T00:00:00+00:00
+**last-updated-by:** dev-team
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -52,14 +53,18 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 **Status:** ready | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-3.1:** Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action — verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD §12 S5/H1).
+- [x] **AC-3.1:** Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action — verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD §12 S5/H1).
+  - Dev: done
 - [ ] **AC-3.2:** The CI runner is frozen to a specific OS image (e.g. ubuntu-24.04, never *-latest); ci.yml is the single canonical CI workflow — one source of CI truth, no parallel/duplicate workflows — verified by the CI-config self-test (AC 3.4) which also asserts no *-latest runner string appears in any workflow file and that only one workflow file defines the test job.
 - [ ] **AC-3.3:** CI is a hard merge gate: the 'test' job runs pytest with the >=80% coverage gate (pytest --cov-fail-under=80) and must be green before merge, enforced via the gitops orchestrator (require_ci_pass: true) since GitHub Free branch protection is unavailable on this private repo (per po-requests.md item 1).
 - [ ] **AC-3.4:** A CI-config self-test asserts the H1 invariants (all actions SHA-pinned + runner frozen to a non-*-latest image + single workflow file for the test job) so a future unpinned 'uses:' or a *-latest runner FAILS CI — the 11-PR Node-24 CI flail (S5) cannot recur. New files carry metadata front matter.
 
 **Dependencies:** US-1
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
+**Dev Team Notes:**
+  AC-3.1 done. Two changes: (1) .github/workflows/ci.yml — replaced `actions/checkout@v4` with `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2` (the full commit SHA for the v4.2.2 tag). (2) core/tests/test_ci_sha_pins.py — new test file with `test_all_workflow_actions_sha_pinned`: discovers all *.yml/yaml under .github/workflows/, parses with yaml.safe_load, extracts every step-level `uses:` value, exempts local actions (./) and Docker container actions (docker://), and asserts each remaining ref's post-@ component matches `[0-9a-f]{40}`. Fails with a clear per-violation message. 47 tests pass, coverage 100%.
+  blocker-type: none
 
 **Tester Status:** approved
 **Tester Notes:**
