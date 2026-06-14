@@ -1,8 +1,8 @@
 # Sprint 1
 
 **Phase:** planning
-**Progress:** 0/7 stories | 2/27 ACs
-**Last Updated:** 2026-06-14T19:52:22+00:00
+**Progress:** 0/7 stories | 4/27 ACs
+**Last Updated:** 2026-06-15T00:00:00+00:00
 
 ## Sprint Goal
 Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channels + Celery stack with the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), and an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local→GitHub→GHCR→VPS path end-to-end on day one, with the firehose activation ledger seeded.
@@ -31,13 +31,15 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
   - Dev: done
 - [x] **AC-1.2:** requirements.txt pins the full stack with explicit version bounds: Django 5, djangorestframework, channels, channels-redis, celery, redis, daphne (or uvicorn), pydantic v2, psycopg[binary].
   - Dev: done
-- [ ] **AC-1.3:** Django Channels is configured with the Redis channel layer and an ASGI application; the service boots over ASGI and a trivial WebSocket consumer completes the handshake and echoes a message — verified by a pytest test using channels.testing.WebsocketCommunicator.
-- [ ] **AC-1.4:** `docker compose run --rm web python manage.py migrate` applies cleanly and `docker compose up -d` brings every service to a healthy state.
+- [x] **AC-1.3:** Django Channels is configured with the Redis channel layer and an ASGI application; the service boots over ASGI and a trivial WebSocket consumer completes the handshake and echoes a message — verified by a pytest test using channels.testing.WebsocketCommunicator.
+  - Dev: done
+- [x] **AC-1.4:** `docker compose run --rm web python manage.py migrate` applies cleanly and `docker compose up -d` brings every service to a healthy state.
+  - Dev: done
 - [ ] **AC-1.5:** The Celery worker connects to the Redis broker, autodiscovers tasks, and a sample task executes end-to-end (enqueue then resolve a result) — verified by a pytest test that dispatches the task and asserts the result is returned within a timeout.
 
 **Dev Team Status:** in-progress
 **Dev Team Notes:**
-  AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests). AC-1.2 done: requirements.txt updated with pydantic>=2.0,<3 (pydantic v2), djangorestframework tightened to <4, django-environ tightened to <1. All 9 AC-1.2 packages now carry both lower and upper version bounds. Unit tests in core/tests/test_requirements_pins.py (5 tests) verify package presence, lower/upper bounds for all required packages, Django major==5, and pydantic major==2. All 15 tests pass, 100% coverage.
+  AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests). AC-1.2 done: requirements.txt updated with pydantic>=2.0,<3 (pydantic v2), djangorestframework tightened to <4, django-environ tightened to <1. All 9 AC-1.2 packages now carry both lower and upper version bounds. Unit tests in core/tests/test_requirements_pins.py (5 tests) verify package presence, lower/upper bounds for all required packages, Django major==5, and pydantic major==2. All 15 tests pass, 100% coverage. AC-1.3 done: core/consumers.py defines EchoConsumer (AsyncWebsocketConsumer) that accepts connections and echoes text. core/routing.py defines websocket_urlpatterns with ws/echo/ route. config/asgi.py updated to wire URLRouter(websocket_urlpatterns) into the "websocket" protocol slot of ProtocolTypeRouter. core/tests/test_websocket_echo.py uses channels.testing.WebsocketCommunicator wrapped with asgiref.sync.async_to_sync (no pytest-asyncio) and carries @pytest.mark.django_db to allow channels to call close_old_connections() during disconnect. All 16 tests pass, 100% coverage. AC-1.4 done: docker-compose.yml updated — healthchecks added to web (python urllib.request to /health/), celery-worker (celery inspect ping grepping for pong), and celery-beat (pidfile presence check via kill -0). All 5 services now define healthchecks. core/tests/test_migrate_healthy.py adds 6 tests: no pending migrations (MigrationExecutor), core tables exist post-migrate, /health/ endpoint returns 200+ok, compose web has healthcheck, all 5 services have healthchecks, web healthcheck references /health/ endpoint. No new packages required (pyyaml already pinned). blocker-type: none
 
 **Tester Status:** approved
 **Tester Notes:**
