@@ -51,7 +51,7 @@
         {
           "id": "2.4",
           "text": "Thin-adapter ground rule enforced: the clock-injected core is pure (imports no Celery/Channels/network modules); Celery tasks and WS consumers are thin adapters around it \u2014 verified by a test asserting the core module's import graph is framework/network-free. New files carry metadata front matter.",
-          "checked": false,
+          "checked": true,
           "dev_status": "done",
           "tester_status": "not-started"
         }
