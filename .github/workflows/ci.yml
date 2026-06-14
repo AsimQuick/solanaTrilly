@@ -1,0 +1,37 @@
+# ---
+# file: ci.yml
+# stack: django
+# purpose: GitHub Actions CI — lint and test inside Docker
+# created-by: project-lead
+# ---
+#
+# Job name is "test" to match the required status check set by branch protection.
+
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+    paths-ignore:
+      - 'scrum-master/**'
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build containers
+        run: docker compose build
+
+      - name: Lint
+        run: docker compose run --rm web ruff check .
+
+      - name: Run tests with coverage
+        run: docker compose run --rm web pytest --cov=. --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=80 --tb=short -q
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v

@@ -1,0 +1,23 @@
+{
+  "project": "solanatrilly",
+  "stack": "django",
+  "status": "awaiting-standup",
+  "current_sprint": null,
+  "current_phase": null,
+  "current_task": {
+    "story": null,
+    "acceptance_criterion": null,
+    "assigned_to": null,
+    "started_at": null,
+    "token_budget": 0,
+    "tokens_used": 0,
+    "session_id": null
+  },
+  "blocked_by": null,
+  "human_requests": [],
+  "sprint_summary": {},
+  "token_spend": {},
+  "cycle_count": 0,
+  "last_updated": null,
+  "log": []
+}

@@ -1,0 +1,72 @@
+# ---
+# file: docker-compose.yml
+# stack: django
+# purpose: Local development services (web + postgres)
+# created-by: project-lead
+# ---
+#
+# Env values use ${VAR:-default} interpolation. Compose automatically reads a
+# local .env file for these, and falls back to the defaults below when it is
+# absent (e.g. in CI). This needs no `env_file:` key, so it works on older
+# Docker Compose versions too.
+
+services:
+  web:
+    build: .
+    # Dev command: apply migrations then run the autoreloading dev server.
+    # `docker compose run --rm web pytest ...` overrides this for tests/lint.
+    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@db:5432/app}
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-key-change-me}
+      DEBUG: ${DEBUG:-1}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-*}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${COMPOSE_PROJECT_NAME:-app}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- Optional: background tasks / scraper support ---
+  # Uncomment redis + celery services and the celery/redis lines in
+  # requirements.txt when a story needs async or scheduled work.
+  #
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #
+  # celery-worker:
+  #   build: .
+  #   command: celery -A config worker -l info
+  #   volumes:
+  #     - .:/app
+  #   environment:
+  #     DJANGO_SETTINGS_MODULE: config.settings
+  #     DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@db:5432/app}
+  #     CELERY_BROKER_URL: ${REDIS_URL:-redis://redis:6379/0}
+  #   depends_on:
+  #     - db
+  #     - redis
+
+volumes:
+  pgdata:

@@ -1,0 +1,24 @@
+# ---
+# file: requirements.txt
+# stack: django
+# purpose: Python dependencies (lean — psycopg binary wheel, no compiler needed)
+# created-by: project-lead
+# ---
+
+# Core (Django 5.2 LTS — supported through April 2028)
+Django>=5.2,<5.3
+gunicorn>=22.0
+psycopg[binary]>=3.1,<4          # binary wheel — no libpq-dev/gcc, faster build on older machines
+django-environ>=0.11             # 12-factor env config (reads DATABASE_URL, SECRET_KEY, DEBUG)
+djangorestframework>=3.15        # API layer (enterprise APIs + dashboard data feeds)
+
+# Background tasks / scraper support — uncomment when a story needs them.
+# Adds redis + celery-worker + celery-beat services to docker-compose.yml.
+# celery>=5.4
+# redis>=5.0
+
+# Dev / Test
+pytest>=8.0
+pytest-django>=4.8
+pytest-cov>=5.0
+ruff>=0.5

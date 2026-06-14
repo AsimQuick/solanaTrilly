@@ -1,0 +1,55 @@
+# ---
+# file: .gitignore
+# project: solanatrilly
+# created-by: project-lead
+# ---
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Node
+node_modules/
+.next/
+.expo/
+dist/
+.turbo/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+docker-compose.override.yml
+
+# Coverage
+htmlcov/
+.coverage
+coverage/
+*.lcov
+
+# Build artifacts
+*.log
+logs/
+
+# ML models
+models/
+
+# DevRAG
+devrag-config.json
+devrag-vectors.db

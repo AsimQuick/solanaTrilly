@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "devrag": {
+      "type": "stdio",
+      "command": "/usr/local/bin/devrag",
+      "args": [
+        "--config",
+        "/Users/asim/NoIcloud/solanatrilly/devrag-config.json"
+      ]
+    }
+  }
+}

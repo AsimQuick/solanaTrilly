@@ -1,0 +1,35 @@
+# ---
+# file: pyproject.toml
+# stack: django
+# purpose: Ruff linter, pytest-django, and coverage configuration
+# created-by: project-lead
+# ---
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "core"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["test_*.py", "tests.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/test_*.py",
+    "manage.py",
+    "config/wsgi.py",
+    "config/asgi.py",
+    "config/settings.py",
+]

@@ -1,0 +1,26 @@
+# ---
+# file: .dockerignore
+# stack: django
+# purpose: Keep the Docker build context small (faster builds, less memory)
+# created-by: project-lead
+# ---
+
+.git
+.gitignore
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+htmlcov
+.coverage
+*.sqlite3
+.env
+.env.*
+staticfiles
+node_modules
+.DS_Store
+scrum-master
