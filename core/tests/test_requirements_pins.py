@@ -26,7 +26,7 @@ from packaging.utils import canonicalize_name
 # Helpers
 # ---------------------------------------------------------------------------
 
-REQUIREMENTS_FILE = pathlib.Path(__file__).resolve().parents[3] / "requirements.txt"
+REQUIREMENTS_FILE = pathlib.Path(__file__).resolve().parents[2] / "requirements.txt"
 
 # Packages required by AC-1.2
 AC_1_2_PACKAGES = [
