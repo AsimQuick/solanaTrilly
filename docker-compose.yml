@@ -4,7 +4,8 @@
 # purpose: Local development services — all services containerised (Docker Rules)
 # created-by: dev-team
 # sprint: sprint-1
-# story: US-1 AC-1.1
+# story: US-1 AC-1.1, US-1 AC-1.4
+# last-updated: 2026-06-15
 # ---
 #
 # Env values use ${VAR:-default} interpolation.
@@ -29,6 +30,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')\" 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   db:
     image: postgres:16-alpine
@@ -67,6 +74,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping 2>&1 | grep -q 'pong' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   celery-beat:
     build: .
@@ -83,6 +96,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celery-beat.pid && kill -0 $(cat /tmp/celery-beat.pid) 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   pgdata:
