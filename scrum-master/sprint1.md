@@ -1,8 +1,9 @@
 # Sprint 1
 
-**Phase:** planning
-**Progress:** 0/7 stories | 0/27 ACs
-**Last Updated:** —
+**Phase:** in-progress
+**Progress:** 0/7 stories | 1/27 ACs
+**Last Updated:** 2026-06-14
+**last-updated-by:** dev-team
 
 ## Sprint Goal
 Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channels + Celery stack with the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), and an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local→GitHub→GHCR→VPS path end-to-end on day one, with the firehose activation ledger seeded.
@@ -33,7 +34,18 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
 - [ ] **AC-1.4:** `docker compose run --rm web python manage.py migrate` applies cleanly and `docker compose up -d` brings every service to a healthy state.
 - [ ] **AC-1.5:** The Celery worker connects to the Redis broker, autodiscovers tasks, and a sample task executes end-to-end (enqueue then resolve a result) — verified by a pytest test that dispatches the task and asserts the result is returned within a timeout.
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
+**Dev Team Notes:**
+- AC-1.1 implemented on branch feature/US-1-AC-1.1
+- docker-compose.yml rewritten with all 5 services: web (daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat; all using Docker network hostnames
+- requirements.txt updated: added daphne>=4.0,<5, channels>=4.0,<5, channels-redis>=4.0,<5, celery>=5.4,<6, redis>=5.0,<6, pyyaml>=6.0,<7; removed gunicorn (no longer needed for ASGI)
+- config/settings.py updated: daphne added first in INSTALLED_APPS, channels after staticfiles; ASGI_APPLICATION, CHANNEL_LAYERS, and CELERY_* settings added
+- config/asgi.py updated to use ProtocolTypeRouter (WebSocket routes to be wired in AC-1.3)
+- config/celery.py created: Celery app factory, autodiscovers tasks from INSTALLED_APPS
+- config/__init__.py updated: exposes celery_app so `celery -A config` resolves correctly
+- Dockerfile CMD changed from gunicorn to daphne ASGI
+- core/tests/test_compose_topology.py created: 9 tests verifying the full service topology (services present, ASGI server, no gunicorn, postgres:16, redis presence, celery depends_on redis, no localhost in envs, worker/beat commands)
+- blocker-type: none
 
 **Tester Status:** approved
 **Tester Notes:**

@@ -1,21 +1,30 @@
 # ---
 # file: requirements.txt
-# stack: django
+# stack: django+channels+celery
 # purpose: Python dependencies (lean — psycopg binary wheel, no compiler needed)
-# created-by: project-lead
+# created-by: dev-team
+# sprint: sprint-1
+# story: US-1 AC-1.1
+# last-updated: 2026-06-14
 # ---
 
 # Core (Django 5.2 LTS — supported through April 2028)
 Django>=5.2,<5.3
-gunicorn>=22.0
 psycopg[binary]>=3.1,<4          # binary wheel — no libpq-dev/gcc, faster build on older machines
 django-environ>=0.11             # 12-factor env config (reads DATABASE_URL, SECRET_KEY, DEBUG)
 djangorestframework>=3.15        # API layer (enterprise APIs + dashboard data feeds)
 
-# Background tasks / scraper support — uncomment when a story needs them.
-# Adds redis + celery-worker + celery-beat services to docker-compose.yml.
-# celery>=5.4
-# redis>=5.0
+# ASGI server + WebSocket layer
+daphne>=4.0,<5                   # ASGI server (replaces gunicorn for AC-1.1)
+channels>=4.0,<5                 # Django Channels (WebSocket support)
+channels-redis>=4.0,<5          # Redis channel layer backend
+
+# Background tasks
+celery>=5.4,<6                   # distributed task queue
+redis>=5.0,<6                    # Python redis client (Celery broker/backend)
+
+# Utilities
+pyyaml>=6.0,<7                   # YAML parsing (used in topology tests)
 
 # Dev / Test
 pytest>=8.0
