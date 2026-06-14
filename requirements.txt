@@ -4,15 +4,16 @@
 # purpose: Python dependencies (lean — psycopg binary wheel, no compiler needed)
 # created-by: dev-team
 # sprint: sprint-1
-# story: US-1 AC-1.1
+# story: US-1 AC-1.1, AC-1.2
 # last-updated: 2026-06-14
 # ---
 
 # Core (Django 5.2 LTS — supported through April 2028)
 Django>=5.2,<5.3
 psycopg[binary]>=3.1,<4          # binary wheel — no libpq-dev/gcc, faster build on older machines
-django-environ>=0.11             # 12-factor env config (reads DATABASE_URL, SECRET_KEY, DEBUG)
-djangorestframework>=3.15        # API layer (enterprise APIs + dashboard data feeds)
+pydantic>=2.0,<3                 # typed PipelineConfig schema (Pydantic v2)
+django-environ>=0.11,<1          # 12-factor env config (reads DATABASE_URL, SECRET_KEY, DEBUG)
+djangorestframework>=3.15,<4     # API layer (enterprise APIs + dashboard data feeds)
 
 # ASGI server + WebSocket layer
 daphne>=4.0,<5                   # ASGI server (replaces gunicorn for AC-1.1)
