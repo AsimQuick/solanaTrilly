@@ -1,8 +1,11 @@
 {
   "sprint": "sprint-1",
   "phase": "planning",
-  "goal": "Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channels + Celery stack with the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), and an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local→GitHub→GHCR→VPS path end-to-end on day one, with the firehose activation ledger seeded.",
-  "reference_docs": ["scrum-master/PRD.md", "CLAUDE.md"],
+  "goal": "Land the P0 foundation (PRD \u00a716): a fully containerized Django 5 + DRF + Channels + Celery stack with the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), and an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) \u2014 proving the local\u2192GitHub\u2192GHCR\u2192VPS path end-to-end on day one, with the firehose activation ledger seeded.",
+  "reference_docs": [
+    "scrum-master/PRD.md",
+    "CLAUDE.md"
+  ],
   "definition_of_done": [
     "All ACs verified by CI / Tester",
     "No critical defects",
@@ -17,13 +20,13 @@
     {
       "id": "US-1",
       "title": "Containerized full-stack service topology (Django 5 + DRF + Channels + Celery + Redis + Postgres)",
-      "status": "draft",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [],
       "acceptance_criteria": [
         {
           "id": "1.1",
-          "text": "docker-compose.yml defines every service in containers — web (Django ASGI via Daphne/Uvicorn), db (Postgres 16), redis, celery worker, celery-beat — connected via Docker network hostnames; no service is installed on the host (Docker Rules).",
+          "text": "docker-compose.yml defines every service in containers \u2014 web (Django ASGI via Daphne/Uvicorn), db (Postgres 16), redis, celery worker, celery-beat \u2014 connected via Docker network hostnames; no service is installed on the host (Docker Rules).",
           "checked": true,
           "dev_status": "done",
           "tester_status": "not-started"
@@ -37,7 +40,7 @@
         },
         {
           "id": "1.3",
-          "text": "Django Channels is configured with the Redis channel layer and an ASGI application; the service boots over ASGI and a trivial WebSocket consumer completes the handshake and echoes a message — verified by a pytest test using channels.testing.WebsocketCommunicator.",
+          "text": "Django Channels is configured with the Redis channel layer and an ASGI application; the service boots over ASGI and a trivial WebSocket consumer completes the handshake and echoes a message \u2014 verified by a pytest test using channels.testing.WebsocketCommunicator.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -51,7 +54,7 @@
         },
         {
           "id": "1.5",
-          "text": "The Celery worker connects to the Redis broker, autodiscovers tasks, and a sample task executes end-to-end (enqueue then resolve a result) — verified by a pytest test that dispatches the task and asserts the result is returned within a timeout.",
+          "text": "The Celery worker connects to the Redis broker, autodiscovers tasks, and a sample task executes end-to-end (enqueue then resolve a result) \u2014 verified by a pytest test that dispatches the task and asserts the result is returned within a timeout.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -64,10 +67,12 @@
     },
     {
       "id": "US-2",
-      "title": "DataSource interface + injectable virtual clock — the testable live/replay seam (Principle #7, PRD §11.3)",
+      "title": "DataSource interface + injectable virtual clock \u2014 the testable live/replay seam (Principle #7, PRD \u00a711.3)",
       "status": "draft",
       "priority": "high",
-      "dependencies": ["US-1"],
+      "dependencies": [
+        "US-1"
+      ],
       "acceptance_criteria": [
         {
           "id": "2.1",
@@ -78,14 +83,14 @@
         },
         {
           "id": "2.2",
-          "text": "An injectable clock abstraction exists (wall-clock for live, virtual clock for replay); pipeline core reads current time only through the injected clock — enforced by a CI lint step (ruff rule or ast-grep assertion) that fails the build if any direct `datetime.now()` or `time.time()` calls appear in modules under `solanatrilly/core/`.",
+          "text": "An injectable clock abstraction exists (wall-clock for live, virtual clock for replay); pipeline core reads current time only through the injected clock \u2014 enforced by a CI lint step (ruff rule or ast-grep assertion) that fails the build if any direct `datetime.now()` or `time.time()` calls appear in modules under `solanatrilly/core/`.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "2.3",
-          "text": "A no-op `ReplaySource` resolves and yields an empty event stream fully offline (no network calls); an automated pytest test instantiates `ReplaySource`, advances the virtual clock, and asserts the event stream is empty — the test must pass without any live network connections.",
+          "text": "A no-op `ReplaySource` resolves and yields an empty event stream fully offline (no network calls); an automated pytest test instantiates `ReplaySource`, advances the virtual clock, and asserts the event stream is empty \u2014 the test must pass without any live network connections.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -105,10 +110,12 @@
     },
     {
       "id": "US-3",
-      "title": "H1 — hardened, SHA-pinned CI as a hard merge gate (PRD §12 S5)",
+      "title": "H1 \u2014 hardened, SHA-pinned CI as a hard merge gate (PRD \u00a712 S5)",
       "status": "draft",
       "priority": "high",
-      "dependencies": ["US-1"],
+      "dependencies": [
+        "US-1"
+      ],
       "acceptance_criteria": [
         {
           "id": "3.1",
@@ -133,7 +140,7 @@
         },
         {
           "id": "3.4",
-          "text": "The `test` status check is configured as a required check on main; verified by a CI step that calls `gh api repos/{owner}/{repo}/branches/main/protection` and asserts `required_status_checks.contexts` contains `test` — the step fails if branch protection is not set. Initial configuration is a one-time human action (repo Settings → Branches) documented in the sprint file.",
+          "text": "The `test` status check is configured as a required check on main; verified by a CI step that calls `gh api repos/{owner}/{repo}/branches/main/protection` and asserts `required_status_checks.contexts` contains `test` \u2014 the step fails if branch protection is not set. Initial configuration is a one-time human action (repo Settings \u2192 Branches) documented in the sprint file.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -142,14 +149,16 @@
       "dev_status": "not-started",
       "dev_notes": "",
       "tester_status": "approved",
-      "tester_notes": "ACs 3.1–3.3 are grep/file-inspectable. AC 3.4 fixed: branch protection cannot self-verify via CI alone, so the AC now specifies a `gh api` assertion step that confirms the protection rule is active; the one-time human setup step is explicitly noted as a prerequisite."
+      "tester_notes": "ACs 3.1\u20133.3 are grep/file-inspectable. AC 3.4 fixed: branch protection cannot self-verify via CI alone, so the AC now specifies a `gh api` assertion step that confirms the protection rule is active; the one-time human setup step is explicitly noted as a prerequisite."
     },
     {
       "id": "US-4",
-      "title": "H2 — Celery task-manifest registration test (PRD §12 S6)",
+      "title": "H2 \u2014 Celery task-manifest registration test (PRD \u00a712 S6)",
       "status": "draft",
       "priority": "high",
-      "dependencies": ["US-1"],
+      "dependencies": [
+        "US-1"
+      ],
       "acceptance_criteria": [
         {
           "id": "4.1",
@@ -176,14 +185,16 @@
       "dev_status": "not-started",
       "dev_notes": "",
       "tester_status": "approved",
-      "tester_notes": "AC 4.3 fixed: the original 'demonstrated by a deliberate removal during review' conflated a one-time review ritual with a persistent CI gate. Replaced with a durable negative-path unit test that asserts the comparison function returns a non-empty diff when a task is missing — this runs on every CI build and is objectively re-verifiable."
+      "tester_notes": "AC 4.3 fixed: the original 'demonstrated by a deliberate removal during review' conflated a one-time review ritual with a persistent CI gate. Replaced with a durable negative-path unit test that asserts the comparison function returns a non-empty diff when a task is missing \u2014 this runs on every CI build and is objectively re-verifiable."
     },
     {
       "id": "US-5",
-      "title": "H3 — single json_safe JSONField encoder applied at every write site (PRD §12 S7)",
+      "title": "H3 \u2014 single json_safe JSONField encoder applied at every write site (PRD \u00a712 S7)",
       "status": "draft",
       "priority": "medium",
-      "dependencies": ["US-1"],
+      "dependencies": [
+        "US-1"
+      ],
       "acceptance_criteria": [
         {
           "id": "5.1",
@@ -194,7 +205,7 @@
         },
         {
           "id": "5.2",
-          "text": "`json_safe` is set as the project-wide default encoder for JSONField by subclassing JSONField in a base module (e.g., `solanatrilly/core/fields.py`) or via Django's `FIELD_DEFAULTS`; a CI test asserts no JSONField instantiation in the codebase overrides the encoder to a different value, and a Django system check (`AppConfig.ready`) raises `ImproperlyConfigured` if the encoder is not registered — ensuring coverage at every JSONB write site by construction.",
+          "text": "`json_safe` is set as the project-wide default encoder for JSONField by subclassing JSONField in a base module (e.g., `solanatrilly/core/fields.py`) or via Django's `FIELD_DEFAULTS`; a CI test asserts no JSONField instantiation in the codebase overrides the encoder to a different value, and a Django system check (`AppConfig.ready`) raises `ImproperlyConfigured` if the encoder is not registered \u2014 ensuring coverage at every JSONB write site by construction.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -210,14 +221,17 @@
       "dev_status": "not-started",
       "dev_notes": "",
       "tester_status": "approved",
-      "tester_notes": "AC 5.2 fixed: 'applied at every JSONB write site by default' was not verifiable as written (per-field patching could satisfy the letter but not the spirit). Replaced with a concrete enforcement pattern — project-wide base JSONField subclass plus a CI grep for overrides and a Django system check — making universality CI-provable."
+      "tester_notes": "AC 5.2 fixed: 'applied at every JSONB write site by default' was not verifiable as written (per-field patching could satisfy the letter but not the spirit). Replaced with a concrete enforcement pattern \u2014 project-wide base JSONField subclass plus a CI grep for overrides and a Django system check \u2014 making universality CI-provable."
     },
     {
       "id": "US-6",
-      "title": "CD pipeline (GitHub Actions → GHCR → VPS staging) with hello-world deployed live under hard isolation (PRD §15.3–15.5)",
+      "title": "CD pipeline (GitHub Actions \u2192 GHCR \u2192 VPS staging) with hello-world deployed live under hard isolation (PRD \u00a715.3\u201315.5)",
       "status": "draft",
       "priority": "high",
-      "dependencies": ["US-1", "US-3"],
+      "dependencies": [
+        "US-1",
+        "US-3"
+      ],
       "acceptance_criteria": [
         {
           "id": "6.1",
@@ -235,7 +249,7 @@
         },
         {
           "id": "6.3",
-          "text": "CD deploys the tested GHCR image to the VPS staging stack by pulling the image — never builds on the box, never hand-edits the compose on the box.",
+          "text": "CD deploys the tested GHCR image to the VPS staging stack by pulling the image \u2014 never builds on the box, never hand-edits the compose on the box.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -258,11 +272,11 @@
       "dev_status": "not-started",
       "dev_notes": "",
       "tester_status": "approved",
-      "tester_notes": "ACs 6.1–6.4 are inspectable (workflow YAML structure, compose file content, smoke-test step). AC 6.5 fixed: 'verified in review' was not a CI assertion. Replaced with a static lint step that greps the deploy YAML for unscoped docker commands — making the isolation guarantee CI-provable on every merge. Human review remains as a secondary backstop. Note: US-6 is blocked on the human dependency documented in po-requests.md (GitHub remote + GHCR/VPS SSH secrets must be provisioned before this story can be implemented)."
+      "tester_notes": "ACs 6.1\u20136.4 are inspectable (workflow YAML structure, compose file content, smoke-test step). AC 6.5 fixed: 'verified in review' was not a CI assertion. Replaced with a static lint step that greps the deploy YAML for unscoped docker commands \u2014 making the isolation guarantee CI-provable on every merge. Human review remains as a secondary backstop. Note: US-6 is blocked on the human dependency documented in po-requests.md (GitHub remote + GHCR/VPS SSH secrets must be provisioned before this story can be implemented)."
     },
     {
       "id": "US-7",
-      "title": "Firehose activation ledger seeded (PRD §15.7)",
+      "title": "Firehose activation ledger seeded (PRD \u00a715.7)",
       "status": "draft",
       "priority": "medium",
       "dependencies": [],
@@ -276,7 +290,7 @@
         },
         {
           "id": "7.2",
-          "text": "The starting budget is recorded — 10 Birdeye + 10 Helius activations project-wide, 0 used.",
+          "text": "The starting budget is recorded \u2014 10 Birdeye + 10 Helius activations project-wide, 0 used.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -294,5 +308,6 @@
       "tester_status": "approved",
       "tester_notes": "All 3 ACs are verifiable by file-existence check (ops/firehose_activation_log.md present) and content grep (column headers, budget numbers, rule text). Doc-only story; no scope issues."
     }
-  ]
+  ],
+  "last_updated": "2026-06-14T19:44:30+00:00"
 }

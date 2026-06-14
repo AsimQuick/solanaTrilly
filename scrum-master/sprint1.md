@@ -1,9 +1,8 @@
 # Sprint 1
 
-**Phase:** in-progress
+**Phase:** planning
 **Progress:** 0/7 stories | 1/27 ACs
-**Last Updated:** 2026-06-14
-**last-updated-by:** dev-team
+**Last Updated:** 2026-06-14T19:44:30+00:00
 
 ## Sprint Goal
 Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channels + Celery stack with the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), and an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local→GitHub→GHCR→VPS path end-to-end on day one, with the firehose activation ledger seeded.
@@ -25,10 +24,11 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
 ## User Stories
 
 ### US-1: Containerized full-stack service topology (Django 5 + DRF + Channels + Celery + Redis + Postgres)
-**Status:** draft | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-1.1:** docker-compose.yml defines every service in containers — web (Django ASGI via Daphne/Uvicorn), db (Postgres 16), redis, celery worker, celery-beat — connected via Docker network hostnames; no service is installed on the host (Docker Rules).
+- [x] **AC-1.1:** docker-compose.yml defines every service in containers — web (Django ASGI via Daphne/Uvicorn), db (Postgres 16), redis, celery worker, celery-beat — connected via Docker network hostnames; no service is installed on the host (Docker Rules).
+  - Dev: done
 - [ ] **AC-1.2:** requirements.txt pins the full stack with explicit version bounds: Django 5, djangorestframework, channels, channels-redis, celery, redis, daphne (or uvicorn), pydantic v2, psycopg[binary].
 - [ ] **AC-1.3:** Django Channels is configured with the Redis channel layer and an ASGI application; the service boots over ASGI and a trivial WebSocket consumer completes the handshake and echoes a message — verified by a pytest test using channels.testing.WebsocketCommunicator.
 - [ ] **AC-1.4:** `docker compose run --rm web python manage.py migrate` applies cleanly and `docker compose up -d` brings every service to a healthy state.
@@ -36,16 +36,7 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
 
 **Dev Team Status:** in-progress
 **Dev Team Notes:**
-- AC-1.1 implemented on branch feature/US-1-AC-1.1
-- docker-compose.yml rewritten with all 5 services: web (daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat; all using Docker network hostnames
-- requirements.txt updated: added daphne>=4.0,<5, channels>=4.0,<5, channels-redis>=4.0,<5, celery>=5.4,<6, redis>=5.0,<6, pyyaml>=6.0,<7; removed gunicorn (no longer needed for ASGI)
-- config/settings.py updated: daphne added first in INSTALLED_APPS, channels after staticfiles; ASGI_APPLICATION, CHANNEL_LAYERS, and CELERY_* settings added
-- config/asgi.py updated to use ProtocolTypeRouter (WebSocket routes to be wired in AC-1.3)
-- config/celery.py created: Celery app factory, autodiscovers tasks from INSTALLED_APPS
-- config/__init__.py updated: exposes celery_app so `celery -A config` resolves correctly
-- Dockerfile CMD changed from gunicorn to daphne ASGI
-- core/tests/test_compose_topology.py created: 9 tests verifying the full service topology (services present, ASGI server, no gunicorn, postgres:16, redis presence, celery depends_on redis, no localhost in envs, worker/beat commands)
-- blocker-type: none
+  AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests).
 
 **Tester Status:** approved
 **Tester Notes:**
