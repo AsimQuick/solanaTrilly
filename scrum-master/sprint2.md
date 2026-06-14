@@ -1,9 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 0/6 stories | 4/22 ACs
-**Last Updated:** 2026-06-15T00:00:00+00:00
-**last-updated-by:** dev-team
+**Progress:** 1/6 stories | 5/22 ACs
+**Last Updated:** 2026-06-14T22:06:20+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -35,13 +34,14 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   - Dev: done
 - [x] **AC-2.3:** A no-op ReplaySource over an empty/fixture event log resolves and yields its events through the SAME code path as LiveSource, with a VirtualClock driving time — verified by a pytest test (satisfies the P0 offline gate: 'a no-op Replay source resolves').
   - Dev: done
-- [ ] **AC-2.4:** Thin-adapter ground rule enforced: the clock-injected core is pure (imports no Celery/Channels/network modules); Celery tasks and WS consumers are thin adapters around it — verified by a test asserting the core module's import graph is framework/network-free. New files carry metadata front matter.
+- [x] **AC-2.4:** Thin-adapter ground rule enforced: the clock-injected core is pure (imports no Celery/Channels/network modules); Celery tasks and WS consumers are thin adapters around it — verified by a test asserting the core module's import graph is framework/network-free. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-1
 
-**Dev Team Status:** resolved
+**Dev Team Status:** done
 **Dev Team Notes:**
-  AC-2.1 done. Three files added: core/datasource.py (DataSource ABC with connect/disconnect/events contract), core/live_source.py (LiveSource stub — Birdeye WS impl deferred to P1), core/replay_source.py (ReplaySource iterates an injected event_log). Seven tests in core/tests/test_datasource_interface.py cover: abstract instantiation guard, issubclass checks for both concretes, event ordering, empty-log, stub lifecycle, and the AC-required static-analysis guard (scans core/detection|features|scoring|exit|settlement for direct LiveSource/ReplaySource imports — passes trivially while those packages don't exist, becomes a regression gate as they land). All 34 tests pass; coverage 98%. AC-2.2 done. core/clock.py adds Clock ABC, WallClock (delegates to datetime.now(UTC)), VirtualClock (advance()/set_time() API), and stamp_events() async generator that pairs each DataSource event with clock.now(). core/tests/test_clock.py adds 6 tests: WallClock UTC check, VirtualClock initial/advance/set_time, the key stamp_events test (ReplaySource + VirtualClock, 3 events, 10s advance between each — timestamps verified against expected values), and a static-analysis guard using AST Call-node inspection (not line scanning) to reject any datetime.now()/time.time() call in core source except inside WallClock.now. All 40 tests pass. AC-2.3 done. core/tests/test_replay_ac23.py adds 4 tests: (1) test_noop_replay_empty_log_resolves — empty ReplaySource through stamp_events with VirtualClock yields zero events (the P0 offline gate); (2) test_fixture_replay_yields_events_via_stamp_events — fixture log through stamp_events with advancing VirtualClock, timestamps verified per event; (3) test_live_source_through_same_code_path — LiveSource stub through the identical stamp_events path resolves cleanly; (4) test_both_sources_polymorphic_via_datasource — both typed as DataSource and passed to the same _drain() wrapper, proving stamp_events is source-type-agnostic. No new production code required — stamp_events (AC-2.2) is the common code path. All 44 tests pass; coverage 100%. CI LINT FIX (2026-06-15): Two ruff errors fixed — (1) I001 in core/clock.py: sorted typing imports alphabetically ('Any, AsyncGenerator' replaces 'AsyncGenerator, Any'); (2) F401 in core/tests/test_clock.py: removed unused 'import pytest' (no test function called any pytest API directly).
+  AC-2.1 done. Three files added: core/datasource.py (DataSource ABC with connect/disconnect/events contract), core/live_source.py (LiveSource stub — Birdeye WS impl deferred to P1), core/replay_source.py (ReplaySource iterates an injected event_log). Seven tests in core/tests/test_datasource_interface.py cover: abstract instantiation guard, issubclass checks for both concretes, event ordering, empty-log, stub lifecycle, and the AC-required static-analysis guard (scans core/detection|features|scoring|exit|settlement for direct LiveSource/ReplaySource imports — passes trivially while those packages don't exist, becomes a regression gate as they land). All 34 tests pass; coverage 98%. AC-2.2 done. core/clock.py adds Clock ABC, WallClock (delegates to datetime.now(UTC)), VirtualClock (advance()/set_time() API), and stamp_events() async generator that pairs each DataSource event with clock.now(). core/tests/test_clock.py adds 6 tests: WallClock UTC check, VirtualClock initial/advance/set_time, the key stamp_events test (ReplaySource + VirtualClock, 3 events, 10s advance between each — timestamps verified against expected values), and a static-analysis guard using AST Call-node inspection (not line scanning) to reject any datetime.now()/time.time() call in core source except inside WallClock.now. All 40 tests pass. AC-2.3 done. core/tests/test_replay_ac23.py adds 4 tests: (1) test_noop_replay_empty_log_resolves — empty ReplaySource through stamp_events with VirtualClock yields zero events (the P0 offline gate); (2) test_fixture_replay_yields_events_via_stamp_events — fixture log through stamp_events with advancing VirtualClock, timestamps verified per event; (3) test_live_source_through_same_code_path — LiveSource stub through the identical stamp_events path resolves cleanly; (4) test_both_sources_polymorphic_via_datasource — both typed as DataSource and passed to the same _drain() wrapper, proving stamp_events is source-type-agnostic. No new production code required — stamp_events (AC-2.2) is the common code path. All 44 tests pass; coverage 100%. CI LINT FIX (2026-06-15): Two ruff errors fixed — (1) I001 in core/clock.py: sorted typing imports alphabetically ('Any, AsyncGenerator' replaces 'AsyncGenerator, Any'); (2) F401 in core/tests/test_clock.py: removed unused 'import pytest' (no test function called any pytest API directly). AC-2.4 done. core/tests/test_thin_adapter.py adds 2 tests: (1) test_core_modules_import_no_framework_or_network — AST import-node scan of all 4 pure-core files (datasource.py, clock.py, live_source.py, replay_source.py); asserts each file exists and contains no imports from forbidden namespaces (celery, channels, requests, httpx, aiohttp, websockets, urllib3); (2) test_adapter_modules_exist_and_use_frameworks — verifies tasks.py and consumers.py both exist and DO import their expected frameworks (celery and channels respectively), confirming they are the thin adapters. Top-level namespace extraction handles dotted module names. All 46 tests pass; coverage 100%.
 
 **Tester Status:** failed
 **Tester Notes:**
@@ -50,7 +50,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-3: H1 — hardened, SHA-pinned CI as a hard merge gate
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-3.1:** Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action — verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD §12 S5/H1).
@@ -63,8 +63,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 
 **Dev Team Status:** in-progress
 **Dev Team Notes:**
-  AC-3.1 done. Two changes: (1) .github/workflows/ci.yml — replaced `actions/checkout@v4` with `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2` (the full commit SHA for the v4.2.2 tag). (2) core/tests/test_ci_sha_pins.py — new test file with `test_all_workflow_actions_sha_pinned`: discovers all *.yml/yaml under .github/workflows/, parses with yaml.safe_load, extracts every step-level `uses:` value, exempts local actions (./) and Docker container actions (docker://), and asserts each remaining ref's post-@ component matches `[0-9a-f]{40}`. Fails with a clear per-violation message. 47 tests pass, coverage 100%.
-  blocker-type: none
+  AC-3.1 done. Two files changed: (1) .github/workflows/ci.yml — actions/checkout@v4 replaced with actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (full 40-char commit SHA, verified via gh api); (2) core/tests/test_ci_sha_pins.py (new) — single test test_all_workflow_actions_sha_pinned that discovers all *.yml/*.yaml workflow files under .github/workflows/, parses each with yaml.safe_load, extracts every job-step uses: value, exempts local (./) and Docker (docker://) actions, and asserts the ref after @ matches ^[0-9a-f]{40}$. Fails with per-violation detail if any action is tag/branch-pinned. 47 tests pass; coverage 100%.
 
 **Tester Status:** approved
 **Tester Notes:**

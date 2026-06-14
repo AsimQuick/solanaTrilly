@@ -64,7 +64,7 @@
     {
       "id": "US-3",
       "title": "H1 \u2014 hardened, SHA-pinned CI as a hard merge gate",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-1"
@@ -100,7 +100,7 @@
         }
       ],
       "dev_status": "in-progress",
-      "dev_notes": "AC-3.1 done. Two files changed: (1) .github/workflows/ci.yml — actions/checkout@v4 replaced with actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (full 40-char commit SHA, verified via gh api); (2) core/tests/test_ci_sha_pins.py (new) — single test test_all_workflow_actions_sha_pinned that discovers all *.yml/*.yaml workflow files under .github/workflows/, parses each with yaml.safe_load, extracts every job-step uses: value, exempts local (./) and Docker (docker://) actions, and asserts the ref after @ matches ^[0-9a-f]{40}$. Fails with per-violation detail if any action is tag/branch-pinned. 47 tests pass; coverage 100%.",
+      "dev_notes": "AC-3.1 done. Two files changed: (1) .github/workflows/ci.yml \u2014 actions/checkout@v4 replaced with actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (full 40-char commit SHA, verified via gh api); (2) core/tests/test_ci_sha_pins.py (new) \u2014 single test test_all_workflow_actions_sha_pinned that discovers all *.yml/*.yaml workflow files under .github/workflows/, parses each with yaml.safe_load, extracts every job-step uses: value, exempts local (./) and Docker (docker://) actions, and asserts the ref after @ matches ^[0-9a-f]{40}$. Fails with per-violation detail if any action is tag/branch-pinned. 47 tests pass; coverage 100%.",
       "tester_status": "approved",
       "tester_notes": "All 4 ACs are testable and verifiable. Minor fix applied to AC 3.2: added explicit verification method referencing the AC 3.4 self-test, and clarified that it also checks for no *-latest runner and a single workflow file (the original text stated the rule without naming how to verify). AC 3.4 was also tightened to explicitly list the three invariants it asserts (SHA-pinned, runner frozen, single workflow file), matching the updated AC 3.2. ACs 3.1 and 3.3 are well-defined with clear verification criteria. Approved for development."
     },
@@ -262,6 +262,6 @@
       "tester_notes": "All 3 ACs are testable and verifiable by file inspection. Minor fix applied to AC 7.2: replaced the unresolved placeholder '[TO TUNE]' with '<=30 min default; adjustable by explicit PO decision', making the criterion concrete and auditable. ACs 7.1 and 7.3 are clear: 7.1 requires specific budget numbers and a no-commit-keys rule, both verifiable by inspection; 7.3 requires a stated hard rule and re-indexing confirmation. Approved for development."
     }
   ],
-  "last_updated": "2026-06-15T00:00:00+00:00",
+  "last_updated": "2026-06-14T22:06:20+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-2 in planning. US-6 delivers the CD pipeline that brings the first VPS staging deploy (-p solanatrilly, port 8002) and closes US-1's outstanding deploy DoD."
 }
