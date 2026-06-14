@@ -1,8 +1,11 @@
 # ---
 # file: Dockerfile
-# stack: django
-# purpose: Production-ready Django container (slim — psycopg binary wheel means no build toolchain)
-# created-by: project-lead
+# stack: django+channels+celery
+# purpose: Production-ready Django ASGI container (slim — psycopg binary wheel means no build toolchain)
+# created-by: dev-team
+# sprint: sprint-1
+# story: US-1 AC-1.1
+# last-updated: 2026-06-14
 # ---
 
 FROM python:3.12-slim
@@ -26,5 +29,6 @@ COPY . .
 
 EXPOSE 8000
 
-# Production entrypoint. Local dev overrides this with runserver in docker-compose.yml.
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2"]
+# Production entrypoint — Daphne ASGI server (replaces gunicorn/WSGI).
+# Local dev docker-compose.yml overrides this command.
+CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "config.asgi:application"]

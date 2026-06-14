@@ -1,11 +1,11 @@
 # ---
 # module: config.settings
-# sprint: pre-sprint
-# story: setup
+# sprint: sprint-1
+# story: US-1 AC-1.1
 # status: implemented
-# created-by: project-lead
+# created-by: dev-team
 # last-updated: 2026-06-14
-# dependencies: django, django-environ, djangorestframework
+# dependencies: django, django-environ, djangorestframework, channels, daphne, celery
 # ---
 """Django settings — 12-factor, environment-driven via django-environ."""
 from pathlib import Path
@@ -22,12 +22,14 @@ DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "channels",
     "rest_framework",
     "core",
 ]
@@ -93,3 +95,22 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
     ],
 }
+
+ASGI_APPLICATION = "config.asgi.application"
+
+# Channel layers — Redis backend
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [env("REDIS_URL", default="redis://redis:6379/0")],
+        },
+    },
+}
+
+# Celery — Redis broker + result backend
+CELERY_BROKER_URL = env("REDIS_URL", default="redis://redis:6379/0")
+CELERY_RESULT_BACKEND = env("REDIS_URL", default="redis://redis:6379/0")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
