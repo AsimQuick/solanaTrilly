@@ -24,7 +24,7 @@ Functions:
 """
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import AsyncGenerator, Any
+from typing import Any, AsyncGenerator
 
 from core.datasource import DataSource
 
