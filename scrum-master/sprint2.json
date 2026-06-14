@@ -1,7 +1,7 @@
 {
   "sprint": "sprint-2",
   "phase": "planning",
-  "goal": "Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.",
+  "goal": "Complete the P0 foundation by landing the six remaining P0 stories (US-2\u2026US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) \u2014 proving the local \u2192 GitHub \u2192 GHCR \u2192 VPS path end-to-end and retroactively closing US-1's deploy-gated DoD \u2014 with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) \u2192 US-6 (needs US-1 + US-3) \u2192 US-7 any time.",
   "reference_docs": [
     "scrum-master/PRD.md",
     "scrum-master/retrospective.md",
@@ -13,15 +13,15 @@
     "Coverage threshold met (>=80%)",
     "Code file headers include metadata front matter",
     "All services run in Docker (no host installs)",
-    "CD pipeline (US-6) delivered. Once it is live, every story is merged + deployed to the VPS solanatrilly staging stack (-p solanatrilly, port 8002) and smoke-tested there. Per retrospective A2, the deploy clause is gated at the SPRINT boundary — a non-CD story landing before US-6 is not structurally blocked by the absent pipeline; it deploys once US-6 exists.",
+    "CD pipeline (US-6) delivered. Once it is live, every story is merged + deployed to the VPS solanatrilly staging stack (-p solanatrilly, port 8002) and smoke-tested there. Per retrospective A2, the deploy clause is gated at the SPRINT boundary \u2014 a non-CD story landing before US-6 is not structurally blocked by the absent pipeline; it deploys once US-6 exists.",
     "Hard isolation from live solanaBilly preserved (every docker command scoped with -p solanatrilly; solanaBilly on port 8001 untouched)",
-    "retrospective.md updated for sprint-2 (named owner: Tester / scrum facilitator — retrospective A3)"
+    "retrospective.md updated for sprint-2 (named owner: Tester / scrum facilitator \u2014 retrospective A3)"
   ],
   "stories": [
     {
       "id": "US-2",
       "title": "DataSource interface + injectable virtual clock (the live/replay seam)",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-1"
@@ -29,41 +29,41 @@
       "acceptance_criteria": [
         {
           "id": "2.1",
-          "text": "A DataSource abstract interface is defined (e.g. core/datasource.py) expressing the event-stream contract; concrete LiveSource and ReplaySource both implement it; consumers (detection/feature-assembly/scoring/exit/settlement on the core path) depend ONLY on the interface, never on a concrete source — verified by a static-analysis test (or import inspection) asserting no consumer module directly imports a concrete source class (Principle #7 / PRD §4).",
+          "text": "A DataSource abstract interface is defined (e.g. core/datasource.py) expressing the event-stream contract; concrete LiveSource and ReplaySource both implement it; consumers (detection/feature-assembly/scoring/exit/settlement on the core path) depend ONLY on the interface, never on a concrete source \u2014 verified by a static-analysis test (or import inspection) asserting no consumer module directly imports a concrete source class (Principle #7 / PRD \u00a74).",
           "checked": true,
           "dev_status": "done",
           "tester_status": "not-started"
         },
         {
           "id": "2.2",
-          "text": "An injectable Clock abstraction exists: WallClock (live, wall-time) and VirtualClock (replay, time advanced deterministically/explicitly). Core code reads 'now' only from the injected clock — no direct time.time()/datetime.now() on the core path — verified by a pytest test that drives core logic with a VirtualClock.",
+          "text": "An injectable Clock abstraction exists: WallClock (live, wall-time) and VirtualClock (replay, time advanced deterministically/explicitly). Core code reads 'now' only from the injected clock \u2014 no direct time.time()/datetime.now() on the core path \u2014 verified by a pytest test that drives core logic with a VirtualClock.",
           "checked": true,
           "dev_status": "done",
           "tester_status": "failed"
         },
         {
           "id": "2.3",
-          "text": "A no-op ReplaySource over an empty/fixture event log resolves and yields its events through the SAME code path as LiveSource, with a VirtualClock driving time — verified by a pytest test (satisfies the P0 offline gate: 'a no-op Replay source resolves').",
+          "text": "A no-op ReplaySource over an empty/fixture event log resolves and yields its events through the SAME code path as LiveSource, with a VirtualClock driving time \u2014 verified by a pytest test (satisfies the P0 offline gate: 'a no-op Replay source resolves').",
           "checked": true,
           "dev_status": "done",
           "tester_status": "blocked"
         },
         {
           "id": "2.4",
-          "text": "Thin-adapter ground rule enforced: the clock-injected core is pure (imports no Celery/Channels/network modules); Celery tasks and WS consumers are thin adapters around it — verified by a test asserting the core module's import graph is framework/network-free. New files carry metadata front matter.",
+          "text": "Thin-adapter ground rule enforced: the clock-injected core is pure (imports no Celery/Channels/network modules); Celery tasks and WS consumers are thin adapters around it \u2014 verified by a test asserting the core module's import graph is framework/network-free. New files carry metadata front matter.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         }
       ],
       "dev_status": "resolved",
-      "dev_notes": "AC-2.1 done. Three files added: core/datasource.py (DataSource ABC with connect/disconnect/events contract), core/live_source.py (LiveSource stub — Birdeye WS impl deferred to P1), core/replay_source.py (ReplaySource iterates an injected event_log). Seven tests in core/tests/test_datasource_interface.py cover: abstract instantiation guard, issubclass checks for both concretes, event ordering, empty-log, stub lifecycle, and the AC-required static-analysis guard (scans core/detection|features|scoring|exit|settlement for direct LiveSource/ReplaySource imports — passes trivially while those packages don't exist, becomes a regression gate as they land). All 34 tests pass; coverage 98%. AC-2.2 done. core/clock.py adds Clock ABC, WallClock (delegates to datetime.now(UTC)), VirtualClock (advance()/set_time() API), and stamp_events() async generator that pairs each DataSource event with clock.now(). core/tests/test_clock.py adds 6 tests: WallClock UTC check, VirtualClock initial/advance/set_time, the key stamp_events test (ReplaySource + VirtualClock, 3 events, 10s advance between each — timestamps verified against expected values), and a static-analysis guard using AST Call-node inspection (not line scanning) to reject any datetime.now()/time.time() call in core source except inside WallClock.now. All 40 tests pass. AC-2.3 done. core/tests/test_replay_ac23.py adds 4 tests: (1) test_noop_replay_empty_log_resolves — empty ReplaySource through stamp_events with VirtualClock yields zero events (the P0 offline gate); (2) test_fixture_replay_yields_events_via_stamp_events — fixture log through stamp_events with advancing VirtualClock, timestamps verified per event; (3) test_live_source_through_same_code_path — LiveSource stub through the identical stamp_events path resolves cleanly; (4) test_both_sources_polymorphic_via_datasource — both typed as DataSource and passed to the same _drain() wrapper, proving stamp_events is source-type-agnostic. No new production code required — stamp_events (AC-2.2) is the common code path. All 44 tests pass; coverage 100%. CI LINT FIX (2026-06-15): Two ruff errors fixed — (1) I001 in core/clock.py: sorted typing imports alphabetically ('Any, AsyncGenerator' replaces 'AsyncGenerator, Any'); (2) F401 in core/tests/test_clock.py: removed unused 'import pytest' (no test function called any pytest API directly).",
+      "dev_notes": "AC-2.1 done. Three files added: core/datasource.py (DataSource ABC with connect/disconnect/events contract), core/live_source.py (LiveSource stub \u2014 Birdeye WS impl deferred to P1), core/replay_source.py (ReplaySource iterates an injected event_log). Seven tests in core/tests/test_datasource_interface.py cover: abstract instantiation guard, issubclass checks for both concretes, event ordering, empty-log, stub lifecycle, and the AC-required static-analysis guard (scans core/detection|features|scoring|exit|settlement for direct LiveSource/ReplaySource imports \u2014 passes trivially while those packages don't exist, becomes a regression gate as they land). All 34 tests pass; coverage 98%. AC-2.2 done. core/clock.py adds Clock ABC, WallClock (delegates to datetime.now(UTC)), VirtualClock (advance()/set_time() API), and stamp_events() async generator that pairs each DataSource event with clock.now(). core/tests/test_clock.py adds 6 tests: WallClock UTC check, VirtualClock initial/advance/set_time, the key stamp_events test (ReplaySource + VirtualClock, 3 events, 10s advance between each \u2014 timestamps verified against expected values), and a static-analysis guard using AST Call-node inspection (not line scanning) to reject any datetime.now()/time.time() call in core source except inside WallClock.now. All 40 tests pass. AC-2.3 done. core/tests/test_replay_ac23.py adds 4 tests: (1) test_noop_replay_empty_log_resolves \u2014 empty ReplaySource through stamp_events with VirtualClock yields zero events (the P0 offline gate); (2) test_fixture_replay_yields_events_via_stamp_events \u2014 fixture log through stamp_events with advancing VirtualClock, timestamps verified per event; (3) test_live_source_through_same_code_path \u2014 LiveSource stub through the identical stamp_events path resolves cleanly; (4) test_both_sources_polymorphic_via_datasource \u2014 both typed as DataSource and passed to the same _drain() wrapper, proving stamp_events is source-type-agnostic. No new production code required \u2014 stamp_events (AC-2.2) is the common code path. All 44 tests pass; coverage 100%. CI LINT FIX (2026-06-15): Two ruff errors fixed \u2014 (1) I001 in core/clock.py: sorted typing imports alphabetically ('Any, AsyncGenerator' replaces 'AsyncGenerator, Any'); (2) F401 in core/tests/test_clock.py: removed unused 'import pytest' (no test function called any pytest API directly).",
       "tester_status": "failed",
-      "tester_notes": "CI FAILED on branch feature/US-2-AC-2.3 (runs 27512110990 and 27512115019) — Lint step only; pytest was never reached. Diagnosis: CODE BUG in AC-2.2 deliverables, not a requirements issue. Two ruff errors in AC-2.2 files: (1) I001 in core/clock.py:25 — import block unsorted; `from typing import AsyncGenerator, Any` has `Any` after `AsyncGenerator` but isort requires alphabetical order within the from-import name list (fix: `from typing import Any, AsyncGenerator`). (2) F401 in core/tests/test_clock.py:38 — `import pytest` is unused; none of the 6 test functions call any pytest API directly (fix: remove the import line). Severity: LOW — all 44 tests pass locally; the failures are style-only and both are auto-fixable with `ruff --fix`. Recommended fix: dev team applies `ruff --fix core/clock.py core/tests/test_clock.py`, verifies locally with `ruff check .`, and pushes. AC-2.1 (tester: not-started — CI never ran pytest). AC-2.2 (tester: failed — source of lint errors). AC-2.3 (tester: blocked — lint gate prevented pytest execution). AC-2.4 (tester: not-started — not yet implemented)."
+      "tester_notes": "CI FAILED on branch feature/US-2-AC-2.3 (runs 27512110990 and 27512115019) \u2014 Lint step only; pytest was never reached. Diagnosis: CODE BUG in AC-2.2 deliverables, not a requirements issue. Two ruff errors in AC-2.2 files: (1) I001 in core/clock.py:25 \u2014 import block unsorted; `from typing import AsyncGenerator, Any` has `Any` after `AsyncGenerator` but isort requires alphabetical order within the from-import name list (fix: `from typing import Any, AsyncGenerator`). (2) F401 in core/tests/test_clock.py:38 \u2014 `import pytest` is unused; none of the 6 test functions call any pytest API directly (fix: remove the import line). Severity: LOW \u2014 all 44 tests pass locally; the failures are style-only and both are auto-fixable with `ruff --fix`. Recommended fix: dev team applies `ruff --fix core/clock.py core/tests/test_clock.py`, verifies locally with `ruff check .`, and pushes. AC-2.1 (tester: not-started \u2014 CI never ran pytest). AC-2.2 (tester: failed \u2014 source of lint errors). AC-2.3 (tester: blocked \u2014 lint gate prevented pytest execution). AC-2.4 (tester: not-started \u2014 not yet implemented)."
     },
     {
       "id": "US-3",
-      "title": "H1 — hardened, SHA-pinned CI as a hard merge gate",
+      "title": "H1 \u2014 hardened, SHA-pinned CI as a hard merge gate",
       "status": "ready",
       "priority": "high",
       "dependencies": [
@@ -72,14 +72,14 @@
       "acceptance_criteria": [
         {
           "id": "3.1",
-          "text": "Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action — verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD §12 S5/H1).",
+          "text": "Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action \u2014 verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD \u00a712 S5/H1).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "3.2",
-          "text": "The CI runner is frozen to a specific OS image (e.g. ubuntu-24.04, never *-latest); ci.yml is the single canonical CI workflow — one source of CI truth, no parallel/duplicate workflows — verified by the CI-config self-test (AC 3.4) which also asserts no *-latest runner string appears in any workflow file and that only one workflow file defines the test job.",
+          "text": "The CI runner is frozen to a specific OS image (e.g. ubuntu-24.04, never *-latest); ci.yml is the single canonical CI workflow \u2014 one source of CI truth, no parallel/duplicate workflows \u2014 verified by the CI-config self-test (AC 3.4) which also asserts no *-latest runner string appears in any workflow file and that only one workflow file defines the test job.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -93,7 +93,7 @@
         },
         {
           "id": "3.4",
-          "text": "A CI-config self-test asserts the H1 invariants (all actions SHA-pinned + runner frozen to a non-*-latest image + single workflow file for the test job) so a future unpinned 'uses:' or a *-latest runner FAILS CI — the 11-PR Node-24 CI flail (S5) cannot recur. New files carry metadata front matter.",
+          "text": "A CI-config self-test asserts the H1 invariants (all actions SHA-pinned + runner frozen to a non-*-latest image + single workflow file for the test job) so a future unpinned 'uses:' or a *-latest runner FAILS CI \u2014 the 11-PR Node-24 CI flail (S5) cannot recur. New files carry metadata front matter.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -106,7 +106,7 @@
     },
     {
       "id": "US-4",
-      "title": "H2 — Celery task-manifest registration test",
+      "title": "H2 \u2014 Celery task-manifest registration test",
       "status": "ready",
       "priority": "high",
       "dependencies": [
@@ -115,21 +115,21 @@
       "acceptance_criteria": [
         {
           "id": "4.1",
-          "text": "A committed task manifest (e.g. core/task_manifest.json) enumerates every expected registered Celery task; Django app autodiscovery (celery_app.autodiscover_tasks) registers tasks from installed apps (PRD §12 S6/H2).",
+          "text": "A committed task manifest (e.g. core/task_manifest.json) enumerates every expected registered Celery task; Django app autodiscovery (celery_app.autodiscover_tasks) registers tasks from installed apps (PRD \u00a712 S6/H2).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "4.2",
-          "text": "A pytest test asserts the live registered-task set (celery_app.tasks, excluding celery built-ins) EQUALS the committed manifest: it FAILS when a task is removed/renamed (even if that task's own test was also deleted — the #404 failure mode) AND FAILS when a task is added without updating the manifest.",
+          "text": "A pytest test asserts the live registered-task set (celery_app.tasks, excluding celery built-ins) EQUALS the committed manifest: it FAILS when a task is removed/renamed (even if that task's own test was also deleted \u2014 the #404 failure mode) AND FAILS when a task is added without updating the manifest.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "4.3",
-          "text": "The manifest test runs inside the CI merge gate; the dev workflow guard is documented in CONTRIBUTING.md (or a dedicated section of the project README) — listing the steps: 'git show --stat HEAD' before push, and never 'git stash' between add and commit (S6 scars). New files carry metadata front matter.",
+          "text": "The manifest test runs inside the CI merge gate; the dev workflow guard is documented in CONTRIBUTING.md (or a dedicated section of the project README) \u2014 listing the steps: 'git show --stat HEAD' before push, and never 'git stash' between add and commit (S6 scars). New files carry metadata front matter.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -142,7 +142,7 @@
     },
     {
       "id": "US-5",
-      "title": "H3 — single json_safe JSONField encoder at every write site",
+      "title": "H3 \u2014 single json_safe JSONField encoder at every write site",
       "status": "ready",
       "priority": "medium",
       "dependencies": [
@@ -151,14 +151,14 @@
       "acceptance_criteria": [
         {
           "id": "5.1",
-          "text": "One json_safe() encoder exists (non-finite float NaN/Inf -> null, Decimal -> float, datetime -> ISO-8601 string), implemented as a custom Django JSONField encoder class — a single shared implementation, not duplicated per call site (PRD §12 S7/H3).",
+          "text": "One json_safe() encoder exists (non-finite float NaN/Inf -> null, Decimal -> float, datetime -> ISO-8601 string), implemented as a custom Django JSONField encoder class \u2014 a single shared implementation, not duplicated per call site (PRD \u00a712 S7/H3).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "5.2",
-          "text": "The encoder is applied at every JSONB write site (every models.JSONField uses encoder=json_safe / all JSONB writes route through it) — verified by a test that round-trips a NaN/Inf/Decimal/datetime payload and asserts the stored value is psycopg-safe, valid JSON.",
+          "text": "The encoder is applied at every JSONB write site (every models.JSONField uses encoder=json_safe / all JSONB writes route through it) \u2014 verified by a test that round-trips a NaN/Inf/Decimal/datetime payload and asserts the stored value is psycopg-safe, valid JSON.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -178,7 +178,7 @@
     },
     {
       "id": "US-6",
-      "title": "CD pipeline (GitHub Actions → GHCR → VPS staging) + hello-world live under hard isolation",
+      "title": "CD pipeline (GitHub Actions \u2192 GHCR \u2192 VPS staging) + hello-world live under hard isolation",
       "status": "ready",
       "priority": "high",
       "dependencies": [
@@ -188,28 +188,28 @@
       "acceptance_criteria": [
         {
           "id": "6.1",
-          "text": "A deploy.yml GitHub Actions workflow exists: on merge to main it runs the hardened CI (H1, US-3), builds the web image, and pushes it to GHCR (ghcr.io/asimquick/solanatrilly) using the built-in GITHUB_TOKEN with permissions: { packages: write } (no extra secret — per po-requests.md item 2). Every action in deploy.yml is SHA-pinned (H1).",
+          "text": "A deploy.yml GitHub Actions workflow exists: on merge to main it runs the hardened CI (H1, US-3), builds the web image, and pushes it to GHCR (ghcr.io/asimquick/solanatrilly) using the built-in GITHUB_TOKEN with permissions: { packages: write } (no extra secret \u2014 per po-requests.md item 2). Every action in deploy.yml is SHA-pinned (H1).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "6.2",
-          "text": "The repo ships docker-compose.staging.yml as the ONLY VPS compose (PRD §15.4): compose project -p solanatrilly, web on port 8002, distinct Postgres database + volume, distinct Redis, distinct Docker network — the VPS is never hand-edited; it runs exactly what is in the repo.",
+          "text": "The repo ships docker-compose.staging.yml as the ONLY VPS compose (PRD \u00a715.4): compose project -p solanatrilly, web on port 8002, distinct Postgres database + volume, distinct Redis, distinct Docker network \u2014 the VPS is never hand-edited; it runs exactly what is in the repo.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "6.3",
-          "text": "The deploy step SSHes to the VPS (VPS_USER@VPS_HOST via VPS_SSH_KEY repo secrets) and runs 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d' to pull the tested GHCR image. Every docker command in the deploy script is -p solanatrilly-scoped — verified by inspecting deploy.yml for any unscoped down / up --force-recreate / prune / volume removal command; solanaBilly's containers/volumes (port 8001) are never touched (PRD §15.3, hard isolation).",
+          "text": "The deploy step SSHes to the VPS (VPS_USER@VPS_HOST via VPS_SSH_KEY repo secrets) and runs 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d' to pull the tested GHCR image. Every docker command in the deploy script is -p solanatrilly-scoped \u2014 verified by inspecting deploy.yml for any unscoped down / up --force-recreate / prune / volume removal command; solanaBilly's containers/volumes (port 8001) are never touched (PRD \u00a715.3, hard isolation).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "6.4",
-          "text": "A hello-world Django endpoint is live on the VPS staging stack at port 8002, and a CD smoke-test step (run after deploy) hits it and asserts HTTP 200 — proving the local -> GitHub -> GHCR -> VPS path end-to-end (PRD §15.5, 'VPS presence from P0').",
+          "text": "A hello-world Django endpoint is live on the VPS staging stack at port 8002, and a CD smoke-test step (run after deploy) hits it and asserts HTTP 200 \u2014 proving the local -> GitHub -> GHCR -> VPS path end-to-end (PRD \u00a715.5, 'VPS presence from P0').",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -236,14 +236,14 @@
       "acceptance_criteria": [
         {
           "id": "7.1",
-          "text": "ops/firehose_activation_log.md is created and seeded with the project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10 / 10). API keys are already in .env (per po-requests.md item 3) — the ledger references them, never commits them (PRD §15.7).",
+          "text": "ops/firehose_activation_log.md is created and seeded with the project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10 / 10). API keys are already in .env (per po-requests.md item 3) \u2014 the ledger references them, never commits them (PRD \u00a715.7).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "7.2",
-          "text": "The ledger documents the per-activation protocol — deliberate, time-boxed (<=30 min default; adjustable by explicit PO decision), PR-reviewed — with a table schema of columns: date, role/agent, which WS (Birdeye/Helius), purpose, duration, count-remaining, fixtures banked.",
+          "text": "The ledger documents the per-activation protocol \u2014 deliberate, time-boxed (<=30 min default; adjustable by explicit PO decision), PR-reviewed \u2014 with a table schema of columns: date, role/agent, which WS (Birdeye/Helius), purpose, duration, count-remaining, fixtures banked.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -262,6 +262,6 @@
       "tester_notes": "All 3 ACs are testable and verifiable by file inspection. Minor fix applied to AC 7.2: replaced the unresolved placeholder '[TO TUNE]' with '<=30 min default; adjustable by explicit PO decision', making the criterion concrete and auditable. ACs 7.1 and 7.3 are clear: 7.1 requires specific budget numbers and a no-commit-keys rule, both verifiable by inspection; 7.3 requires a stated hard rule and re-indexing confirmation. Approved for development."
     }
   ],
-  "last_updated": "2026-06-15T14:00:00+00:00",
-  "deploy_summary": "Not yet deployed — sprint-2 in planning. US-6 delivers the CD pipeline that brings the first VPS staging deploy (-p solanatrilly, port 8002) and closes US-1's outstanding deploy DoD."
+  "last_updated": "2026-06-14T21:14:54+00:00",
+  "deploy_summary": "Not yet deployed \u2014 sprint-2 in planning. US-6 delivers the CD pipeline that brings the first VPS staging deploy (-p solanatrilly, port 8002) and closes US-1's outstanding deploy DoD."
 }

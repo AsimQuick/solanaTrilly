@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 0/6 stories | 0/22 ACs
-**Last Updated:** 2026-06-15T00:00:00+00:00
+**Progress:** 0/6 stories | 3/22 ACs
+**Last Updated:** 2026-06-14T21:14:54+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -25,21 +25,26 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ## User Stories
 
 ### US-2: DataSource interface + injectable virtual clock (the live/replay seam)
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-2.1:** A DataSource abstract interface is defined (e.g. core/datasource.py) expressing the event-stream contract; concrete LiveSource and ReplaySource both implement it; consumers (detection/feature-assembly/scoring/exit/settlement on the core path) depend ONLY on the interface, never on a concrete source — verified by a static-analysis test (or import inspection) asserting no consumer module directly imports a concrete source class (Principle #7 / PRD §4).
-- [ ] **AC-2.2:** An injectable Clock abstraction exists: WallClock (live, wall-time) and VirtualClock (replay, time advanced deterministically/explicitly). Core code reads 'now' only from the injected clock — no direct time.time()/datetime.now() on the core path — verified by a pytest test that drives core logic with a VirtualClock.
-- [ ] **AC-2.3:** A no-op ReplaySource over an empty/fixture event log resolves and yields its events through the SAME code path as LiveSource, with a VirtualClock driving time — verified by a pytest test (satisfies the P0 offline gate: 'a no-op Replay source resolves').
+- [x] **AC-2.1:** A DataSource abstract interface is defined (e.g. core/datasource.py) expressing the event-stream contract; concrete LiveSource and ReplaySource both implement it; consumers (detection/feature-assembly/scoring/exit/settlement on the core path) depend ONLY on the interface, never on a concrete source — verified by a static-analysis test (or import inspection) asserting no consumer module directly imports a concrete source class (Principle #7 / PRD §4).
+  - Dev: done
+- [x] **AC-2.2:** An injectable Clock abstraction exists: WallClock (live, wall-time) and VirtualClock (replay, time advanced deterministically/explicitly). Core code reads 'now' only from the injected clock — no direct time.time()/datetime.now() on the core path — verified by a pytest test that drives core logic with a VirtualClock.
+  - Dev: done
+- [x] **AC-2.3:** A no-op ReplaySource over an empty/fixture event log resolves and yields its events through the SAME code path as LiveSource, with a VirtualClock driving time — verified by a pytest test (satisfies the P0 offline gate: 'a no-op Replay source resolves').
+  - Dev: done
 - [ ] **AC-2.4:** Thin-adapter ground rule enforced: the clock-injected core is pure (imports no Celery/Channels/network modules); Celery tasks and WS consumers are thin adapters around it — verified by a test asserting the core module's import graph is framework/network-free. New files carry metadata front matter.
 
 **Dependencies:** US-1
 
-**Dev Team Status:** not-started
+**Dev Team Status:** resolved
+**Dev Team Notes:**
+  AC-2.1 done. Three files added: core/datasource.py (DataSource ABC with connect/disconnect/events contract), core/live_source.py (LiveSource stub — Birdeye WS impl deferred to P1), core/replay_source.py (ReplaySource iterates an injected event_log). Seven tests in core/tests/test_datasource_interface.py cover: abstract instantiation guard, issubclass checks for both concretes, event ordering, empty-log, stub lifecycle, and the AC-required static-analysis guard (scans core/detection|features|scoring|exit|settlement for direct LiveSource/ReplaySource imports — passes trivially while those packages don't exist, becomes a regression gate as they land). All 34 tests pass; coverage 98%. AC-2.2 done. core/clock.py adds Clock ABC, WallClock (delegates to datetime.now(UTC)), VirtualClock (advance()/set_time() API), and stamp_events() async generator that pairs each DataSource event with clock.now(). core/tests/test_clock.py adds 6 tests: WallClock UTC check, VirtualClock initial/advance/set_time, the key stamp_events test (ReplaySource + VirtualClock, 3 events, 10s advance between each — timestamps verified against expected values), and a static-analysis guard using AST Call-node inspection (not line scanning) to reject any datetime.now()/time.time() call in core source except inside WallClock.now. All 40 tests pass. AC-2.3 done. core/tests/test_replay_ac23.py adds 4 tests: (1) test_noop_replay_empty_log_resolves — empty ReplaySource through stamp_events with VirtualClock yields zero events (the P0 offline gate); (2) test_fixture_replay_yields_events_via_stamp_events — fixture log through stamp_events with advancing VirtualClock, timestamps verified per event; (3) test_live_source_through_same_code_path — LiveSource stub through the identical stamp_events path resolves cleanly; (4) test_both_sources_polymorphic_via_datasource — both typed as DataSource and passed to the same _drain() wrapper, proving stamp_events is source-type-agnostic. No new production code required — stamp_events (AC-2.2) is the common code path. All 44 tests pass; coverage 100%. CI LINT FIX (2026-06-15): Two ruff errors fixed — (1) I001 in core/clock.py: sorted typing imports alphabetically ('Any, AsyncGenerator' replaces 'AsyncGenerator, Any'); (2) F401 in core/tests/test_clock.py: removed unused 'import pytest' (no test function called any pytest API directly).
 
-**Tester Status:** approved
+**Tester Status:** failed
 **Tester Notes:**
-  All 4 ACs are testable and verifiable. Minor fix applied to AC 2.1: added explicit verification method (static-analysis test or import inspection asserting no consumer imports a concrete source class); the original text stated the rule but not how to verify it. ACs 2.2, 2.3, and 2.4 each name a pytest test with clear pass/fail criteria. Approved for development.
+  CI FAILED on branch feature/US-2-AC-2.3 (runs 27512110990 and 27512115019) — Lint step only; pytest was never reached. Diagnosis: CODE BUG in AC-2.2 deliverables, not a requirements issue. Two ruff errors in AC-2.2 files: (1) I001 in core/clock.py:25 — import block unsorted; `from typing import AsyncGenerator, Any` has `Any` after `AsyncGenerator` but isort requires alphabetical order within the from-import name list (fix: `from typing import Any, AsyncGenerator`). (2) F401 in core/tests/test_clock.py:38 — `import pytest` is unused; none of the 6 test functions call any pytest API directly (fix: remove the import line). Severity: LOW — all 44 tests pass locally; the failures are style-only and both are auto-fixable with `ruff --fix`. Recommended fix: dev team applies `ruff --fix core/clock.py core/tests/test_clock.py`, verifies locally with `ruff check .`, and pushes. AC-2.1 (tester: not-started — CI never ran pytest). AC-2.2 (tester: failed — source of lint errors). AC-2.3 (tester: blocked — lint gate prevented pytest execution). AC-2.4 (tester: not-started — not yet implemented).
 
 ---
 
