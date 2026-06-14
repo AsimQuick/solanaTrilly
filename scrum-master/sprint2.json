@@ -73,8 +73,8 @@
         {
           "id": "3.1",
           "text": "Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action \u2014 verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD \u00a712 S5/H1).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -99,8 +99,8 @@
           "tester_status": "not-started"
         }
       ],
-      "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_status": "in-progress",
+      "dev_notes": "AC-3.1 done. Two files changed: (1) .github/workflows/ci.yml — actions/checkout@v4 replaced with actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (full 40-char commit SHA, verified via gh api); (2) core/tests/test_ci_sha_pins.py (new) — single test test_all_workflow_actions_sha_pinned that discovers all *.yml/*.yaml workflow files under .github/workflows/, parses each with yaml.safe_load, extracts every job-step uses: value, exempts local (./) and Docker (docker://) actions, and asserts the ref after @ matches ^[0-9a-f]{40}$. Fails with per-violation detail if any action is tag/branch-pinned. 47 tests pass; coverage 100%.",
       "tester_status": "approved",
       "tester_notes": "All 4 ACs are testable and verifiable. Minor fix applied to AC 3.2: added explicit verification method referencing the AC 3.4 self-test, and clarified that it also checks for no *-latest runner and a single workflow file (the original text stated the rule without naming how to verify). AC 3.4 was also tightened to explicitly list the three invariants it asserts (SHA-pinned, runner frozen, single workflow file), matching the updated AC 3.2. ACs 3.1 and 3.3 are well-defined with clear verification criteria. Approved for development."
     },
