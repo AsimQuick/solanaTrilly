@@ -41,8 +41,8 @@
         {
           "id": "1.3",
           "text": "Django Channels is configured with the Redis channel layer and an ASGI application; the service boots over ASGI and a trivial WebSocket consumer completes the handshake and echoes a message \u2014 verified by a pytest test using channels.testing.WebsocketCommunicator.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -61,7 +61,7 @@
         }
       ],
       "dev_status": "in-progress",
-      "dev_notes": "AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests). AC-1.2 done: requirements.txt updated with pydantic>=2.0,<3 (pydantic v2), djangorestframework tightened to <4, django-environ tightened to <1. All 9 AC-1.2 packages now carry both lower and upper version bounds. Unit tests in core/tests/test_requirements_pins.py (5 tests) verify package presence, lower/upper bounds for all required packages, Django major==5, and pydantic major==2. All 15 tests pass, 100% coverage.",
+      "dev_notes": "AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests). AC-1.2 done: requirements.txt updated with pydantic>=2.0,<3 (pydantic v2), djangorestframework tightened to <4, django-environ tightened to <1. All 9 AC-1.2 packages now carry both lower and upper version bounds. Unit tests in core/tests/test_requirements_pins.py (5 tests) verify package presence, lower/upper bounds for all required packages, Django major==5, and pydantic major==2. All 15 tests pass, 100% coverage. AC-1.3 done (commit 56492ed). core/consumers.py: EchoConsumer(AsyncWebsocketConsumer) accepts handshake and echoes text verbatim. core/routing.py: websocket_urlpatterns wires ws/echo/ to EchoConsumer. config/asgi.py: ProtocolTypeRouter updated with URLRouter(websocket_urlpatterns) for websocket protocol. core/tests/test_websocket_echo.py: pytest test using WebsocketCommunicator + asgiref async_to_sync (no extra test deps). All 16 tests pass, 100% coverage.",
       "tester_status": "approved",
       "tester_notes": "All 5 ACs are CI-verifiable. Minor clarifications added to AC 1.3 (WebsocketCommunicator) and AC 1.5 (assert result within timeout) to make the automated verification mechanism explicit. AC 1.4 requires both sub-checks (migrate exit code + docker compose ps healthy) to pass in CI."
     },
@@ -309,5 +309,5 @@
       "tester_notes": "All 3 ACs are verifiable by file-existence check (ops/firehose_activation_log.md present) and content grep (column headers, budget numbers, rule text). Doc-only story; no scope issues."
     }
   ],
-  "last_updated": "2026-06-14T19:44:30+00:00"
+  "last_updated": "2026-06-14T23:57:00+00:00"
 }
