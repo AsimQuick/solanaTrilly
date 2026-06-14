@@ -30,8 +30,8 @@
         {
           "id": "2.1",
           "text": "A DataSource abstract interface is defined (e.g. core/datasource.py) expressing the event-stream contract; concrete LiveSource and ReplaySource both implement it; consumers (detection/feature-assembly/scoring/exit/settlement on the core path) depend ONLY on the interface, never on a concrete source — verified by a static-analysis test (or import inspection) asserting no consumer module directly imports a concrete source class (Principle #7 / PRD §4).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -56,8 +56,8 @@
           "tester_status": "not-started"
         }
       ],
-      "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_status": "in-progress",
+      "dev_notes": "AC-2.1 done. Three files added: core/datasource.py (DataSource ABC with connect/disconnect/events contract), core/live_source.py (LiveSource stub — Birdeye WS impl deferred to P1), core/replay_source.py (ReplaySource iterates an injected event_log). Seven tests in core/tests/test_datasource_interface.py cover: abstract instantiation guard, issubclass checks for both concretes, event ordering, empty-log, stub lifecycle, and the AC-required static-analysis guard (scans core/detection|features|scoring|exit|settlement for direct LiveSource/ReplaySource imports — passes trivially while those packages don't exist, becomes a regression gate as they land). All 34 tests pass; coverage 98%.",
       "tester_status": "approved",
       "tester_notes": "All 4 ACs are testable and verifiable. Minor fix applied to AC 2.1: added explicit verification method (static-analysis test or import inspection asserting no consumer imports a concrete source class); the original text stated the rule but not how to verify it. ACs 2.2, 2.3, and 2.4 each name a pytest test with clear pass/fail criteria. Approved for development."
     },
