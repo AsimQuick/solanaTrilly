@@ -1,0 +1,151 @@
+# Sprint 2
+
+**Phase:** planning
+**Progress:** 0/6 stories | 0/22 ACs
+**Last Updated:** 2026-06-15T00:00:00+00:00
+
+## Sprint Goal
+Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
+
+## Reference Documents
+- `scrum-master/PRD.md`
+- `scrum-master/retrospective.md`
+- `CLAUDE.md`
+
+## Definition of Done
+- [ ] All ACs verified by CI / Tester
+- [ ] No critical defects
+- [ ] Coverage threshold met (>=80%)
+- [ ] Code file headers include metadata front matter
+- [ ] All services run in Docker (no host installs)
+- [ ] CD pipeline (US-6) delivered. Once it is live, every story is merged + deployed to the VPS solanatrilly staging stack (-p solanatrilly, port 8002) and smoke-tested there. Per retrospective A2, the deploy clause is gated at the SPRINT boundary — a non-CD story landing before US-6 is not structurally blocked by the absent pipeline; it deploys once US-6 exists.
+- [ ] Hard isolation from live solanaBilly preserved (every docker command scoped with -p solanatrilly; solanaBilly on port 8001 untouched)
+- [ ] retrospective.md updated for sprint-2 (named owner: Tester / scrum facilitator — retrospective A3)
+
+## User Stories
+
+### US-2: DataSource interface + injectable virtual clock (the live/replay seam)
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-2.1:** A DataSource abstract interface is defined (e.g. core/datasource.py) expressing the event-stream contract; concrete LiveSource and ReplaySource both implement it; consumers (detection/feature-assembly/scoring/exit/settlement on the core path) depend ONLY on the interface, never on a concrete source — verified by a static-analysis test (or import inspection) asserting no consumer module directly imports a concrete source class (Principle #7 / PRD §4).
+- [ ] **AC-2.2:** An injectable Clock abstraction exists: WallClock (live, wall-time) and VirtualClock (replay, time advanced deterministically/explicitly). Core code reads 'now' only from the injected clock — no direct time.time()/datetime.now() on the core path — verified by a pytest test that drives core logic with a VirtualClock.
+- [ ] **AC-2.3:** A no-op ReplaySource over an empty/fixture event log resolves and yields its events through the SAME code path as LiveSource, with a VirtualClock driving time — verified by a pytest test (satisfies the P0 offline gate: 'a no-op Replay source resolves').
+- [ ] **AC-2.4:** Thin-adapter ground rule enforced: the clock-injected core is pure (imports no Celery/Channels/network modules); Celery tasks and WS consumers are thin adapters around it — verified by a test asserting the core module's import graph is framework/network-free. New files carry metadata front matter.
+
+**Dependencies:** US-1
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 4 ACs are testable and verifiable. Minor fix applied to AC 2.1: added explicit verification method (static-analysis test or import inspection asserting no consumer imports a concrete source class); the original text stated the rule but not how to verify it. ACs 2.2, 2.3, and 2.4 each name a pytest test with clear pass/fail criteria. Approved for development.
+
+---
+
+### US-3: H1 — hardened, SHA-pinned CI as a hard merge gate
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-3.1:** Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action — verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD §12 S5/H1).
+- [ ] **AC-3.2:** The CI runner is frozen to a specific OS image (e.g. ubuntu-24.04, never *-latest); ci.yml is the single canonical CI workflow — one source of CI truth, no parallel/duplicate workflows — verified by the CI-config self-test (AC 3.4) which also asserts no *-latest runner string appears in any workflow file and that only one workflow file defines the test job.
+- [ ] **AC-3.3:** CI is a hard merge gate: the 'test' job runs pytest with the >=80% coverage gate (pytest --cov-fail-under=80) and must be green before merge, enforced via the gitops orchestrator (require_ci_pass: true) since GitHub Free branch protection is unavailable on this private repo (per po-requests.md item 1).
+- [ ] **AC-3.4:** A CI-config self-test asserts the H1 invariants (all actions SHA-pinned + runner frozen to a non-*-latest image + single workflow file for the test job) so a future unpinned 'uses:' or a *-latest runner FAILS CI — the 11-PR Node-24 CI flail (S5) cannot recur. New files carry metadata front matter.
+
+**Dependencies:** US-1
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 4 ACs are testable and verifiable. Minor fix applied to AC 3.2: added explicit verification method referencing the AC 3.4 self-test, and clarified that it also checks for no *-latest runner and a single workflow file (the original text stated the rule without naming how to verify). AC 3.4 was also tightened to explicitly list the three invariants it asserts (SHA-pinned, runner frozen, single workflow file), matching the updated AC 3.2. ACs 3.1 and 3.3 are well-defined with clear verification criteria. Approved for development.
+
+---
+
+### US-4: H2 — Celery task-manifest registration test
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-4.1:** A committed task manifest (e.g. core/task_manifest.json) enumerates every expected registered Celery task; Django app autodiscovery (celery_app.autodiscover_tasks) registers tasks from installed apps (PRD §12 S6/H2).
+- [ ] **AC-4.2:** A pytest test asserts the live registered-task set (celery_app.tasks, excluding celery built-ins) EQUALS the committed manifest: it FAILS when a task is removed/renamed (even if that task's own test was also deleted — the #404 failure mode) AND FAILS when a task is added without updating the manifest.
+- [ ] **AC-4.3:** The manifest test runs inside the CI merge gate; the dev workflow guard is documented in CONTRIBUTING.md (or a dedicated section of the project README) — listing the steps: 'git show --stat HEAD' before push, and never 'git stash' between add and commit (S6 scars). New files carry metadata front matter.
+
+**Dependencies:** US-1
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 3 ACs are testable and verifiable. Minor fix applied to AC 4.3: the original text said the dev workflow guard 'is documented' without specifying where; updated to require CONTRIBUTING.md or a named README section so Tester can verify its existence. ACs 4.1 and 4.2 are well-defined: 4.1 is verifiable by file inspection and 4.2 specifies both failure modes (removed/renamed task and added-without-manifest-update) with clear test criteria. Approved for development.
+
+---
+
+### US-5: H3 — single json_safe JSONField encoder at every write site
+**Status:** ready | **Priority:** medium
+
+#### Acceptance Criteria
+- [ ] **AC-5.1:** One json_safe() encoder exists (non-finite float NaN/Inf -> null, Decimal -> float, datetime -> ISO-8601 string), implemented as a custom Django JSONField encoder class — a single shared implementation, not duplicated per call site (PRD §12 S7/H3).
+- [ ] **AC-5.2:** The encoder is applied at every JSONB write site (every models.JSONField uses encoder=json_safe / all JSONB writes route through it) — verified by a test that round-trips a NaN/Inf/Decimal/datetime payload and asserts the stored value is psycopg-safe, valid JSON.
+- [ ] **AC-5.3:** A guard test asserts no model JSONField is declared WITHOUT the json_safe encoder, so a future field cannot silently bypass it and reintroduce the #331/#332/#388 JSONB/psycopg crash class. New files carry metadata front matter.
+
+**Dependencies:** US-1
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 3 ACs are testable and verifiable. No fixes required. AC 5.1 states a single shared implementation (verifiable by code inspection and by the guard test in 5.3 catching any duplication). AC 5.2 specifies a round-trip test with explicit payload types and a psycopg-safe assertion. AC 5.3 closes the regression loop with a structural guard test. The three ACs form a coherent triad: implementation + behavioral test + structural guard. Approved for development.
+
+---
+
+### US-6: CD pipeline (GitHub Actions → GHCR → VPS staging) + hello-world live under hard isolation
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-6.1:** A deploy.yml GitHub Actions workflow exists: on merge to main it runs the hardened CI (H1, US-3), builds the web image, and pushes it to GHCR (ghcr.io/asimquick/solanatrilly) using the built-in GITHUB_TOKEN with permissions: { packages: write } (no extra secret — per po-requests.md item 2). Every action in deploy.yml is SHA-pinned (H1).
+- [ ] **AC-6.2:** The repo ships docker-compose.staging.yml as the ONLY VPS compose (PRD §15.4): compose project -p solanatrilly, web on port 8002, distinct Postgres database + volume, distinct Redis, distinct Docker network — the VPS is never hand-edited; it runs exactly what is in the repo.
+- [ ] **AC-6.3:** The deploy step SSHes to the VPS (VPS_USER@VPS_HOST via VPS_SSH_KEY repo secrets) and runs 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d' to pull the tested GHCR image. Every docker command in the deploy script is -p solanatrilly-scoped — verified by inspecting deploy.yml for any unscoped down / up --force-recreate / prune / volume removal command; solanaBilly's containers/volumes (port 8001) are never touched (PRD §15.3, hard isolation).
+- [ ] **AC-6.4:** A hello-world Django endpoint is live on the VPS staging stack at port 8002, and a CD smoke-test step (run after deploy) hits it and asserts HTTP 200 — proving the local -> GitHub -> GHCR -> VPS path end-to-end (PRD §15.5, 'VPS presence from P0').
+- [ ] **AC-6.5:** Deploying US-1's containerized topology through this pipeline retroactively closes US-1's story-level DoD (the sprint-1 deploy blocker recorded in retrospective A1); the deployed stack's hard isolation from live solanaBilly is verified on the VPS by confirming solanaBilly's containers remain running ('docker compose -p solanabilly ps' shows containers up) and port 8001 still responds after the solanatrilly deployment. New files carry metadata front matter.
+
+**Dependencies:** US-1, US-3
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 5 ACs are testable and verifiable. Minor fixes applied: AC 6.3 tightened the isolation claim by adding 'verified by inspecting deploy.yml for any unscoped command', giving the Tester a concrete artifact to check. AC 6.5 replaced the vague 'verified on the box' with a concrete method: 'docker compose -p solanabilly ps shows containers up' and 'port 8001 still responds after the solanatrilly deployment', making isolation falsifiable. ACs 6.1, 6.2, and 6.4 are well-defined with clear artifacts (deploy.yml, docker-compose.staging.yml, HTTP 200 smoke test). Approved for development.
+
+---
+
+### US-7: Firehose activation ledger seeded
+**Status:** ready | **Priority:** medium
+
+#### Acceptance Criteria
+- [ ] **AC-7.1:** ops/firehose_activation_log.md is created and seeded with the project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10 / 10). API keys are already in .env (per po-requests.md item 3) — the ledger references them, never commits them (PRD §15.7).
+- [ ] **AC-7.2:** The ledger documents the per-activation protocol — deliberate, time-boxed (<=30 min default; adjustable by explicit PO decision), PR-reviewed — with a table schema of columns: date, role/agent, which WS (Birdeye/Helius), purpose, duration, count-remaining, fixtures banked.
+- [ ] **AC-7.3:** The ledger states the HARD RULE that every activation MUST bank durable fixtures (a tape/detection sample or golden vectors) into the lake / golden set so the spend compounds into the replay corpus; the doc is re-indexed via mcp__devrag__reindex_document (project convention). New files carry metadata front matter.
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 3 ACs are testable and verifiable by file inspection. Minor fix applied to AC 7.2: replaced the unresolved placeholder '[TO TUNE]' with '<=30 min default; adjustable by explicit PO decision', making the criterion concrete and auditable. ACs 7.1 and 7.3 are clear: 7.1 requires specific budget numbers and a no-commit-keys rule, both verifiable by inspection; 7.3 requires a stated hard rule and re-indexing confirmation. Approved for development.
+
+---
+
+---
+
+## Sprint Review
+
+### Dev Team Sprint Notes
+_Pending_
+
+### Tester Sprint Notes
+_Pending_
+
+### PO Sprint Review Notes
+_Pending_
+
+---
+_Auto-generated from `sprint2.json` — do not edit directly._
