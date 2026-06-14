@@ -49,7 +49,6 @@ def test_ping_task_dispatches_and_resolves_within_timeout(eager_celery):
 def test_celery_autodiscovers_core_tasks():
     """Verify core.tasks.add and core.tasks.ping are in the Celery task registry."""
     import core.tasks  # noqa: F401 — import triggers registration via autodiscovery
-
     from config import celery_app
 
     registered = set(celery_app.tasks.keys())
