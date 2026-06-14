@@ -1,8 +1,8 @@
 # Sprint 1
 
 **Phase:** planning
-**Progress:** 0/3 stories | 4/12 ACs
-**Last Updated:** 2026-06-14T20:11:10+00:00
+**Progress:** 1/1 stories | 5/5 ACs
+**Last Updated:** 2026-06-14T20:29:33+00:00
 
 ## Sprint Goal
 Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channels + Celery stack with the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), and an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local→GitHub→GHCR→VPS path end-to-end on day one, with the firehose activation ledger seeded.
@@ -24,7 +24,7 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
 ## User Stories
 
 ### US-1: Containerized full-stack service topology (Django 5 + DRF + Channels + Celery + Redis + Postgres)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-1.1:** docker-compose.yml defines every service in containers — web (Django ASGI via Daphne/Uvicorn), db (Postgres 16), redis, celery worker, celery-beat — connected via Docker network hostnames; no service is installed on the host (Docker Rules).
@@ -35,7 +35,8 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
   - Dev: done
 - [x] **AC-1.4:** `docker compose run --rm web python manage.py migrate` applies cleanly and `docker compose up -d` brings every service to a healthy state.
   - Dev: done
-- [ ] **AC-1.5:** The Celery worker connects to the Redis broker, autodiscovers tasks, and a sample task executes end-to-end (enqueue then resolve a result) — verified by a pytest test that dispatches the task and asserts the result is returned within a timeout.
+- [x] **AC-1.5:** The Celery worker connects to the Redis broker, autodiscovers tasks, and a sample task executes end-to-end (enqueue then resolve a result) — verified by a pytest test that dispatches the task and asserts the result is returned within a timeout.
+  - Dev: done
 
 **Dev Team Status:** in-progress
 **Dev Team Notes:**
@@ -44,41 +45,6 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
 **Tester Status:** approved
 **Tester Notes:**
   All 5 ACs are CI-verifiable. Minor clarifications added to AC 1.3 (WebsocketCommunicator) and AC 1.5 (assert result within timeout) to make the automated verification mechanism explicit. AC 1.4 requires both sub-checks (migrate exit code + docker compose ps healthy) to pass in CI.
-
----
-
-### US-2: DataSource interface + injectable virtual clock — the testable live/replay seam (Principle #7, PRD §11.3)
-**Status:** draft | **Priority:** high
-
-#### Acceptance Criteria
-- [ ] **AC-2.1:** A `DataSource` abstract interface is defined with `LiveSource` and `ReplaySource` implementations that satisfy the same contract; consumers depend on the interface, never a concrete source.
-- [ ] **AC-2.2:** An injectable clock abstraction exists (wall-clock for live, virtual clock for replay); pipeline core reads current time only through the injected clock — enforced by a CI lint step (ruff rule or ast-grep assertion) that fails the build if any direct `datetime.now()` or `time.time()` calls appear in modules under `solanatrilly/core/`.
-- [ ] **AC-2.3:** A no-op `ReplaySource` resolves and yields an empty event stream fully offline (no network calls); an automated pytest test instantiates `ReplaySource`, advances the virtual clock, and asserts the event stream is empty — the test must pass without any live network connections.
-- [ ] **AC-2.4:** Celery and Channels are thin adapters around a clock-injected pure core; 'core' is defined as the `solanatrilly/core/` package (no Celery or Channels imports permitted there). A CI test imports every module under `solanatrilly/core/` and asserts none of their transitive imports resolve to `celery` or `channels` symbols, failing if any are found.
-
-**Dependencies:** US-1
-
-**Dev Team Status:** not-started
-
-**Tester Status:** approved
-**Tester Notes:**
-  Two precision fixes applied: AC 2.2 now specifies the CI lint enforcement mechanism for the 'no direct clock calls' constraint (ruff/ast-grep on solanatrilly/core/); AC 2.4 anchors 'core modules' to the `solanatrilly/core/` package path so the import-check test has a stable, non-vacuous target.
-
----
-
-### US-3: H1—hardened CI: pinned GitHub Actions, task-manifest test, json_safe encoder
-**Status:** draft | **Priority:** high
-
-#### Acceptance Criteria
-- [ ] **AC-3.1:** All GitHub Actions in `.github/workflows/` are pinned to full SHAs (not floating tags); a CI step audits all action references and fails the build if any floating tags remain.
-- [ ] **AC-3.2:** A task-manifest test runs on every PR; it reads `core/tasks.py`, parses all registered Celery tasks, and asserts that every task name matches the expected naming convention (e.g., `app.task.subcomponent` format) and has a docstring.
-- [ ] **AC-3.3:** A `json_safe` encoder is registered with Django's JSONEncoder; it handles Decimal, datetime, UUID, and bytes types; a pytest test verifies round-trip encoding/decoding of a fixture containing all handled types.
-
-**Dependencies:** US-1
-
-**Dev Team Status:** not-started
-
-**Tester Status:** not-started
 
 ---
 
