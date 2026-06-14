@@ -1,8 +1,8 @@
 # Sprint 1
 
 **Phase:** planning
-**Progress:** 0/7 stories | 1/27 ACs
-**Last Updated:** 2026-06-14T19:44:30+00:00
+**Progress:** 0/7 stories | 2/27 ACs
+**Last Updated:** 2026-06-14T19:52:22+00:00
 
 ## Sprint Goal
 Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channels + Celery stack with the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), and an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local→GitHub→GHCR→VPS path end-to-end on day one, with the firehose activation ledger seeded.
@@ -29,14 +29,15 @@ Land the P0 foundation (PRD §16): a fully containerized Django 5 + DRF + Channe
 #### Acceptance Criteria
 - [x] **AC-1.1:** docker-compose.yml defines every service in containers — web (Django ASGI via Daphne/Uvicorn), db (Postgres 16), redis, celery worker, celery-beat — connected via Docker network hostnames; no service is installed on the host (Docker Rules).
   - Dev: done
-- [ ] **AC-1.2:** requirements.txt pins the full stack with explicit version bounds: Django 5, djangorestframework, channels, channels-redis, celery, redis, daphne (or uvicorn), pydantic v2, psycopg[binary].
+- [x] **AC-1.2:** requirements.txt pins the full stack with explicit version bounds: Django 5, djangorestframework, channels, channels-redis, celery, redis, daphne (or uvicorn), pydantic v2, psycopg[binary].
+  - Dev: done
 - [ ] **AC-1.3:** Django Channels is configured with the Redis channel layer and an ASGI application; the service boots over ASGI and a trivial WebSocket consumer completes the handshake and echoes a message — verified by a pytest test using channels.testing.WebsocketCommunicator.
 - [ ] **AC-1.4:** `docker compose run --rm web python manage.py migrate` applies cleanly and `docker compose up -d` brings every service to a healthy state.
 - [ ] **AC-1.5:** The Celery worker connects to the Redis broker, autodiscovers tasks, and a sample task executes end-to-end (enqueue then resolve a result) — verified by a pytest test that dispatches the task and asserts the result is returned within a timeout.
 
 **Dev Team Status:** in-progress
 **Dev Team Notes:**
-  AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests).
+  AC-1.1 done (commit d096d70). docker-compose.yml fully rewritten with all 5 services: web (Daphne ASGI), db (postgres:16-alpine), redis (redis:7-alpine), celery-worker, celery-beat. All services connected via Docker network hostnames; no localhost references. Healthchecks on db and redis; celery services depend_on both. requirements.txt updated with daphne, channels, channels-redis, celery, redis, pyyaml pins. config/celery.py created; config/__init__.py exports celery_app; config/asgi.py updated to ProtocolTypeRouter; settings.py adds ASGI_APPLICATION, CHANNEL_LAYERS, CELERY_* config with daphne+channels in INSTALLED_APPS. Dockerfile CMD switched to daphne. Unit tests in core/tests/test_compose_topology.py assert all topology invariants (9 tests). AC-1.2 done: requirements.txt updated with pydantic>=2.0,<3 (pydantic v2), djangorestframework tightened to <4, django-environ tightened to <1. All 9 AC-1.2 packages now carry both lower and upper version bounds. Unit tests in core/tests/test_requirements_pins.py (5 tests) verify package presence, lower/upper bounds for all required packages, Django major==5, and pydantic major==2. All 15 tests pass, 100% coverage.
 
 **Tester Status:** approved
 **Tester Notes:**
