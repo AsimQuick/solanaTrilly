@@ -1,8 +1,8 @@
 # Sprint 3
 
 **Phase:** planning
-**Progress:** 1/4 stories | 8/16 ACs
-**Last Updated:** 2026-06-15T09:29:57+00:00
+**Progress:** 2/4 stories | 9/16 ACs
+**Last Updated:** 2026-06-15T09:34:43+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -139,7 +139,7 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
 ---
 
 ### US-9: P1 — PipelineConfig model: versioned, audited, admin-editable + pipeline_state singleton (§5.1, §8)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-9.1:** A PipelineConfig Django model (table 'pipeline_config', PRD §8) holds an immutable, versioned config snapshot with columns id, version, label, is_active, created_at, created_by, notes and the tunable sections detection, tape, scoring, outcome, trading as JSONField — each JSONField declared with encoder=JsonSafeEncoder (H3 / US-5, so the US-5 guard test stays green) — plus nullable feature_set and model FK slots (filled in P5/P7). 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a config row and reads every section back.
@@ -148,7 +148,8 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
   - Dev: done
 - [x] **AC-9.3:** A pipeline_state singleton model (PRD §8; id=1) exists with booleans firehose_active, scoring_enabled, trading_enabled — ALL defaulting to False (explicit start; no silent auto-recovery, §5.3). Verified by a pytest test asserting the row is a true singleton (a second instance is prevented/normalized to id=1) and that all three flags default False.
   - Dev: done
-- [ ] **AC-9.4:** PipelineConfig is registered in the Django admin (list + detail) with django-simple-history's audit/diff history available — the foundation of the §5 operator config-control surface (view/diff/activate with audit history). Verified by pytest tests that request the admin changelist and a change-detail page for PipelineConfig as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
+- [x] **AC-9.4:** PipelineConfig is registered in the Django admin (list + detail) with django-simple-history's audit/diff history available — the foundation of the §5 operator config-control surface (view/diff/activate with audit history). Verified by pytest tests that request the admin changelist and a change-detail page for PipelineConfig as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-1
 
@@ -187,6 +188,21 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
      - `test_history_created_on_pipeline_config_create` — 1 record on create, `history_type == "+"`
      - `test_history_written_on_pipeline_config_activate` — 2 records a …
   AC-9.3 fixed: Fixed and pushed. The I001 violation was a blank line between the `import pytest` and `from core.models import PipelineState` lines — ruff's isort formatter requires no blank line between third-party and first-party imports in this project's configuration. Removing that blank line resolved it; `ruff check .` now exits clean.
+  AC-9.4 done: AC-9.4 is implemented and pushed to `feature/US-9-AC-9.4`.
+  
+  ---
+  
+  ## Implementation Summary — US-9 AC-9.4
+  
+  **Files changed (2):**
+  
+  1. **`core/admin.py`** — Replaced the placeholder stub with a full `PipelineConfig` registration using `@admin.register(PipelineConfig)` and `SimpleHistoryAdmin` as the base class (from `simple_history.admin`). Configured `list_display = ["id", "version", "label", "is_active", "created_at", "created_by"]`, `list_filter`, `readonly_fields`, and `ordering`. This wires the §5 operator config-control surface with full audit/diff history via django-simple-history. Updated metadata front matter (sprint-3, US-9 AC-9.4).
+  
+  2. **`core/tests/test_pipeline_config_ac94.py`** *(new)* — 2 `@pytest.mark.django_db` tests using Django's test client:
+     - `test_pipeline_config_admin_changelist_returns_200` — creates a superuser, force-logs in, GETs `admin:core_pipelineconfig_changelist`, asserts HTTP 200.
+     - `test_pipeline_config_admin_change_detail_returns_200` — creates a superuser, force-logs in, creates a `PipelineConfig` row, GETs `admin:core_pipelineconfig_change`, asserts HTTP 200.
+  
+  **Test count:** 2 new tests. **Full suite:** 241/241 passed. **Ruff lint:** clean. …
 
 **Tester Status:** approved
 **Tester Notes:**
