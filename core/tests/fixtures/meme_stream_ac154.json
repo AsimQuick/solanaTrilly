@@ -1,0 +1,119 @@
+{
+  "_meta": {
+    "description": "Synthetic schema-faithful Birdeye MEME_DATA stream for AC-15.4 offline gate",
+    "source_schema": "PRD §3.2 — Birdeye SUBSCRIBE_MEME / MEME_DATA payload",
+    "created": "2026-06-15",
+    "sprint": "sprint-4",
+    "story": "US-15 AC-15.4",
+    "activation": "synthetic — no live Birdeye activation spent; see ops/firehose_activation_log.md if replaced with a real capture",
+    "t0_unix": 1740787200,
+    "t0_utc": "2025-03-01T00:00:00Z",
+    "expected_token_rows": [
+      "AC154MINTalpha11111111111111111111111111111",
+      "AC154MINTbeta222222222222222222222222222222",
+      "AC154MINTgamma3333333333333333333333333333"
+    ],
+    "event_manifest": [
+      "event[0]: ALPHA pre-stage (97%, not graduated) — warm path, no Token row",
+      "event[1]: BETA direct graduation (blockTime=T0+10) — creates Token row",
+      "event[2]: ALPHA graduation (blockTime=T0+20) — creates Token row (was pre-staged)",
+      "event[3]: GAMMA first graduation (blockTime=T0+30) — creates Token row",
+      "event[4]: GAMMA duplicate graduation (blockTime=T0+40, within dedupe_window_s=60) — deduped, no new row",
+      "event[5]: DELTA below-threshold pre-stage (80% < 95%) — not pre-staged, no Token row",
+      "event[6]: EPSILON wrong source (raydium_amm, graduated=true) — filtered, no Token row",
+      "event[7]: noise event (type=SUBSCRIBE_MEME, not MEME_DATA) — ignored"
+    ]
+  },
+  "events": [
+    {
+      "type": "MEME_DATA",
+      "address": "AC154MINTalpha11111111111111111111111111111",
+      "source": "pump_dot_fun",
+      "graduated": false,
+      "progress_percent": 97.0,
+      "price": 0.0000011,
+      "liquidity": 80000.0,
+      "marketcap": 1100000.0
+    },
+    {
+      "type": "MEME_DATA",
+      "address": "AC154MINTbeta222222222222222222222222222222",
+      "source": "pump_dot_fun",
+      "graduated": true,
+      "progress_percent": 100.0,
+      "poolAddress": "AC154POOLbeta222222222222222222222222222222",
+      "blockTime": 1740787210,
+      "graduated_time": 1740787210,
+      "price": 0.000002345,
+      "liquidity": 85000.0,
+      "marketcap": 2345678.0
+    },
+    {
+      "type": "MEME_DATA",
+      "address": "AC154MINTalpha11111111111111111111111111111",
+      "source": "pump_dot_fun",
+      "graduated": true,
+      "progress_percent": 100.0,
+      "poolAddress": "AC154POOLalpha11111111111111111111111111111",
+      "blockTime": 1740787220,
+      "graduated_time": 1740787220,
+      "price": 0.000001234,
+      "liquidity": 82000.0,
+      "marketcap": 1234567.0
+    },
+    {
+      "type": "MEME_DATA",
+      "address": "AC154MINTgamma3333333333333333333333333333",
+      "source": "pump_dot_fun",
+      "graduated": true,
+      "progress_percent": 100.0,
+      "poolAddress": "AC154POOLgamma3333333333333333333333333333",
+      "blockTime": 1740787230,
+      "graduated_time": 1740787230,
+      "price": 0.000003456,
+      "liquidity": 90000.0,
+      "marketcap": 3456789.0
+    },
+    {
+      "type": "MEME_DATA",
+      "address": "AC154MINTgamma3333333333333333333333333333",
+      "source": "pump_dot_fun",
+      "graduated": true,
+      "progress_percent": 100.0,
+      "poolAddress": "AC154POOLgamma3333333333333333333333333333",
+      "blockTime": 1740787240,
+      "graduated_time": 1740787240,
+      "price": 0.000003456,
+      "liquidity": 90000.0,
+      "marketcap": 3456789.0
+    },
+    {
+      "type": "MEME_DATA",
+      "address": "AC154MINTdelta4444444444444444444444444444",
+      "source": "pump_dot_fun",
+      "graduated": false,
+      "progress_percent": 80.0,
+      "price": 0.0000005,
+      "liquidity": 70000.0,
+      "marketcap": 500000.0
+    },
+    {
+      "type": "MEME_DATA",
+      "address": "AC154MINTepsilon55555555555555555555555555",
+      "source": "raydium_amm",
+      "graduated": true,
+      "progress_percent": 100.0,
+      "poolAddress": "AC154POOLepsilon55555555555555555555555555",
+      "blockTime": 1740787250,
+      "graduated_time": 1740787250,
+      "price": 0.000004567,
+      "liquidity": 95000.0,
+      "marketcap": 4567890.0
+    },
+    {
+      "type": "SUBSCRIBE_MEME",
+      "status": "ok",
+      "msg": "subscription confirmed"
+    }
+  ]
+}
