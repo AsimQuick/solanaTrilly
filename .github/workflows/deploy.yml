@@ -101,7 +101,7 @@ jobs:
           echo "Smoke test FAILED: /health/ did not return HTTP 200 after all ${SMOKE_MAX_ATTEMPTS} attempts (${SMOKE_MAX_ATTEMPTS} x ${SMOKE_RETRY_DELAY}s)"
           exit 1
 
-      - name: Verify solanaBilly isolation (AC-6.5)
+      - name: Verify solanaBilly isolation (AC-6.5 / AC-12.4)
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_USER: ${{ secrets.VPS_USER }}
