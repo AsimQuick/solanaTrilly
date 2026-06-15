@@ -198,7 +198,36 @@ def test_sprint_phase_planning_no_stories_passes():
 
 
 def test_both_stale_violations_reported_together():
-    """Both a stale story dev_status and a stale sprint phase are reported."""
+    """Stale story dev_status fires for in-progress stories; stale phase fires when all done."""
+    # Stale story: story is in-progress (not done) with all ACs finished
+    stale_story_data = _sprint(
+        [
+            _story(
+                "US-1",
+                "in-progress",
+                dev_status="not-started",
+                acs=[_ac("1.1", dev_status="done")],
+            )
+        ],
+        phase="planning",
+    )
+    story_result = check_sprint(stale_story_data)
+    stale_story = [v for v in story_result if "stale" in v and "phase" not in v]
+    assert len(stale_story) == 1
+    assert "US-1" in stale_story[0]
+
+    # Stale phase: all stories done but phase still planning
+    stale_phase_data = _sprint(
+        [_story("US-2", "done", tester_status="approved", dev_status="done")],
+        phase="planning",
+    )
+    phase_result = check_sprint(stale_phase_data)
+    stale_phase = [v for v in phase_result if "phase" in v and "stale" in v]
+    assert len(stale_phase) == 1
+
+
+def test_story_done_with_stale_dev_status_not_flagged():
+    """A done story with stale dev_status is not flagged — closed stories are past dev tracking."""
     data = _sprint(
         [
             _story(
@@ -213,6 +242,4 @@ def test_both_stale_violations_reported_together():
     )
     result = check_sprint(data)
     stale_story = [v for v in result if "stale" in v and "phase" not in v]
-    stale_phase = [v for v in result if "phase" in v and "stale" in v]
-    assert len(stale_story) == 1
-    assert len(stale_phase) == 1
+    assert stale_story == []
