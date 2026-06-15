@@ -1,0 +1,84 @@
+# ---
+# file: docker-compose.staging.yml
+# stack: django+channels
+# purpose: VPS staging compose — the ONLY compose file run on the VPS (PRD §15.4).
+#   Compose project: -p solanatrilly (enforced via top-level name: field AND CLI flag).
+#   Isolation: distinct Postgres DB (solanatrilly), distinct volume (solanatrilly_pgdata),
+#   distinct Redis, distinct Docker network (solanatrilly_net).
+#   web on host port 8002 (solanaBilly owns 8001 — never touch it).
+#   VPS is never hand-edited: deploy.yml pulls the GHCR image and brings up this file.
+# created-by: dev-team
+# sprint: sprint-2
+# story: US-6 AC-6.2
+# last-updated: 2026-06-15
+# ---
+#
+# Hard isolation rules:
+#   - ALL docker commands on the VPS MUST be scoped: docker compose -p solanatrilly ...
+#   - NEVER run unscoped: docker down / up --force-recreate / prune / volume removal
+#   - solanaBilly lives at /root/solanaBilly on port 8001 — NEVER TOUCH IT
+
+name: solanatrilly
+
+networks:
+  solanatrilly_net:
+    driver: bridge
+
+volumes:
+  solanatrilly_pgdata:
+
+services:
+  web:
+    image: ghcr.io/asimquick/solanatrilly:latest
+    command: sh -c "python manage.py migrate --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"
+    ports:
+      - "8002:8000"
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: 0
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - solanatrilly_net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')\" 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: solanatrilly
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - solanatrilly_pgdata:/var/lib/postgresql/data
+    networks:
+      - solanatrilly_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - solanatrilly_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
