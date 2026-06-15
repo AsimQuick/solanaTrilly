@@ -1,8 +1,8 @@
 # Sprint 3
 
 **Phase:** planning
-**Progress:** 2/4 stories | 12/16 ACs
-**Last Updated:** 2026-06-15T09:51:42+00:00
+**Progress:** 3/4 stories | 13/16 ACs
+**Last Updated:** 2026-06-15T10:03:20+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -230,7 +230,7 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
 ---
 
 ### US-10: P1 — Typed Pydantic v2 PipelineConfig schema enforcing the save-time invariants (§5.2)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-10.1:** A Pydantic v2 schema models the full PipelineConfig (typed detection/tape/scoring/outcome/trading sections). A valid config validates cleanly and round-trips to/from the model's JSON sections without loss; verified by a pytest test that builds a valid config, validates it, and asserts the round-trip equals the input.
@@ -239,7 +239,8 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
   - Dev: done
 - [x] **AC-10.3:** The feature-contract subset invariant (D2, §5.2) is wired: the schema enforces model.feature_contract is a subset of feature_set.columns AND of the live_servable set — failing at save (in the UI), never live with 'REFUSING TO SCORE'. Because the FeatureSet/ModelRegistry tables land in P5/P7, the check is unit-tested against representative in-memory column/live_servable sets (passing trivially when no contract/feature_set is referenced) and is wired to become a live save-time gate when those FKs arrive — the same 'guard now, regression-gate later' pattern as US-2. Verified by a pytest test: a contract with a column outside columns-and-live_servable is rejected; a valid subset passes.
   - Dev: done
-- [ ] **AC-10.4:** Validation runs on the model WRITE path, not just in the UI: PipelineConfig.save()/clean() routes its sections through the Pydantic schema so an invalid config CANNOT be persisted. Verified by a pytest test asserting that saving a PipelineConfig whose sections violate an invariant raises (ValidationError/ValidationError-wrapped) and writes no row. New files carry metadata front matter.
+- [x] **AC-10.4:** Validation runs on the model WRITE path, not just in the UI: PipelineConfig.save()/clean() routes its sections through the Pydantic schema so an invalid config CANNOT be persisted. Verified by a pytest test asserting that saving a PipelineConfig whose sections violate an invariant raises (ValidationError/ValidationError-wrapped) and writes no row. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-9
 
@@ -294,6 +295,22 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
      - **(c) Rejection — outside feature_set.columns** (2 tests): one unknown column mixed in is rejected (matches `"D2"`); contract made entirely of non-existent columns is rejected.
      - **(d) Rejection — outside live_servable** (3 tests): training-only feature (in columns but not live_servable) is rejected; single training-only column is rejected; column absent from both is rejected.
      - **(e) Partia …
+  AC-10.4 done: Pushed successfully.
+  
+  ---
+  
+  ## Implementation Summary — US-10 AC-10.4
+  
+  **Files changed (2):**
+  
+  1. **`core/models.py`** — Added two methods to `PipelineConfig`:
+     - `clean()`: Routes populated sections through `PipelineConfigSchema.from_model_sections()`. Only fires when the cross-section invariant-bearing fields are present (`idle_kill_ttl_s` in tape, `score_at_elapsed_s`/`window_s` in scoring, `window_s` in outcome) — so empty/draft rows remain storable. A §5.2 violation causes a Pydantic `ValidationError` which is caught and re-raised as `django.core.exceptions.ValidationError`.
+     - `save()`: Calls `self.clean()` before `super().save()`, ensuring the Pydantic gate runs on every write path (direct `.save()` calls and `objects.create()`). Updated header metadata (story, dependencies).
+  
+  2. **`core/tests/test_pipeline_config_ac104.py`** *(new)* — 8 `@pytest.mark.django_db` tests (7 with DB, 1 without):
+     - `test_valid_complete_config_saves_without_error` — positive path: valid sections persist cleanly
+     - `test_leak_guard_equal_raises_validation_error_on_save` — `window_s == score_at_elapsed_s` raises
+     - `test_leak_guard_violation_writes_no_row` — invariant violation leaves zero …
 
 **Tester Status:** approved
 **Tester Notes:**
