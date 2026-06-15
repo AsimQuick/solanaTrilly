@@ -53,3 +53,7 @@ models/
 # DevRAG
 devrag-config.json
 devrag-vectors.db
+
+# Orchestrator runtime / local state (not version controlled)
+project-state.json
+.claude/settings.local.json
