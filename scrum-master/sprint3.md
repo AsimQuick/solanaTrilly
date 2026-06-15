@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 1/4 stories | 5/16 ACs
-**Last Updated:** 2026-06-15T09:00:32+00:00
+**Last Updated:** 2026-06-15T09:00:56+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -108,6 +108,7 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
   | `test_vps_dual_gate_covers_both_ports` | Deploy job references both `:8002` (solanatrilly up) and `:8001` (solanaBilly untouched) |
   | `test_smoke_test_uses_retry_loop_not_single_shot` | Smoke-test uses a loop (`seq`/`for`/`while`/`until`), not a brittle single-shot curl |
   | `test_smoke_test_exit …
+  [DEPLOY] Deploy trigger failed. Will be caught by full sprint deploy.
 
 **Tester Status:** approved
 **Tester Notes:**
