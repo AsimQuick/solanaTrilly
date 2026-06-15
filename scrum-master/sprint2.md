@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 4/6 stories | 17/22 ACs
-**Last Updated:** 2026-06-15T07:15:45+00:00
+**Progress:** 4/6 stories | 18/22 ACs
+**Last Updated:** 2026-06-15T07:20:42+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -280,7 +280,8 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   - Dev: done
 - [x] **AC-6.3:** The deploy step SSHes to the VPS (VPS_USER@VPS_HOST via VPS_SSH_KEY repo secrets) and runs 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d' to pull the tested GHCR image. Every docker command in the deploy script is -p solanatrilly-scoped — verified by inspecting deploy.yml for any unscoped down / up --force-recreate / prune / volume removal command; solanaBilly's containers/volumes (port 8001) are never touched (PRD §15.3, hard isolation).
   - Dev: done
-- [ ] **AC-6.4:** A hello-world Django endpoint is live on the VPS staging stack at port 8002, and a CD smoke-test step (run after deploy) hits it and asserts HTTP 200 — proving the local -> GitHub -> GHCR -> VPS path end-to-end (PRD §15.5, 'VPS presence from P0').
+- [x] **AC-6.4:** A hello-world Django endpoint is live on the VPS staging stack at port 8002, and a CD smoke-test step (run after deploy) hits it and asserts HTTP 200 — proving the local -> GitHub -> GHCR -> VPS path end-to-end (PRD §15.5, 'VPS presence from P0').
+  - Dev: done
 - [ ] **AC-6.5:** Deploying US-1's containerized topology through this pipeline retroactively closes US-1's story-level DoD (the sprint-1 deploy blocker recorded in retrospective A1); the deployed stack's hard isolation from live solanaBilly is verified on the VPS by confirming solanaBilly's containers remain running ('docker compose -p solanabilly ps' shows containers up) and port 8001 still responds after the solanatrilly deployment. New files carry metadata front matter.
 
 **Dependencies:** US-1, US-3
@@ -328,6 +329,23 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   1. **`.github/workflows/deploy.yml`** (modified) — Added `deploy` job that runs after `build-and-push`. Uses `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (SHA-pinned, H1). The single `Deploy to VPS staging stack` step injects `VPS_SSH_KEY`, `VPS_USER`, `VPS_HOST` from repo secrets via `env:`, writes the key to `/tmp/deploy_key` (chmod 600), SCPs `docker-compose.staging.yml` to `/root/solanatrilly/` on the VPS, then SSHes and runs `docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml pull && docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml up -d`. Every docker command is `-p solanatrilly`-scoped; no unscoped `down`/`prune`/`volume rm` commands exist anywhere in the file. Uses raw SSH (no extra action) so no additional SHA-pins required. Updated metadata header from AC-6.1 to AC-6.1 AC-6.3.
   
   2. **`core/tests/test_deploy_workflow_ac61.py`** (modified) — Updated `test_deploy_yml_no_custom_secrets` to expand the allowed secrets set from `{GITHUB_TOKEN …
+  AC-6.4 done: Pushed successfully.
+  
+  ---
+  
+  **Implementation Summary — AC-6.4**
+  
+  **Files changed (2):**
+  
+  1. **`.github/workflows/deploy.yml`** (modified) — Added `Smoke-test staging stack (AC-6.4)` step to the `deploy` job, positioned after the existing `Deploy to VPS staging stack` step. The step injects `VPS_HOST` from the repo secret, then runs a retry loop (12 × 5s = up to 60s) using `curl -s -o /dev/null -w "%{http_code}"` to hit `http://${VPS_HOST}:8002/health/`. Exits 0 on HTTP 200, exits 1 if the endpoint doesn't respond 200 within 60 seconds. Updated metadata header to include `AC-6.4`.
+  
+  2. **`core/tests/test_deploy_workflow_ac64.py`** (new) — 6 structural tests validating the smoke-test step in deploy.yml:
+     - `test_smoke_test_step_exists_in_deploy_job` — step with "smoke" in name is present
+     - `test_smoke_test_step_targets_port_8002` — script contains `:8002`
+     - `test_smoke_test_step_targets_health_endpoint` — script contains `/health/`
+     - `test_smoke_test_step_asserts_http_200` — script checks `"200"` and has explicit exit codes
+     - `test_smoke_test_step_comes_after_deploy_step` — smoke step index > deploy step index
+     - `test_smoke_test_step_uses_vps_host_secret` — env block i …
 
 **Tester Status:** approved
 **Tester Notes:**
