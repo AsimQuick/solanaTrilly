@@ -158,19 +158,21 @@ def test_deploy_yml_all_actions_sha_pinned() -> None:
 
 
 def test_deploy_yml_no_custom_secrets() -> None:
-    """deploy.yml must use only secrets.GITHUB_TOKEN — no extra custom secrets (AC-6.1).
+    """deploy.yml must use only approved secrets (AC-6.1, AC-6.3).
 
-    Per po-requests.md item 2: GITHUB_TOKEN (built-in) is the only allowed
-    secret for GHCR authentication.  Any other secrets.FOO reference is a
-    violation of this AC.
+    GHCR authentication uses secrets.GITHUB_TOKEN only (built-in, per
+    po-requests.md item 2).  The VPS deploy step (AC-6.3) additionally uses
+    VPS_SSH_KEY, VPS_USER, VPS_HOST.  Any other secret is a violation.
     """
     raw = DEPLOY_YML.read_text(encoding="utf-8")
     secret_names = {m.group(1) for m in ANY_SECRET_RE.finditer(raw)}
-    custom_secrets = secret_names - {"GITHUB_TOKEN"}
+    allowed_secrets = {"GITHUB_TOKEN", "VPS_SSH_KEY", "VPS_USER", "VPS_HOST"}
+    custom_secrets = secret_names - allowed_secrets
     assert not custom_secrets, (
-        "AC-6.1 violation — deploy.yml references custom secrets:\n"
+        "AC-6.1/6.3 violation — deploy.yml references unexpected secrets:\n"
         + "\n".join(f"  secrets.{s}" for s in sorted(custom_secrets))
-        + "\n\nOnly secrets.GITHUB_TOKEN (the built-in token) is allowed."
+        + "\n\nAllowed: "
+        + ", ".join(f"secrets.{s}" for s in sorted(allowed_secrets))
     )
 
 
