@@ -2,7 +2,8 @@
 
 **Phase:** planning
 **Progress:** 1/4 stories | 6/16 ACs
-**Last Updated:** 2026-06-15T09:08:10+00:00
+**Last Updated:** 2026-06-15T09:20:00+00:00
+**last-updated-by:** dev-team
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -144,13 +145,14 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
 #### Acceptance Criteria
 - [x] **AC-9.1:** A PipelineConfig Django model (table 'pipeline_config', PRD §8) holds an immutable, versioned config snapshot with columns id, version, label, is_active, created_at, created_by, notes and the tunable sections detection, tape, scoring, outcome, trading as JSONField — each JSONField declared with encoder=JsonSafeEncoder (H3 / US-5, so the US-5 guard test stays green) — plus nullable feature_set and model FK slots (filled in P5/P7). 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a config row and reads every section back.
   - Dev: done
-- [ ] **AC-9.2:** Config change history is audited via django-simple-history (added to requirements.txt with explicit version bounds and to INSTALLED_APPS; image rebuilt per Docker Rules): every create/activate records who and when. Verified by a pytest test that creates then activates a config and asserts a historical record row is written capturing the change.
+- [x] **AC-9.2:** Config change history is audited via django-simple-history (added to requirements.txt with explicit version bounds and to INSTALLED_APPS; image rebuilt per Docker Rules): every create/activate records who and when. Verified by a pytest test that creates then activates a config and asserts a historical record row is written capturing the change.
+  - Dev: done
 - [ ] **AC-9.3:** A pipeline_state singleton model (PRD §8; id=1) exists with booleans firehose_active, scoring_enabled, trading_enabled — ALL defaulting to False (explicit start; no silent auto-recovery, §5.3). Verified by a pytest test asserting the row is a true singleton (a second instance is prevented/normalized to id=1) and that all three flags default False.
 - [ ] **AC-9.4:** PipelineConfig is registered in the Django admin (list + detail) with django-simple-history's audit/diff history available — the foundation of the §5 operator config-control surface (view/diff/activate with audit history). Verified by pytest tests that request the admin changelist and a change-detail page for PipelineConfig as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
 
 **Dependencies:** US-1
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
 **Dev Team Notes:**
   AC-9.1 done: Pushed successfully. Here is the implementation summary for the orchestrator:
   
@@ -165,6 +167,28 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
   2. **`core/migrations/0002_pipelineconfig.py`** — Django-generated migration creating the `pipeline_config` table. Applied cleanly against real Postgres (`docker compose run --rm web python manage.py makemigrations` + `migrate`).
   
   3. **`core/tests/test_pipeline_config_ac91.py`** — 18 tests covering: field introspection (db_table name, all column types, is_active default=False, created_at auto_now_add, created_by nullable FK, …
+
+  AC-9.2 done: Pushed to `feature/US-9-AC-9.2`.
+
+  ---
+
+  ## Implementation Summary — US-9 AC-9.2
+
+  **Files changed (5):**
+
+  1. **`requirements.txt`** — Added `django-simple-history>=3.7,<4` to the Utilities section with a comment. Updated front-matter header `story` and `last-updated` fields.
+
+  2. **`config/settings.py`** — Added `"simple_history"` to INSTALLED_APPS (before `"core"`). Added `"simple_history.middleware.HistoryRequestMiddleware"` at the END of the MIDDLEWARE list so the requesting user is captured on HTTP requests. Updated header `story` and `last-updated` fields.
+
+  3. **`core/models.py`** — Added `from simple_history.models import HistoricalRecords` import. Added `history = HistoricalRecords()` field to `PipelineConfig` (after FK placeholders, before Meta). Updated header metadata.
+
+  4. **`core/migrations/0003_historicalpipelineconfig.py`** — Django-generated migration creating the `HistoricalPipelineConfig` table. Applied cleanly against real Postgres. Added front-matter header comment.
+
+  5. **`core/tests/test_pipeline_config_ac92.py`** — 5 tests: `test_history_created_on_pipeline_config_create` (asserts 1 record, history_type="+"), `test_history_written_on_pipeline_config_activate` (asserts 2 records, latest history_type="~"), `test_history_captures_when` (asserts history_date is not None), `test_history_captures_who` (asserts history_user equals the user set via _history_user), `test_create_then_activate_sequence_has_two_history_records` (full sequence ordered check).
+
+  **Image rebuild:** Done via `docker compose build web` — django-simple-history-3.11.0 installed.
+
+  **Test count:** 5 new tests (AC-9.2). **Total suite:** 231 passed. **Coverage:** 100% (threshold >= 80% met). blocker-type: none
 
 **Tester Status:** approved
 **Tester Notes:**

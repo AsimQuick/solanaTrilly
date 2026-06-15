@@ -3,9 +3,9 @@
 # stack: django+channels+celery
 # purpose: Python dependencies (lean — psycopg binary wheel, no compiler needed)
 # created-by: dev-team
-# sprint: sprint-1
-# story: US-1 AC-1.1, AC-1.2
-# last-updated: 2026-06-14
+# sprint: sprint-1, sprint-3
+# story: US-1 AC-1.1, AC-1.2, US-9 AC-9.2
+# last-updated: 2026-06-15
 # ---
 
 # Core (Django 5.2 LTS — supported through April 2028)
@@ -26,6 +26,7 @@ redis>=5.0,<6                    # Python redis client (Celery broker/backend)
 
 # Utilities
 pyyaml>=6.0,<7                   # YAML parsing (used in topology tests)
+django-simple-history>=3.7,<4    # audit trail for PipelineConfig (US-9 AC-9.2)
 
 # Dev / Test
 pytest>=8.0
