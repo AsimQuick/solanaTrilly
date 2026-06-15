@@ -133,8 +133,8 @@
         {
           "id": "19.2",
           "text": "Recorded swaps are also written to the queryable 'swaps' table (US-17) as a mirror of the jsonl.gz lake, idempotently on (mint, signature) \u2014 re-recording the same swap does NOT create a duplicate row. Verified by a pytest test asserting each recorded NormalizedSwap appears as a swaps row with matching fields, and that re-recording the same swaps yields the same row count (no duplicates).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -146,7 +146,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "AC-19.1 fixed: **Fix:** Restored `push: branches: [main]` alongside `workflow_dispatch` in `.github/workflows/deploy.yml`. The ER commit `c0db4c2` had stripped the push trigger entirely (with a now-removed comment block explaining the rationale), which broke the AC-6.1 and AC-8.2 guard tests. No US-19 code was touched \u2014 all 6 AC-19.1 tests were already passing.",
+      "dev_notes": "AC-19.1 fixed: **Fix:** Restored `push: branches: [main]` alongside `workflow_dispatch` in `.github/workflows/deploy.yml`. The ER commit `c0db4c2` had stripped the push trigger entirely (with a now-removed comment block explaining the rationale), which broke the AC-6.1 and AC-8.2 guard tests. No US-19 code was touched \u2014 all 6 AC-19.1 tests were already passing.\nAC-19.2 done: Pushed to `feature/US-19-AC-19.2`.\n\n---\n\n## Implementation Summary\n\n**Files changed (3):**\n\n1. **`core/tape/swap_writer.py`** (new) \u2014 `SwapWriter` class with a `write(swaps: list[tuple[str, NormalizedSwap]]) -> int` method. Uses `Swap.objects.update_or_create(mint=..., signature=..., defaults={...})` for idempotency on `(mint, signature)`. The `mint` is passed alongside each `NormalizedSwap` since the base-token mint is not stored on the swap schema itself (it lives in the recorder's `token_store`).\n\n2. **`core/tape/recorder.py`** (modified) \u2014 Three changes:\n   - Added `swap_writer: SwapWriter | None = None` constructor parameter.\n   - Changed internal storage from `_normalized_swaps: list[NormalizedSwap]` to `_normalized_swaps_with_mints: list[tuple[str, NormalizedSwap]]` so the mint is available at write time. The public `normalized_swaps` property is backward-compatible.\n   - In `run()`, after all events consumed, calls `await asyncio.to_thread(self._swap_writer.write, ...)` \u2014 the `asyncio.to_thread()` wrapper is required because Django ORM is synchronous and cannot be called directly from async context.\n\n3. **`core/tests/test_swap_writer_ac192.py`** (new) \u2014 8 pytest tests:\n   - \u2026",
       "tester_status": "approved",
       "tester_notes": "AC-19.1 diagnosis: ---\n\n## Diagnosis: Code Bug \u2014 Pre-existing regression from ER commit `c0db4c2`\n\n**Classification:** Code bug. Not a requirements issue.\n\n**Severity:** Medium \u2014 the US-19 AC-19.1 feature itself is correct (all 6 `test_lake_writer_ac191.py` tests passed). The CI failure is caused by a pre-existing regression that this branch inherited.\n\n---\n\n### What failed\n\nTwo guard tests fail \u2014 neither is in US-19:\n\n| Test | Assertion |\n|---|---|\n| `test_deploy_workflow_ac61.py::test_deploy_yml_triggers_on_push_to_main` | `deploy.yml` must have `on.push.branches: [main]` |\n| `test_deploy_workflow_ac82.py::test_push_trigger_still_present` | `push` trigger must coexist with `workflow_dispatch` (AC-8.2 was written *specifically* to prevent removing it) |\n\nBoth fail because `deploy.yml` currently only has `workflow_dispatch:` in its `on:` block.\n\n---\n\n### Root cause\n\nEmergency-responder commit `c0db4c2` (`[ER] Deploy on workflow_dispatch only \u2014 remove push-to-main trigger`) deliberately removed `push: branches: [main]` from `.github/workflows/deploy.yml`. The rationale (avoid double-deploys from the gitops orchestrator) is documented and valid \u2014 but the commit broke two AC guard tests without updating \u2026"
     },
@@ -264,7 +264,7 @@
       "tester_notes": "All 3 ACs testable. AC-22.3 amended directly to specify the two durable evidence items (VPS psql count >= 1 + committed fixture path) so the live-proof gate has an unambiguous pass/fail criterion; no PO judgment needed."
     }
   ],
-  "last_updated": "2026-06-15T19:45:15+00:00",
+  "last_updated": "2026-06-15T19:57:23+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-5 in planning.",
   "tester_sprint_status": "not-started",
   "tester_sprint_notes": "Requirements validation complete 2026-06-15. All 6 stories / 20 ACs approved. One minor wording fix applied directly to AC-22.3 (added two durable VPS evidence items so the live-proof gate has a binary pass/fail; no scope change). Sprint ready for development to begin in build order: US-17 \u2192 US-18 \u2192 US-19/US-20 (sequential) \u2192 US-21 \u2192 US-22."
