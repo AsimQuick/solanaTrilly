@@ -2,7 +2,8 @@
 
 **Phase:** planning
 **Progress:** 3/4 stories | 13/16 ACs
-**Last Updated:** 2026-06-15T10:03:45+00:00
+**Last Updated:** 2026-06-15T12:00:00+00:00
+**last-updated-by:** dev-team
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -329,7 +330,27 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
 
 **Dependencies:** US-9, US-10
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
+**Dev Team Notes:**
+  AC-11.1 done: Pushed to `feature/US-11-AC-11.1`.
+
+  **Implementation summary — US-11 AC-11.1**
+
+  **Files created (2):**
+
+  1. **`core/resolver.py`** *(new)* — Single cached resolver for the active PipelineConfig (PRD §5.3). Exports:
+     - `get_active_config() -> PipelineConfigSchema | None`: On cache hit, reconstructs PipelineConfigSchema from cached section dicts (no DB query). On cache miss, queries `PipelineConfig.objects.get(is_active=True)`, caches the five raw section dicts for 300 s, and returns the validated schema. Returns `None` when no active row exists.
+     - `invalidate_active_config_cache()`: Deletes the cache key; called by the activation helper (AC-11.2) on every activation change.
+     - Cache key: `"active_pipeline_config_sections"`, TTL 300 s.
+
+  2. **`core/tests/test_resolver_ac111.py`** *(new)* — 5 tests covering AC-11.1:
+     - `test_get_active_config_returns_active_config` — returns a `PipelineConfigSchema` for the active row; spot-checks `scoring.score_at_elapsed_s == 120`.
+     - `test_get_active_config_returns_none_when_no_active_config` — returns `None` when only an inactive row exists.
+     - `test_get_active_config_is_cached` — second call issues zero DB queries via `CaptureQueriesContext`.
+     - `test_no_service_module_uses_os_getenv_or_environ` — AST-scans `core/` (excluding tests/migrations) for `os.getenv`, bare `getenv`, and `os.environ` usages; asserts none found.
+     - `test_pipeline_service_file_scan_is_non_degenerate` — asserts scan finds ≥1 file so the guard cannot trivially pass on an empty directory.
+
+  **Test count:** 5 new tests. **Full suite:** 290 passed. **Ruff lint:** clean (fixed F541 spurious f-string prefix). **blocker-type:** none
 
 **Tester Status:** approved
 **Tester Notes:**
