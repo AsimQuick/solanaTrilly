@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 4/6 stories | 18/22 ACs
-**Last Updated:** 2026-06-15T07:20:42+00:00
+**Progress:** 5/6 stories | 19/22 ACs
+**Last Updated:** 2026-06-15T07:30:10+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -271,7 +271,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-6: CD pipeline (GitHub Actions → GHCR → VPS staging) + hello-world live under hard isolation
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-6.1:** A deploy.yml GitHub Actions workflow exists: on merge to main it runs the hardened CI (H1, US-3), builds the web image, and pushes it to GHCR (ghcr.io/asimquick/solanatrilly) using the built-in GITHUB_TOKEN with permissions: { packages: write } (no extra secret — per po-requests.md item 2). Every action in deploy.yml is SHA-pinned (H1).
@@ -282,7 +282,8 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   - Dev: done
 - [x] **AC-6.4:** A hello-world Django endpoint is live on the VPS staging stack at port 8002, and a CD smoke-test step (run after deploy) hits it and asserts HTTP 200 — proving the local -> GitHub -> GHCR -> VPS path end-to-end (PRD §15.5, 'VPS presence from P0').
   - Dev: done
-- [ ] **AC-6.5:** Deploying US-1's containerized topology through this pipeline retroactively closes US-1's story-level DoD (the sprint-1 deploy blocker recorded in retrospective A1); the deployed stack's hard isolation from live solanaBilly is verified on the VPS by confirming solanaBilly's containers remain running ('docker compose -p solanabilly ps' shows containers up) and port 8001 still responds after the solanatrilly deployment. New files carry metadata front matter.
+- [x] **AC-6.5:** Deploying US-1's containerized topology through this pipeline retroactively closes US-1's story-level DoD (the sprint-1 deploy blocker recorded in retrospective A1); the deployed stack's hard isolation from live solanaBilly is verified on the VPS by confirming solanaBilly's containers remain running ('docker compose -p solanabilly ps' shows containers up) and port 8001 still responds after the solanatrilly deployment. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-1, US-3
 
@@ -346,6 +347,17 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
      - `test_smoke_test_step_asserts_http_200` — script checks `"200"` and has explicit exit codes
      - `test_smoke_test_step_comes_after_deploy_step` — smoke step index > deploy step index
      - `test_smoke_test_step_uses_vps_host_secret` — env block i …
+  AC-6.5 done: Pushed. Implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-6.5 Implementation Summary**
+  
+  **Files changed (3):**
+  
+  1. **`.github/workflows/deploy.yml`** (modified) — Added `Verify solanaBilly isolation (AC-6.5)` step as the final step in the `deploy` job, positioned after the smoke-test step (AC-6.4). The step injects `VPS_SSH_KEY`, `VPS_USER`, `VPS_HOST` from repo secrets, SSHes to the VPS, and runs two checks: (1) `docker compose -p solanabilly ps` — asserts solanaBilly containers are in running/up state; exits 1 if not; (2) `curl --max-time 10 http://${VPS_HOST}:8001/` — asserts port 8001 responds (HTTP status not 000); exits 1 if not. Updated story header to include AC-6.5. The `docker compose -p solanabilly ps` command is read-only (no state modification), scoped to the solanabilly project only.
+  
+  2. **`core/tests/test_deploy_workflow_ac63.py`** (modified) — Updated two tests to allow the scoped read-only isolation check: (a) `test_all_deploy_docker_compose_commands_project_scoped` — changed from requiring `-p solanatrilly` specifically to requiring any `-p <project>` scope via regex, so `docker compose -p solanabilly ps` passes; (b) `test_no_solanabilly_reference_in_deploy_ …
 
 **Tester Status:** approved
 **Tester Notes:**
