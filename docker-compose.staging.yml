@@ -1,15 +1,17 @@
 # ---
 # file: docker-compose.staging.yml
-# stack: django+channels
+# stack: django+channels+listener
 # purpose: VPS staging compose — the ONLY compose file run on the VPS (PRD §15.4).
 #   Compose project: -p solanatrilly (enforced via top-level name: field AND CLI flag).
 #   Isolation: distinct Postgres DB (solanatrilly), distinct volume (solanatrilly_pgdata),
 #   distinct Redis, distinct Docker network (solanatrilly_net).
 #   web on host port 8002 (solanaBilly owns 8001 — never touch it).
+#   listener: dedicated detection/reconciler container — never shares the web/gunicorn
+#     process (#289 lesson); runs python manage.py run_listener inside the GHCR image.
 #   VPS is never hand-edited: deploy.yml pulls the GHCR image and brings up this file.
 # created-by: dev-team
 # sprint: sprint-2
-# story: US-6 AC-6.2
+# story: US-6 AC-6.2, US-16 AC-16.3
 # last-updated: 2026-06-15
 # ---
 #
@@ -81,4 +83,25 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  listener:
+    image: ghcr.io/asimquick/solanatrilly:latest
+    command: python manage.py run_listener
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: 0
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36,localhost,127.0.0.1}
+      REDIS_URL: redis://redis:6379/0
+      BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
+      HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - solanatrilly_net
     restart: unless-stopped
