@@ -1,0 +1,139 @@
+# Sprint 4
+
+**Phase:** planning
+**Progress:** 0/5 stories | 0/18 ACs
+**Last Updated:** 2026-06-15T00:00:00+00:00
+
+## Sprint Goal
+Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only remaining P0 blocker — the VPS deploy whose smoke-test has failed with curl exit code 7 on all 13 Sprint-3 deploy runs. Per retrospective C1, DIAGNOSE port-8002 ON the VPS (agents have root SSH per CLAUDE.md — the 'human escalation required' claim in the Sprint-3 review contradicts CLAUDE.md): ssh root@140.82.43.36, run 'curl -v localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the port publish/bind in docker-compose.staging.yml, and check ufw/iptables — to distinguish an operator-style firewall fix (which agents CAN apply as root: 'ufw allow 8002/tcp') from a code-level port-publish/bind bug (e.g. the container binding 127.0.0.1 or the host port not published). Apply whatever the on-box diagnosis finds, make the CD smoke-test retry with backoff AT RUNTIME (C3 — the Sprint-3 run showed the curl failing immediately with no retry) and upgrade its structural test to verify runtime retry behavior, not just file text, then run the deploy GREEN on main and confirm HTTP 200 on 8002 with solanaBilly untouched on 8001 — closing US-8 AC-8.3/8.4/8.5, US-6, and retroactively US-1's deploy-gated DoD, and finally EXITING P0 (US-12). Enforce status integrity PROGRAMMATICALLY with a CI guard on sprintN.json that forbids status:done while tester_status is failed/blocked and flags stale phase/dev_status (US-13; retrospective C4, logged unactioned in sprint-1/2/3). THEN deliver P2 detection (PRD §6.1, §8, §16): the 'tokens' model (US-14); a Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam + injected clock (US-2 / Principle #7) that creates tokens rows from the ACTIVE config's detection filter (US-11 resolver), dedupes within dedupe_window_s, and pre-stages near-graduation mints by prestage_progress_pct — offline-gated by replaying a captured/synthetic MEME stream through ReplaySource -> expected token rows (US-15); and detection resilience — the Helius 'migrate' reconciler backstop (D4) + a periodic Birdeye REST graduation sweep (third belt) + a dedicated 'listener' container in docker-compose.yml and docker-compose.staging.yml (US-16). Build order: US-12 FIRST (P0 closeout, the gating milestone — retrospective C2/B5; it is independent of the P2 chain and MAY run in parallel) and US-13 (process guard, independent); then the P2 chain US-14 -> US-15 -> US-16 (US-15 needs the tokens model + resolver + DataSource seam; US-16 needs the consumer).
+
+## Reference Documents
+- `scrum-master/PRD.md`
+- `scrum-master/retrospective.md`
+- `scrum-master/scrum-master.md`
+- `scrum-master/sprint3.json`
+- `CLAUDE.md`
+
+## Definition of Done
+- [ ] All ACs verified by CI / Tester
+- [ ] No critical defects
+- [ ] Coverage threshold met (>=80%)
+- [ ] Code file headers include metadata front matter
+- [ ] All services run in Docker (no host installs); the new 'listener' container is defined in docker-compose.yml AND docker-compose.staging.yml and brought up on the VPS — a service run on the host is a Docker Rules violation
+- [ ] CD pipeline is LIVE and GREEN — P0 is FINALLY exited: a deploy on main reaches the VPS solanatrilly staging stack (-p solanatrilly, port 8002) and the smoke-test returns HTTP 200; every story is merged + deployed + smoke-tested there ('works locally' is NOT done; the deploy clause is gated at the SPRINT boundary per retrospective A2).
+- [ ] VPS verification is IN THE LOOP and gates 'done' (retrospective B3/C1): the deploy blocker was diagnosed ON the VPS (curl localhost:8002, docker compose -p solanatrilly ps, ufw/iptables, compose port-bind) BEFORE concluding a cause, and the Tester confirms from an ACTUAL GREEN deploy run that the stack answers HTTP 200 on 8002 and solanaBilly is untouched on 8001.
+- [ ] Hard isolation from live solanaBilly preserved (every docker command scoped with -p solanatrilly; solanaBilly on port 8001 untouched; NO unscoped down / up --force-recreate / prune / volume-removal anywhere).
+- [ ] Status integrity enforced PROGRAMMATICALLY (retrospective C4, now US-13): a CI guard forbids any story or AC reading status:done while its tester_status is failed/blocked and flags stale phase/dev_status fields; the guard is GREEN on sprint4.json at review (no 'planning'/'not-started' left standing once work is done).
+- [ ] Detection is replay-testable OFFLINE (Principle #7): the P2 detection path reads events from a DataSource + an injected clock (no concrete-source import on the core path, US-2 static-analysis guard holds), and the P2 offline gate (replay a captured/synthetic MEME stream -> expected token rows) is green; any live Birdeye/Helius activation used to bank a fixture is logged in ops/firehose_activation_log.md (§15.7) and banks a durable fixture.
+- [ ] retrospective.md updated for sprint-4 (named owner: Tester / scrum facilitator — retrospective A3)
+
+## User Stories
+
+### US-12: P0 closeout (4th attempt) — diagnose+fix the VPS port-8002 deploy ON the box, GREEN smoke-test, exit P0 (closes US-8 AC-8.3/8.4/8.5 + US-6 + US-1's deploy-gated DoD)
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-12.1:** DIAGNOSE port-8002 ON the VPS before concluding a cause (retrospective C1; agents have root SSH per CLAUDE.md). SSH to root@140.82.43.36 and run: 'curl -v http://localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the 'ports:' publish/bind for the web service in docker-compose.staging.yml (rule out a 127.0.0.1-only bind or an unpublished host port), and check 'ufw status' / 'iptables -L' for inbound 8002. Record the findings in dev_notes, classifying the root cause as (a) a firewall blocking inbound 8002 from GitHub Actions runner IPs, or (b) a code-level port-publish/bind bug in docker-compose.staging.yml. Verified by the recorded on-box diagnosis distinguishing (a) from (b).
+- [ ] **AC-12.2:** APPLY the fix the diagnosis (AC-12.1) identifies. If (a) firewall: open inbound 8002 on the VPS as root (e.g. 'ufw allow 8002/tcp' or the equivalent cloud-firewall/iptables rule) — this is an agent task, not an operator blocker, since CLAUDE.md grants root SSH. If (b) port-bind bug: correct the 'ports:' mapping/bind in docker-compose.staging.yml (publish 0.0.0.0:8002->8002 for the web service) under -p solanatrilly scope, with NO destructive/unscoped docker command. Verified by 'curl http://localhost:8002/health/' on the VPS returning 200 AND (for a firewall fix) an external curl from off-box reaching 8002.
+- [ ] **AC-12.3:** The CD smoke-test RETRIES with backoff AT RUNTIME, not just in file text (retrospective C3; the Sprint-3 run 27540260960 showed the curl failing immediately with no retry right after the container started). deploy.yml's smoke-test step loops the curl against http://VPS:8002/health/ with a bounded backoff (sleep between attempts, configurable max-attempts), and the structural test is upgraded to assert the RUNTIME retry behavior — verifying loop iteration, sleep/backoff calls, and a max-attempts bound in the parsed workflow YAML — not merely that a loop keyword appears in the file. Verified by the upgraded structural test AND a deploy run whose log shows the smoke-test retrying when the container is slow to start.
+- [ ] **AC-12.4:** A deploy on main (or via workflow_dispatch) succeeds END-TO-END and GREEN: image built+pushed to GHCR, pulled on the VPS, stack up with 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d', the smoke-test hits http://VPS:8002/health/ and asserts HTTP 200, and the isolation step then confirms solanaBilly is still up on 8001 ('docker compose -p solanabilly ps' + 8001 responds). This closes US-8 AC-8.3 (200 on 8002), AC-8.4 (runtime isolation), US-6, and EXITS P0. Verified by the green Deploy run with both the smoke-test and isolation steps passing.
+- [ ] **AC-12.5:** VPS verification gates 'done' (retrospective B3/C2): the Tester confirms, from the ACTUAL green deploy run, that the running stack answers HTTP 200 on 8002 and solanaBilly is untouched on 8001 — not from green pytest alone. On confirmation, US-8 AC-8.3/8.4/8.5 and US-1's story-level DoD (the sprint-1 deploy blocker, retrospective A1) are retroactively CLOSED and P0 is declared EXITED. The US-8 record is normalized so no AC reads done while failed (retrospective C4). New/changed files carry metadata front matter.
+
+**Dependencies:** US-8
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 5 ACs are testable and verifiable. AC-12.1 specifies exact on-box commands and requires a classified root-cause record — clear pass/fail. AC-12.2 specifies the exact fix command for each branch and a concrete 200-on-localhost verification. AC-12.3 tightened: added explicit language requiring the structural test to verify loop iteration, sleep/backoff calls, and max-attempts in parsed YAML — not merely a keyword search — and that the deploy log shows retries; this closes the 'green test masking divergent runtime' gap from sprint-3 B3. AC-12.4 and AC-12.5 together enforce the VPS-gate DoD: the Tester must confirm from an actual green run, not from pytest. No scope issues.
+
+---
+
+### US-13: Process guard — programmatic status-integrity check on sprintN.json in CI (retrospective C4/A5/B4)
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-13.1:** A validator (a small committed Python script with metadata front matter) parses scrum-master/sprintN.json and FAILS when any story or AC reads status:done (or checked:true) while its tester_status is 'failed'/'fail'/'blocked' — the exact 'done != failed/blocked' violation flagged in sprint-1 (A5), sprint-2 (B4), and sprint-3 (C4, where US-8 read status:done + tester_status:fail). The validator must handle both spellings 'failed' and 'fail' since both appear in existing sprint JSON files. Verified by a pytest test that runs the validator against a passing fixture and a violating fixture, asserting reject-on-violation.
+- [ ] **AC-13.2:** The validator also flags STALE fields: a story whose ACs are all dev_status:done while the story's dev_status is 'not-started'/'in-progress', and a sprint 'phase' that disagrees with the story states (e.g. 'planning' while stories are done). Verified by pytest fixtures covering each stale-field case.
+- [ ] **AC-13.3:** The validator runs in CI on every PR (a job/step in the existing single canonical ci.yml — H1, do NOT add a second workflow) over all scrum-master/sprint*.json, failing the build on a violating file so the inconsistency cannot recur. Verified by the CI step being present (parsed from ci.yml in a structural test) and green on the repo's current sprint files. New files carry metadata front matter.
+
+**Dependencies:** US-1
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 3 ACs are testable and verifiable. AC-13.1 tightened: added explicit note that both 'failed' and 'fail' spellings must be handled, since both appear in existing sprint3.json usage — the controlled vocabulary only lists 'blocked'/'done' but sprint-3 practice used 'fail'; the validator must be resilient to both. AC-13.2 and AC-13.3 have concrete pytest fixture requirements and a structural CI-presence test. The H1 constraint (no second workflow file) is an enforceable rule via the structural test. No scope issues.
+
+---
+
+### US-14: P2 — the 'tokens' model: graduated-token persistence target (§8, §6.1)
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-14.1:** A Token Django model (table 'tokens', PRD §8) holds one row per graduated token with columns: mint (PK, CharField), pool_address, graduated_at (TIMESTAMPTZ — t0), graduated_block_time (INT — the rel-anchor), dex_source, raw_graduation (JSONField, declared with encoder=JsonSafeEncoder so the H3/US-5 guard test stays green), and status. 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a token row and reads every column back.
+- [ ] **AC-14.2:** status uses a constrained vocabulary on a width-bounded column (the §8 VARCHAR-width discipline — new status vocabulary is constrained, not free text), with t0 anchored to graduated_at and graduated_block_time carried as the integer rel-anchor used by the tape recorder later (P3). The status choices and their max length must be defined in the model's choices parameter (not checked at the DB level alone). Verified by a pytest test asserting the status choices list is non-empty, each choice fits within the declared max_length, and that a row's t0 fields round-trip.
+- [ ] **AC-14.3:** Token is registered in the Django admin (changelist + detail). Verified by pytest tests that request the admin changelist and a change-detail page for Token as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
+
+**Dependencies:** US-1, US-5
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 3 ACs are testable and verifiable. AC-14.1 specifies exact column names, types, and migration commands with a real Postgres round-trip test. AC-14.2 tightened: added explicit requirement that choices are declared in the model's choices parameter and that the pytest test asserts each choice value fits within max_length — the original wording was clear on intent but underspecified on how 'constrained vocabulary' is verified programmatically. Dev team should read PRD §8 for the authoritative status vocabulary before implementing. AC-14.3 has a precise HTTP-200 admin test. No scope issues.
+
+---
+
+### US-15: P2 — Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam -> tokens rows (§6.1, Principle #7)
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-15.1:** A detection consumer reads MEME events from a DataSource (NOT a concrete Birdeye client) and reads time from an injected clock — the live/replay seam from US-2 / Principle #7. Verified by (a) a pytest test driving the consumer from an in-memory/Replay source, and (b) the US-2-style static-analysis guard holding: no concrete-source import and no time.time()/datetime.now() on the core detection path.
+- [ ] **AC-15.2:** On a graduation MEME_DATA event (graduated=true, source=pump_dot_fun) the consumer creates/updates a tokens row — mint (from event 'address'), pool_address, graduated_at=t0 (from the event), and the raw event stored verbatim in raw_graduation JSONB — with the detection FILTER (source/graduated/prestage_progress_pct/dedupe_window_s) read from get_active_config() (US-11 resolver), NOT a hardcoded constant or os.getenv (Principle #1). Verified by a pytest test asserting an event yields the expected tokens row and that changing the active config's detection section changes consumer behavior.
+- [ ] **AC-15.3:** Dedupe + pre-stage: a duplicate graduation event for the same mint within dedupe_window_s does NOT create a second tokens row (idempotent on mint); and near-graduation mints (progress_percent >= prestage_progress_pct, not yet graduated) are pre-staged on a warm path WITHOUT being written as graduated tokens prematurely. Verified by pytest tests for (a) a within-window duplicate creating exactly one row and (b) a pre-stage event not producing a graduated token row until graduation arrives.
+- [ ] **AC-15.4:** P2 OFFLINE GATE (PRD §16): replaying a captured-or-synthetic MEME stream through a ReplaySource + virtual clock yields EXACTLY the expected set of tokens rows, deterministically (run twice -> identical rows). The fixture is a schema-faithful MEME stream (§3.2); if a live Birdeye activation is spent to bank a real capture, it is logged in ops/firehose_activation_log.md per §15.7 and banks the durable fixture. Verified by the replay test asserting the expected token rows and determinism. New files carry metadata front matter.
+
+**Dependencies:** US-14, US-11, US-2
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 4 ACs are testable and verifiable. AC-15.1 enforces the DataSource seam with both a behavioral test (in-memory replay drive) and a static-analysis gate (no concrete-source import, no wall-clock calls on core path) — two independent verification axes. AC-15.2 explicitly requires the config-change behavioral test, closing the Principle #1 (no hardcoded constants) enforcement gap. AC-15.3 specifies two distinct pytest scenarios for dedupe and pre-stage — each has a clear expected row count as the pass criterion. AC-15.4 specifies determinism as run-twice-identical, which is a concrete, automatable assertion. The dependency chain (US-14 for the model, US-11 for get_active_config, US-2 for the DataSource seam) is correctly identified and all are prior-sprint approved stories. No scope issues.
+
+---
+
+### US-16: P2 — detection resilience: Helius 'migrate' reconciler backstop + Birdeye REST sweep + dedicated 'listener' container (§6.1 D4, §15.1)
+**Status:** ready | **Priority:** high
+
+#### Acceptance Criteria
+- [ ] **AC-16.1:** Gap-recovery reconciler (D4): a Helius 'migrate' detection backstop (a transactionSubscribe on the pump program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P filtered to the 'migrate' instruction, with maxSupportedTransactionVersion:0 per §3.3), behind the SAME DataSource seam, recovers a token that a dropped Birdeye MEME event missed. Verified by a replay test where the MEME stream OMITS a mint that the Helius migrate stream carries -> the token is still created exactly once, and where both streams carry the mint -> still exactly one row (no duplicate).
+- [ ] **AC-16.2:** Third belt: a periodic Birdeye REST sweep of recent graduations runs as a Celery-beat task that reconciles any missed graduations into tokens rows, and is REGISTERED in the committed task manifest (H2/US-4) so its removal fails CI. Verified by (a) a pytest test that the sweep reconciles a missed graduation (idempotently, no duplicate) and (b) the task appearing in the registered-task manifest test.
+- [ ] **AC-16.3:** A dedicated 'listener' container (the #289 lesson — detection/recorder/reconciler never share the web/gunicorn process) is added to BOTH docker-compose.yml and docker-compose.staging.yml, scoped under -p solanatrilly with isolation preserved (distinct name/network; NO unscoped or destructive docker command; solanaBilly on 8001 untouched). Verified by a compose-topology pytest test asserting the listener service exists with the correct command/scope in both compose files, AND the staging deploy bringing the listener up on the VPS (the running stack shows the solanatrilly listener container up). New files carry metadata front matter.
+
+**Dependencies:** US-14, US-15
+
+**Dev Team Status:** not-started
+
+**Tester Status:** approved
+**Tester Notes:**
+  All 3 ACs are testable and verifiable. AC-16.1 specifies two distinct replay scenarios (MEME-omits-mint + both-streams-carry-mint) with exact expected row counts — concrete, automatable. AC-16.2 requires two independent verification paths (idempotent sweep pytest + manifest registration test), which together enforce both runtime behavior and structural integrity. AC-16.3 correctly includes both a structural compose-topology test (parse both YAML files) AND a VPS live-container check; the VPS verification clause is correctly deferred to post-US-12 (the listener can only be confirmed up on the VPS once US-12 delivers a working green deploy). No scope issues.
+
+---
+
+---
+
+## Sprint Review
+
+### Dev Team Sprint Notes
+_Pending_
+
+### Tester Sprint Notes
+All 5 stories (18 ACs) reviewed and approved. No requirements defects — no scope issues requiring PO judgment were found. Minor clarifications applied directly to 4 ACs: AC-12.3 (structural test must verify loop iteration/sleep/max-attempts in parsed YAML, not keyword presence); AC-13.1 (validator must handle both 'failed' and 'fail' spellings seen in practice); AC-14.2 (choices must be declared in model's choices parameter, pytest must assert each value fits within max_length); AC-16.3 (VPS listener check correctly deferred to post-US-12 working deploy). The build order (US-12 + US-13 independent; US-14 -> US-15 -> US-16 sequential) is correctly reflected in dependencies. The VPS-gate DoD is consistently enforced across US-12 and US-16. Tester flag: the controlled vocabulary in scrum-master.md omits 'failed'/'fail' as valid tester_status values even though both appear in sprint-3 JSON — the US-13 validator must handle both spellings; PO may wish to normalize the CV as a housekeeping item.
+
+### PO Sprint Review Notes
+_Pending_
+
+---
+_Auto-generated from `sprint4.json` — do not edit directly._

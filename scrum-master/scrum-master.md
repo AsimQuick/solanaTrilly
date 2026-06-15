@@ -7,12 +7,65 @@ last-updated: 2026-06-15
 
 # solanaTrilly — Scrum Master Board
 
-## Current Sprint: sprint-3 — Exit P0, Open P1 (Config Core)
+## Current Sprint: sprint-4 — Exit P0 (for real), Open P2 (Detection)
 - **Phase:** planning
+- **Sprint plan (source of truth):** [`sprint4.json`](sprint4.json)
+- **PRD:** [`PRD.md`](PRD.md) — finally exits **PRD §16 P0** (the GREEN VPS deploy) and delivers **P2 (detection, §6.1)**
+- **Previous sprint:** [`sprint3.json`](sprint3.json) — **closed** (review complete; P1 config core delivered in code, US-8 deploy failed; see Sprint-3 Review below + [`retrospective.md`](retrospective.md))
+- **Project state:** owned by Project Lead — `../project-state.json`
+- **Why this sprint:** P1 (config core) is done; P0 is **still not exited** for a third consecutive sprint — the Sprint-3 deploy smoke-test failed with curl exit 7 on all 13 runs. The Sprint-3 review's caveat is the key lever: **the "firewall" diagnosis was never verified on the box, and CLAUDE.md grants agents root SSH** — so the on-box diagnosis *and* the fix (firewall `ufw allow 8002/tcp` **or** a compose port-bind correction) are agent tasks, not an operator blocker. Sprint-4 actions retrospective **C1** (diagnose on the VPS), **C2** (fix + green deploy + exit P0), **C3** (runtime smoke-test retry), **C4** (programmatic status-integrity CI guard), and **C6** (pull P2 detection in alongside the P0 closeout).
+
+### Sprint Goal
+Two halves, one milestone — **exit P0, open P2.** **(1) Close P0 (4th attempt):** SSH to the VPS and
+diagnose port-8002 *on the box* (`curl localhost:8002/health`, `docker compose -p solanatrilly ps`,
+compose port-bind, `ufw`/`iptables`) to separate a firewall block from a port-publish/bind bug; apply the
+fix as root; make the CD smoke-test retry with backoff **at runtime**; run the deploy **green on `main`**
+and verify **HTTP 200 on 8002 with solanaBilly untouched on 8001** — retroactively closing US-8
+AC-8.3/8.4/8.5, US-6, and US-1's DoD, and finally **exiting P0** (US-12). Add a **programmatic
+status-integrity CI guard** on `sprintN.json` (US-13). **(2) Open P2 (detection, PRD §6.1):** the `tokens`
+model (US-14); a Birdeye `SUBSCRIBE_MEME` detection consumer **behind the `DataSource` seam + injected
+clock** that creates `tokens` rows from the active config's detection filter, dedupes within
+`dedupe_window_s`, and pre-stages near-graduation mints — **offline-gated by replaying a MEME stream →
+expected token rows** (US-15); and detection resilience — the Helius `migrate` reconciler backstop (D4) +
+a Birdeye REST sweep + a dedicated `listener` container (US-16).
+
+## Stories (sprint-4 — committed scope)
+| ID | Title | Priority | Deps | ACs | Status |
+|----|-------|----------|------|-----|--------|
+| US-12 | P0 closeout (4th attempt) — diagnose+fix VPS port-8002 on the box, GREEN smoke-test, exit P0 (closes US-8 8.3/8.4/8.5 + US-6 + US-1 DoD) | high | US-8 | 5 | ready |
+| US-13 | Process guard — programmatic status-integrity check on `sprintN.json` in CI (C4/A5/B4) | high | US-1 | 3 | ready |
+| US-14 | P2 — the `tokens` model: graduated-token persistence target (§8) | high | US-1, US-5 | 3 | ready |
+| US-15 | P2 — Birdeye `SUBSCRIBE_MEME` detection consumer behind the `DataSource` seam → `tokens` rows (offline gate) | high | US-14, US-11, US-2 | 4 | ready |
+| US-16 | P2 — detection resilience: Helius `migrate` reconciler + Birdeye REST sweep + dedicated `listener` container | high | US-14, US-15 | 3 | ready |
+
+> **Scope:** sprint-4 commits **5 stories / 18 ACs** — the P0 deploy closeout (US-12) + a process guard
+> (US-13) + the P2 detection core (US-14…US-16). Source of truth: [`sprint4.json`](sprint4.json). After
+> US-12 deploys green and is VPS-verified, **P0 is finally exited** and US-1's deploy-gated DoD closes
+> retroactively; after US-14…US-16, **P2 (detection) is delivered** and the project advances to **P3 (tape
+> recorder)**.
+
+**Build order:** **US-12 first** — the gating P0 closeout (retro C2/B5); it is independent of the P2 chain
+and may run in parallel. **US-13** (process guard) is independent. The P2 chain is sequential: **US-14**
+(`tokens` model) → **US-15** (detection consumer + offline gate, needs the model + resolver + DataSource
+seam) → **US-16** (reconciler + sweep + listener container, needs the consumer).
+
+**GitHub Issues:** created at sprint-4 kickoff (2026-06-15), one per story, mirroring the prior convention —
+[US-12 #54](https://github.com/AsimQuick/solanaTrilly/issues/54) ·
+[US-13 #55](https://github.com/AsimQuick/solanaTrilly/issues/55) ·
+[US-14 #56](https://github.com/AsimQuick/solanaTrilly/issues/56) ·
+[US-15 #57](https://github.com/AsimQuick/solanaTrilly/issues/57) ·
+[US-16 #58](https://github.com/AsimQuick/solanaTrilly/issues/58).
+Source of truth remains [`sprint4.json`](sprint4.json).
+
+---
+
+## Sprint-3 — Exit P0, Open P1 (Config Core) — CLOSED (review complete)
+- **Phase:** review (closed)
 - **Sprint plan (source of truth):** [`sprint3.json`](sprint3.json)
 - **PRD:** [`PRD.md`](PRD.md) — closes the last of **PRD §16 P0** (the CD deploy) and delivers **P1 (config core, §5)**
 - **Previous sprint:** [`sprint2.json`](sprint2.json) — **closed** (review complete; 5/6 stories DoD-done, US-6 failed; see Sprint-2 Review below + [`retrospective.md`](retrospective.md))
 - **Project state:** owned by Project Lead — `../project-state.json`
+- **Review outcome:** P1 config core (US-9/10/11) **delivered in code, CI-green**; **P0 not exited** — US-8's VPS smoke-test fails (curl exit 7 on all 13 Deploy runs), so nothing is verified-live on 8002. Sprint **blocked** at the VPS DoD gate. See Sprint-3 Review below + [`retrospective.md`](retrospective.md) (action items C1–C6) → carried into sprint-4.
 
 ### Sprint Goal
 Two halves, one milestone — **exit P0, open P1.** **(1) Close the last P0 blocker:** fix the CD deploy
@@ -41,10 +94,12 @@ retrospective items: B1/B2 (deploy fix + `workflow_dispatch`), **B3 (VPS verific
 ## Stories (sprint-3 — committed scope)
 | ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
 |----|-------|----------|------|-----|--------|-----|--------|
-| US-8 | P0 closeout — CD deploy lands on the isolated VPS staging stack (closes US-6 6.3/6.4/6.5 + US-1 DoD) | high | US-6 | 5 | ready | not-started | not-started |
-| US-9 | P1 — `PipelineConfig` model: versioned, audited, admin-editable + `pipeline_state` singleton | high | US-1 | 4 | ready | not-started | not-started |
-| US-10 | P1 — typed Pydantic v2 schema enforcing the save-time invariants (§5.2) | high | US-9 | 4 | ready | not-started | not-started |
-| US-11 | P1 — the config resolver: single cached `get_active_config()` + atomic activation/rollback | high | US-9, US-10 | 3 | ready | not-started | not-started |
+| US-8 | P0 closeout — CD deploy lands on the isolated VPS staging stack (closes US-6 6.3/6.4/6.5 + US-1 DoD) | high | US-6 | 5 | in-review | done | **fail** (AC-8.3/8.4/8.5) |
+| US-9 | P1 — `PipelineConfig` model: versioned, audited, admin-editable + `pipeline_state` singleton | high | US-1 | 4 | in-review | done | partial (code pass; deploy gate) |
+| US-10 | P1 — typed Pydantic v2 schema enforcing the save-time invariants (§5.2) | high | US-9 | 4 | in-review | done | partial (code pass; deploy gate) |
+| US-11 | P1 — the config resolver: single cached `get_active_config()` + atomic activation/rollback | high | US-9, US-10 | 3 | in-review | done | partial (code pass; deploy gate) |
+
+> **Status integrity note (retrospective B4 → C4):** `sprint3.json` still records `US-8 status: done` while `tester_status: fail`, and `dev_status: not-started` on completed stories — the same "done ≠ failed/blocked" inconsistency flagged in sprint-1 (A5) and sprint-2 (B4). The board above reflects the *normalized* state (US-8 `in-review`/`fail`, US-9/10/11 `in-review`/`partial`); the `sprintN.json` normalization is owned by PO / Project Lead and is carried as **C4**.
 
 > **Scope:** sprint-3 commits **4 stories / 16 ACs** — the P0 deploy closeout (US-8) + the P1 config core
 > (US-9…US-11). Source of truth: [`sprint3.json`](sprint3.json). After US-8 deploys green and is VPS-verified,
@@ -76,6 +131,50 @@ A story is Done only when ALL of the following hold:
 - Hard isolation from live solanaBilly preserved (every docker command scoped with `-p solanatrilly`; solanaBilly on port 8001 untouched)
 - **Status integrity enforced (retrospective B4):** no story/AC reads `status: done` while its `tester_status` is `failed`/`blocked`; stale `phase`/`dev_status` fields are normalized at review.
 - `retrospective.md` updated for sprint-3 — **named owner: Tester / scrum facilitator** (retrospective A3)
+
+## Sprint-3 Review — Summary (2026-06-15)
+**Phase:** review | **Committed scope:** US-8 + US-9/US-10/US-11 (4 stories, 16 ACs) | **Goal:** half met — P1 opened, P0 not closed
+**Full retrospective + action items (C1–C6):** [`retrospective.md`](retrospective.md)
+
+**Outcome:** All **16 ACs are implemented and CI-green** across 16 merged PRs (#38–#53), and the **P1 config core is fully delivered in code**:
+**US-9** (`PipelineConfig` model + django-simple-history audit + Django admin + `pipeline_state` singleton), **US-10** (typed Pydantic v2
+schema enforcing every §5.2 invariant — leak guard, D4, `capture_buffer_s ≥ 3`, id22 `adaptive_topk`-only gate, D2 feature-contract subset
+— as **write-path** rejection gates), and **US-11** (single cached `get_active_config()` resolver + atomic activation/rollback + an AST
+no-silent-auto-start guard). ~290 tests, coverage ≥80%. This is the config-driven source of truth (Principle #1) that P2–P8 read from.
+
+**US-8 — FAILED (P0 not exited).** AC-8.1 (`mkdir -p /root/solanatrilly` before SCP) and AC-8.2 (`workflow_dispatch`, resolving the HTTP 422)
+are **PASS** — sprint-2's SCP blocker is closed and **the deploy now actually deploys**: SSH connects, the GHCR image pulls, `docker compose
+-p solanatrilly … pull && up -d` runs, and the web container **starts on the VPS**. But **AC-8.3/8.4/8.5 FAIL**: the CD smoke-test (a curl
+from the GitHub runner to `http://VPS:8002/health/`) returns **curl exit code 7** on all **13** Deploy runs, so 200-on-8002 is never proven,
+the isolation step (gated behind the smoke-test) never runs, and the Tester cannot confirm P0 exit. US-9/10/11 are therefore rated **partial**
+(code correct, CI-green, containers deploy — only the sprint-boundary deploy DoD remains).
+
+**DoD status — deploy clause NOT met (third sprint).** Per A2 the deploy clause is gated at the sprint boundary; because the smoke-test never
+returns 200, **nothing is verified-live on port 8002** and **US-1's deploy-gated DoD (A1) stays open** — the same "no VPS presence" gap as
+sprints 1 and 2, but one layer deeper each time (no pipeline → SCP fails → container starts but port unreachable).
+
+**Diagnosis caveat (B3 not truly in the loop).** curl exit 7 was attributed to a closed port-8002 firewall, but **no one SSH'd to the VPS to
+`curl localhost:8002` and rule out a port-publish/bind bug** in `docker-compose.staging.yml`. Firewall (operator action) vs. port-mapping
+(code fix) have different remedies; agents have VPS SSH per CLAUDE.md, so the on-box check is owed before escalating. Also: AC-8.5's structural
+test asserts a smoke-test retry loop, yet the most recent run shows curl failing immediately with **no retry** — a green test masking a
+divergent runtime, the exact sprint-2 B3 lesson recurring.
+
+**Process note (B4 not enforced — third time).** `sprint3.json` reads `US-8 status: done` while `tester_status: fail`, `dev_status:
+not-started` on completed stories, and `phase: planning`-era staleness — the "done ≠ failed/blocked" inconsistency A5/B4 flagged twice.
+Also, "No open human dependencies for sprint-3" (asserted at kickoff) proved false: a probable operator firewall action emerged at review.
+
+**Carry into sprint-4 (priority order):** **C1** diagnose port-8002 *on the VPS* (curl localhost, `docker compose -p solanatrilly ps`, check
+the compose port publish/bind, inspect `ufw`/`iptables`) to separate operator-fix from code-fix → **C2** apply it, re-run the deploy, confirm
+200 on 8002 + isolation on 8001 (closes US-8/US-6 and retroactively US-1's DoD; exits P0 — fourth attempt) · **C3** make the smoke-test
+actually retry with backoff and have the structural test verify runtime, not file text · **C4** enforce status integrity programmatically
+(forbid `done` + `failed`/`blocked`; normalize fields; JSON-lint in CI) · **C5** reopen the human-dependency line in `po-requests.md` if C1
+confirms a firewall · **C6** don't let the deploy drag stall throughput — pull **P2 (detection)** into sprint-4 alongside the P0 closeout.
+See `retrospective.md` C1–C6.
+
+**Metrics:** 4 stories committed · 0 fully DoD-done · 3 code-complete/CI-green but Tester-`partial` (US-9/10/11) · 1 failed (US-8 deploy ACs) ·
+16/16 ACs CI-green / 13 Tester-pass / 3 fail (US-8 AC-8.3/8.4/8.5) · 16 PRs merged (#38–#53), all CI-green · 13 Deploy runs, **0 passed
+smoke-test** (curl exit 7) · 2 lint defects (US-8 AC-8.3 F841; US-9 AC-9.3 I001) caught by CI and fixed pre-merge · ~290 tests passing ·
+**0 verified-deployed to VPS** (third sprint). Token/cost spend: see `../project-state.json` (Project Lead).
 
 ## Sprint-2 Review — Summary (2026-06-15)
 **Phase:** review | **Committed scope:** US-2…US-7 (6 stories, 22 ACs) | **Goal:** substantially met — one blocker
