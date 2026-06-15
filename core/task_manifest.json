@@ -1,0 +1,6 @@
+{
+  "tasks": [
+    "core.tasks.add",
+    "core.tasks.ping"
+  ]
+}
