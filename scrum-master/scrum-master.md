@@ -7,7 +7,63 @@ last-updated: 2026-06-15
 
 # solanaTrilly — Scrum Master Board
 
-## Current Sprint: sprint-4 — Exit P0 (for real), Open P2 (Detection) — CLOSED (review complete)
+## Current Sprint: sprint-5 — Open P3 (the Tape Recorder) + prove detection live (D4)
+- **Phase:** planning
+- **Sprint plan (source of truth):** [`sprint5.json`](sprint5.json)
+- **PRD:** [`PRD.md`](PRD.md) — delivers **P3 (tape recorder, §6.2)**, "the heart" of the pipeline
+- **Previous sprint:** [`sprint4.json`](sprint4.json) — **closed** (review complete; **P0 EXITED**, P2 detection delivered; project advanced to P3 — see Sprint-4 Review below + [`retrospective.md`](retrospective.md) action items D1–D5)
+- **Project state:** owned by Project Lead — `../project-state.json`
+- **Why this sprint:** P0/P1/P2 are closed — the VPS staging stack is live on 8002, the config core is the single source of truth, and P2 detection lands graduated `tokens` rows carrying `graduated_block_time` as the integer rel-anchor the recorder needs. Retrospective **D1** directs P3 (the PumpSwap swap-tape recorder — capture every swap from t0, Birdeye tape as the single source of truth for all signal) as the **primary deliverable**, and **D4** carries the live wiring (drive the `listener` with a concrete Birdeye source + bank the first firehose fixture). Process carries: **D2** (promote `phase`/`dev_status` *before* sprint-end deploys so the US-13 guard isn't tripped by our own staleness), **D3** (normalize story-level `dev_status` to `done` at closeout instead of exempting it), **D5** (standing rule — run the on-box check our root SSH allows before declaring a blocker "human/operator required").
+
+### Sprint Goal
+**Open P3 — the tape recorder.** Build the PumpSwap swap-tape recorder behind the `DataSource` seam + injected
+clock (Principle #7): **(1)** the `swaps` table (§8) + the one `NormalizedSwap` schema (§7.1) with `rel`
+anchored to the DB `Token.graduated_block_time`/`graduated_at` (never the first swap) and constrained
+source/phase/side vocabularies (US-17); **(2)** the recorder **core** — port `tape_recorder.py`'s
+queue/writer/window/coverage scaffolding source-agnostically, emit one `NormalizedSwap` per **landed** swap with
+`owner`=the tx signer and all three units (D1), drop failed swaps, enforce the **stable** `(block_time, slot,
+signature)` ordering (#403), keep the zero/degenerate-swap guard (#405) (US-18); **(3)** the append-only
+daily-partitioned `jsonl.gz` lake + the queryable `swaps` writer + a truncated-tail-tolerant reader (US-19);
+**(4)** recorder resilience — `seek_by_time` gap reconciliation via the **identical** call/path the backfill uses
+(one code path → parity by construction) + idle-kill TTL deactivate-but-**re-attach**, config-driven (US-20);
+**(5)** the **P3 offline gate** (§16) — deterministic `ReplaySource` swap-stream replay → expected swaps,
+live↔backfill byte-parity on golden tokens, ordering/truncated-tail/zero-guard regression green (US-21). **Then**
+**(D4)** wire a concrete Birdeye `SUBSCRIBE_TXS` source into `run_listener` on the VPS, spend the **first** of the
+10 Birdeye firehose activations (logged, §15.7), prove a real graduation's swaps flow end-to-end, and **bank** the
+capture as the golden-token fixture US-21 runs against offline forever (US-22).
+
+## Stories (sprint-5 — committed scope)
+| ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
+|----|-------|----------|------|-----|--------|-----|--------|
+| US-17 | P3 — `swaps` table + the one `NormalizedSwap` schema: tape persistence target (§8, §7.1) | high | US-14, US-5 | 4 | ready | not-started | not-started |
+| US-18 | P3 — tape recorder core behind the `DataSource` seam: emission, stable ordering, owner=signer, drop-failed, zero-guard (§6.2) | high | US-17, US-2, US-15 | 4 | ready | not-started | not-started |
+| US-19 | P3 — append-only `jsonl.gz` lake + queryable `swaps` writer + truncated-tail-tolerant reader (§6.2, §6.4) | high | US-18 | 3 | ready | not-started | not-started |
+| US-20 | P3 — recorder resilience: `seek_by_time` gap reconcile (one code path) + idle-kill TTL re-attach, config-driven (§6.2 D4) | high | US-18, US-11 | 3 | ready | not-started | not-started |
+| US-21 | P3 — the offline gate: deterministic replay + live↔backfill byte-parity on golden tokens + regression suite (§16) | high | US-18, US-19, US-20 | 3 | ready | not-started | not-started |
+| US-22 | P3/D4 — wire a live Birdeye `SUBSCRIBE_TXS` source into the `listener` + spend & bank the first firehose activation (§6.2, §15.7) | high | US-16, US-18, US-21 | 3 | ready | not-started | not-started |
+
+> **Scope:** sprint-5 commits **6 stories / 20 ACs** — the full P3 tape-recorder core (US-17…US-21) plus the
+> D4 live-wiring + firehose-fixture story (US-22). Source of truth: [`sprint5.json`](sprint5.json). On P3 exit,
+> the recorder captures every PumpSwap swap from t0 into the lake/`swaps` table with live↔backfill parity, and
+> the project advances to **P4 (score-time snapshot + units locked, §6.3 / D1)**.
+
+**Build order:** **US-17 first** — the persistence target everything writes to. Then the core chain is sequential:
+**US-18** (recorder core) → **US-19** (lake) → **US-20** (resilience). **US-21** (offline gate) needs US-18/19/20.
+**US-22** (live D4) is **last** and depends on the `listener` (US-16) + the built recorder — and the offline P3
+gate (US-21) **does NOT depend on the live activation**, so an aborted/short firehose window never blocks P3 exit.
+
+**GitHub Issues:** created at sprint-5 kickoff (2026-06-15), one per story, mirroring the prior convention —
+[US-17 #77](https://github.com/AsimQuick/solanaTrilly/issues/77) ·
+[US-18 #78](https://github.com/AsimQuick/solanaTrilly/issues/78) ·
+[US-19 #79](https://github.com/AsimQuick/solanaTrilly/issues/79) ·
+[US-20 #80](https://github.com/AsimQuick/solanaTrilly/issues/80) ·
+[US-21 #81](https://github.com/AsimQuick/solanaTrilly/issues/81) ·
+[US-22 #82](https://github.com/AsimQuick/solanaTrilly/issues/82).
+Source of truth remains [`sprint5.json`](sprint5.json).
+
+---
+
+## Sprint-4 — Exit P0 (for real), Open P2 (Detection) — CLOSED (review complete)
 - **Phase:** review (closed)
 - **Sprint plan (source of truth):** [`sprint4.json`](sprint4.json)
 - **PRD:** [`PRD.md`](PRD.md) — finally exits **PRD §16 P0** (the GREEN VPS deploy) and delivers **P2 (detection, §6.1)**
@@ -322,7 +378,10 @@ topology-only stories, and give `retrospective.md` a named owner each sprint. Se
 ## Open items / human dependencies
 See [`po-requests.md`](po-requests.md) — **all four sprint-1/P0 operator blockers remain RESOLVED (2026-06-14):**
 the GitHub remote (`AsimQuick/solanaTrilly`), the default branch, and the CD secrets (`VPS_SSH_KEY` / `VPS_HOST` /
-`VPS_USER`; GHCR via the built-in `GITHUB_TOKEN`) are all provisioned. **No open human dependencies for sprint-4.**
+`VPS_USER`; GHCR via the built-in `GITHUB_TOKEN`) are all provisioned. **No open human dependencies for sprint-5** —
+P3 (the tape recorder) is agent-buildable end-to-end, and US-22/D4's single Birdeye `SUBSCRIBE_TXS` firehose
+activation is an agent task (keys in `.env`, logged in `ops/firehose_activation_log.md` per §15.7), not an operator
+blocker.
 The sprint-3 "operator firewall" suspicion was **falsified** by US-12's on-box diagnosis (C1): port 8002 was always
 reachable; the deploy failure was a code-side smoke-test timing race that agents fixed (no operator action). The
 three operator-only Cutover levers (trading-wallet secret, start firehose, enable real-capital trading) remain out
