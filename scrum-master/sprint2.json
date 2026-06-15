@@ -230,15 +230,15 @@
     {
       "id": "US-7",
       "title": "Firehose activation ledger seeded",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "medium",
       "dependencies": [],
       "acceptance_criteria": [
         {
           "id": "7.1",
           "text": "ops/firehose_activation_log.md is created and seeded with the project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10 / 10). API keys are already in .env (per po-requests.md item 3) \u2014 the ledger references them, never commits them (PRD \u00a715.7).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -257,11 +257,11 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-7.1 done: Pushed successfully. Here is the implementation summary for the orchestrator:\n\n---\n\n**AC-7.1 Implementation Summary**\n\n**Files changed (2 new):**\n\n1. **`ops/firehose_activation_log.md`** \u2014 The firehose activation ledger, seeded at project start. YAML front matter (file, purpose, sprint, story, status, created-by, last-updated). Budget table: Birdeye 10 total / 0 used / 10 remaining; Helius 10 total / 0 used / 10 remaining. States that API keys are in `.env` (gitignored, never committed) and referenced by env-var names only (`BIRDEYE_API_KEY`, `HELIUS_API_KEY`). Also includes the per-activation protocol and HARD RULE about banking durable fixtures (content needed by AC-7.2/7.3 which will also operate on this same file).\n\n2. **`core/tests/test_firehose_ledger_ac71.py`** \u2014 9 tests validating all AC-7.1 invariants:\n   - `test_ledger_file_exists` \u2014 ops/firehose_activation_log.md exists at expected path\n   - `test_ledger_has_metadata_front_matter` \u2014 YAML front matter present (--- delimiters)\n   - `test_ledger_birdeye_budget_is_ten` \u2014 Birdeye total budget of 10 stated\n   - `test_ledger_helius_budget_is_ten` \u2014 Helius total budget of 10 stated\n   - `test_ledger_zero_activations_used` \u2014 0 ac \u2026",
       "tester_status": "approved",
       "tester_notes": "All 3 ACs are testable and verifiable by file inspection. Minor fix applied to AC 7.2: replaced the unresolved placeholder '[TO TUNE]' with '<=30 min default; adjustable by explicit PO decision', making the criterion concrete and auditable. ACs 7.1 and 7.3 are clear: 7.1 requires specific budget numbers and a no-commit-keys rule, both verifiable by inspection; 7.3 requires a stated hard rule and re-indexing confirmation. Approved for development."
     }
   ],
-  "last_updated": "2026-06-15T07:30:21+00:00",
+  "last_updated": "2026-06-15T07:35:33+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-2 in planning. US-6 delivers the CD pipeline that brings the first VPS staging deploy (-p solanatrilly, port 8002) and closes US-1's outstanding deploy DoD."
 }

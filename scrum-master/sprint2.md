@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 5/6 stories | 19/22 ACs
-**Last Updated:** 2026-06-15T07:30:21+00:00
+**Progress:** 5/6 stories | 20/22 ACs
+**Last Updated:** 2026-06-15T07:35:33+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -367,14 +367,32 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-7: Firehose activation ledger seeded
-**Status:** ready | **Priority:** medium
+**Status:** in-progress | **Priority:** medium
 
 #### Acceptance Criteria
-- [ ] **AC-7.1:** ops/firehose_activation_log.md is created and seeded with the project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10 / 10). API keys are already in .env (per po-requests.md item 3) — the ledger references them, never commits them (PRD §15.7).
+- [x] **AC-7.1:** ops/firehose_activation_log.md is created and seeded with the project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10 / 10). API keys are already in .env (per po-requests.md item 3) — the ledger references them, never commits them (PRD §15.7).
+  - Dev: done
 - [ ] **AC-7.2:** The ledger documents the per-activation protocol — deliberate, time-boxed (<=30 min default; adjustable by explicit PO decision), PR-reviewed — with a table schema of columns: date, role/agent, which WS (Birdeye/Helius), purpose, duration, count-remaining, fixtures banked.
 - [ ] **AC-7.3:** The ledger states the HARD RULE that every activation MUST bank durable fixtures (a tape/detection sample or golden vectors) into the lake / golden set so the spend compounds into the replay corpus; the doc is re-indexed via mcp__devrag__reindex_document (project convention). New files carry metadata front matter.
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-7.1 done: Pushed successfully. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-7.1 Implementation Summary**
+  
+  **Files changed (2 new):**
+  
+  1. **`ops/firehose_activation_log.md`** — The firehose activation ledger, seeded at project start. YAML front matter (file, purpose, sprint, story, status, created-by, last-updated). Budget table: Birdeye 10 total / 0 used / 10 remaining; Helius 10 total / 0 used / 10 remaining. States that API keys are in `.env` (gitignored, never committed) and referenced by env-var names only (`BIRDEYE_API_KEY`, `HELIUS_API_KEY`). Also includes the per-activation protocol and HARD RULE about banking durable fixtures (content needed by AC-7.2/7.3 which will also operate on this same file).
+  
+  2. **`core/tests/test_firehose_ledger_ac71.py`** — 9 tests validating all AC-7.1 invariants:
+     - `test_ledger_file_exists` — ops/firehose_activation_log.md exists at expected path
+     - `test_ledger_has_metadata_front_matter` — YAML front matter present (--- delimiters)
+     - `test_ledger_birdeye_budget_is_ten` — Birdeye total budget of 10 stated
+     - `test_ledger_helius_budget_is_ten` — Helius total budget of 10 stated
+     - `test_ledger_zero_activations_used` — 0 ac …
 
 **Tester Status:** approved
 **Tester Notes:**
