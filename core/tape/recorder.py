@@ -1,7 +1,7 @@
 # ---
 # module: core.tape.recorder
 # sprint: sprint-5
-# story: US-18 AC-18.1, US-18 AC-18.2
+# story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
@@ -70,8 +70,15 @@ class TapeRecorder:
 
     @property
     def normalized_swaps(self) -> list[NormalizedSwap]:
-        """Return a copy of all NormalizedSwap instances emitted for landed swaps."""
-        return list(self._normalized_swaps)
+        """Return all NormalizedSwaps sorted by canonical key (block_time, slot, signature).
+
+        Python's sorted() is a stable sort — swaps whose (block_time, slot, signature)
+        triple is identical preserve their original insertion order (AC-18.3, §8, #403).
+        """
+        return sorted(
+            self._normalized_swaps,
+            key=lambda s: (s.block_time, s.slot, s.signature),
+        )
 
     async def run(self) -> None:
         """Consume all events from the source, stamping each with the injected clock.
