@@ -160,10 +160,12 @@ def test_deploy_job_uses_vps_user_and_host_secrets() -> None:
 
 
 def test_all_deploy_docker_compose_commands_project_scoped() -> None:
-    """Every 'docker compose' call in the deploy job run scripts must include -p solanatrilly.
+    """Every 'docker compose' call in the deploy job run scripts must be project-scoped.
 
     Hard isolation rule (PRD §15.3): unscoped docker compose commands affect all
-    stacks on the host, including the live solanaBilly stack on port 8001.
+    stacks on the host. Every call must have a -p <project> flag.
+    Solanatrilly state-changes use -p solanatrilly; the AC-6.5 isolation check
+    uses -p solanabilly for a read-only 'ps' — both are considered scoped.
     """
     data = _load_deploy()
     job = _deploy_job(data)
@@ -173,17 +175,18 @@ def test_all_deploy_docker_compose_commands_project_scoped() -> None:
         "AC-6.3 requires shell commands that SSH to the VPS and run docker compose."
     )
 
+    _scope_re = re.compile(r"-p\s+\S+")
     violations: list[str] = []
     for script in scripts:
         for line in script.splitlines():
             stripped = line.strip()
-            if "docker compose" in stripped and "-p solanatrilly" not in stripped:
+            if "docker compose" in stripped and not _scope_re.search(stripped):
                 violations.append(f"  {stripped!r}")
 
     assert not violations, (
-        "AC-6.3 violation: docker compose commands without -p solanatrilly scope:\n"
+        "AC-6.3 violation: docker compose commands without a -p <project> scope:\n"
         + "\n".join(violations)
-        + "\n\nEvery docker compose call in the deploy job must include -p solanatrilly."
+        + "\n\nEvery docker compose call in the deploy job must include -p <project>."
     )
 
 
@@ -230,9 +233,12 @@ def test_deploy_commands_include_pull_and_up_d() -> None:
 
 
 def test_no_solanabilly_reference_in_deploy_docker_commands() -> None:
-    """No docker command in the deploy job may reference solanabilly or port 8001 (PRD §15.3).
+    """No state-modifying docker command in the deploy job may reference solanabilly (PRD §15.3).
 
-    The solanaBilly live stack must never be touched by the solanatrilly deploy.
+    The solanaBilly live stack must never be modified by the solanatrilly deploy.
+    AC-6.5 exception: a read-only 'docker compose -p solanabilly ps' is permitted
+    for isolation verification — it observes but never modifies solanaBilly's stack.
+    Port 8001 may appear in curl commands (non-docker lines) for the same check.
     """
     data = _load_deploy()
     job = _deploy_job(data)
@@ -242,15 +248,24 @@ def test_no_solanabilly_reference_in_deploy_docker_commands() -> None:
         stripped = line.strip()
         if "docker" not in stripped.lower():
             continue
+        # Allow the read-only isolation check (AC-6.5): docker compose -p solanabilly ps
+        if (
+            "docker compose" in stripped
+            and "-p solanabilly" in stripped
+            and "ps" in stripped
+        ):
+            continue
         assert "solanabilly" not in stripped.lower(), (
             f"AC-6.3 isolation violation: docker command references 'solanabilly':\n"
             f"  {stripped!r}\n"
-            "solanaBilly's stack must never be touched by the solanatrilly deploy pipeline."
+            "State-modifying docker commands must not touch solanaBilly's stack.\n"
+            "Only 'docker compose -p solanabilly ps' (read-only, AC-6.5) is permitted."
         )
         assert "8001" not in stripped, (
             f"AC-6.3 isolation violation: docker command references port 8001:\n"
             f"  {stripped!r}\n"
-            "Port 8001 belongs to live solanaBilly — must not appear in deploy commands."
+            "Port 8001 belongs to live solanaBilly — docker commands must not reference it.\n"
+            "(Port 8001 HTTP checks via curl on non-docker lines are permitted for AC-6.5.)"
         )
 
 

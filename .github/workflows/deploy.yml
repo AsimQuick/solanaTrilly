@@ -4,7 +4,7 @@
 # purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
 #          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
 # sprint: sprint-2
-# story: US-6 AC-6.1 AC-6.3 AC-6.4
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5
 # created-by: dev-team
 # last-updated: 2026-06-15
 # ---
@@ -93,3 +93,33 @@ jobs:
           done
           echo "Smoke test FAILED: /health/ did not return HTTP 200 after 60 seconds"
           exit 1
+
+      - name: Verify solanaBilly isolation (AC-6.5)
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-6.5 — verifying hard isolation: solanaBilly must be untouched after solanatrilly deploy"
+          printf '%s\n' "$VPS_SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          echo "Checking solanaBilly container status on VPS"
+          ps_out=$(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
+            "${VPS_USER}@${VPS_HOST}" \
+            'docker compose -p solanabilly ps 2>&1')
+          echo "$ps_out"
+          if ! echo "$ps_out" | grep -qiE 'running|up'; then
+            echo "ISOLATION FAILURE: solanaBilly containers NOT in running/up state after solanatrilly deploy"
+            rm -f /tmp/deploy_key
+            exit 1
+          fi
+          echo "solanaBilly containers still running — isolation preserved"
+          status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${VPS_HOST}:8001/")
+          echo "Port 8001 HTTP status: $status"
+          if [ -z "$status" ] || [ "$status" = "000" ]; then
+            echo "ISOLATION FAILURE: port 8001 did not respond after solanatrilly deployment"
+            rm -f /tmp/deploy_key
+            exit 1
+          fi
+          echo "Port 8001 still responds (HTTP $status) — AC-6.5 isolation check PASS"
+          rm -f /tmp/deploy_key
