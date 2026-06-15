@@ -205,7 +205,7 @@
           "id": "16.1",
           "text": "Gap-recovery reconciler (D4): a Helius 'migrate' detection backstop (a transactionSubscribe on the pump program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P filtered to the 'migrate' instruction, with maxSupportedTransactionVersion:0 per \u00a73.3), behind the SAME DataSource seam, recovers a token that a dropped Birdeye MEME event missed. Verified by a replay test where the MEME stream OMITS a mint that the Helius migrate stream carries -> the token is still created exactly once, and where both streams carry the mint -> still exactly one row (no duplicate).",
           "checked": false,
-          "dev_status": "not-started",
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -223,13 +223,13 @@
           "tester_status": "not-started"
         }
       ],
-      "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_status": "in-progress",
+      "dev_notes": "AC-16.1 done: All 6 tests pass, ruff clean. Here is the implementation summary for the orchestrator:\n\n---\n\n**AC-16.1 Implementation Summary**\n\n**Files changed (4):**\n\n- `core/detection/helius_reconciler.py` *(new)* — `MigrateReconciler` class with `__init__(source: DataSource, clock: Clock)` constructor (same seam as DetectionConsumer; no config_fn needed). `processed` property returning list of `(event, timestamp)` pairs. `_persist_migrate_sync(event, timestamp)` uses `Token.objects.get_or_create` (NOT update_or_create) for no-overwrite idempotency. `async run()` consumes events via `stamp_events` and for `type == 'MIGRATE_TX'` calls persist via `sync_to_async`. Module-level constants `PUMP_PROGRAM`, `MIGRATE_INSTRUCTION`, `MAX_TX_VERSION` exported for HeliusSource wiring. Zero concrete source imports — passes the existing static-analysis guard in test_detection_consumer_ac151.py.\n\n- `core/tests/fixtures/helius_migrate_ac161.json` *(new)* — Synthetic Helius MIGRATE_TX stream: MINT_A (Helius-only) + MINT_B (both streams). No live Helius activation spent.\n\n- `core/tests/fixtures/meme_stream_ac161.json` *(new)* — Synthetic Birdeye MEME stream: MINT_B only (MINT_A deliberately absent to simulate dropped event). No live Birdeye activation spent.\n\n- `core/tests/test_helius_reconciler_ac161.py` *(new)* — 6 tests: (1) MEME omits MINT_A, reconciler recovers it; (2) both consumers yield 2 rows total; (3) no duplicate when both streams carry MINT_B; (4) reconciler alone creates both; (5) static-analysis guard; (6) subscription constants. All 6 pass. Full suite: 434 tests, 0 failures.\n\n- blocker-type: none",
       "tester_status": "approved",
       "tester_notes": "All 3 ACs are testable and verifiable. AC-16.1 specifies two distinct replay scenarios (MEME-omits-mint + both-streams-carry-mint) with exact expected row counts \u2014 concrete, automatable. AC-16.2 requires two independent verification paths (idempotent sweep pytest + manifest registration test), which together enforce both runtime behavior and structural integrity. AC-16.3 correctly includes both a structural compose-topology test (parse both YAML files) AND a VPS live-container check; the VPS verification clause is correctly deferred to post-US-12 (the listener can only be confirmed up on the VPS once US-12 delivers a working green deploy). No scope issues."
     }
   ],
-  "last_updated": "2026-06-15T14:23:16+00:00",
+  "last_updated": "2026-06-15T15:00:00+00:00",
   "deploy_summary": "PENDING \u2014 sprint-4 not yet started. US-12 is the gating milestone: diagnose the port-8002 blocker ON the VPS (agents have root SSH), apply the firewall-or-port-bind fix, make the smoke-test retry with backoff at runtime, and drive the first GREEN deploy (HTTP 200 on 8002 with solanaBilly untouched on 8001) \u2014 finally exiting P0 (4th attempt). Subsequent P2 stories (US-14/15/16) deploy + smoke-test on the now-working stack at the sprint boundary.",
   "tester_sprint_status": "approved",
   "tester_sprint_notes": "All 5 stories (18 ACs) reviewed and approved. No requirements defects \u2014 no scope issues requiring PO judgment were found. Minor clarifications applied directly to 4 ACs: AC-12.3 (structural test must verify loop iteration/sleep/max-attempts in parsed YAML, not keyword presence); AC-13.1 (validator must handle both 'failed' and 'fail' spellings seen in practice); AC-14.2 (choices must be declared in model's choices parameter, pytest must assert each value fits within max_length); AC-16.3 (VPS listener check correctly deferred to post-US-12 working deploy). The build order (US-12 + US-13 independent; US-14 -> US-15 -> US-16 sequential) is correctly reflected in dependencies. The VPS-gate DoD is consistently enforced across US-12 and US-16. Tester flag: the controlled vocabulary in scrum-master.md omits 'failed'/'fail' as valid tester_status values even though both appear in sprint-3 JSON \u2014 the US-13 validator must handle both spellings; PO may wish to normalize the CV as a housekeeping item."
