@@ -1,8 +1,8 @@
 # Sprint 4
 
 **Phase:** planning
-**Progress:** 3/5 stories | 11/18 ACs
-**Last Updated:** 2026-06-15T12:46:45+00:00
+**Progress:** 3/5 stories | 12/18 ACs
+**Last Updated:** 2026-06-15T12:54:24+00:00
 
 ## Sprint Goal
 Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only remaining P0 blocker — the VPS deploy whose smoke-test has failed with curl exit code 7 on all 13 Sprint-3 deploy runs. Per retrospective C1, DIAGNOSE port-8002 ON the VPS (agents have root SSH per CLAUDE.md — the 'human escalation required' claim in the Sprint-3 review contradicts CLAUDE.md): ssh root@140.82.43.36, run 'curl -v localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the port publish/bind in docker-compose.staging.yml, and check ufw/iptables — to distinguish an operator-style firewall fix (which agents CAN apply as root: 'ufw allow 8002/tcp') from a code-level port-publish/bind bug (e.g. the container binding 127.0.0.1 or the host port not published). Apply whatever the on-box diagnosis finds, make the CD smoke-test retry with backoff AT RUNTIME (C3 — the Sprint-3 run showed the curl failing immediately with no retry) and upgrade its structural test to verify runtime retry behavior, not just file text, then run the deploy GREEN on main and confirm HTTP 200 on 8002 with solanaBilly untouched on 8001 — closing US-8 AC-8.3/8.4/8.5, US-6, and retroactively US-1's deploy-gated DoD, and finally EXITING P0 (US-12). Enforce status integrity PROGRAMMATICALLY with a CI guard on sprintN.json that forbids status:done while tester_status is failed/blocked and flags stale phase/dev_status (US-13; retrospective C4, logged unactioned in sprint-1/2/3). THEN deliver P2 detection (PRD §6.1, §8, §16): the 'tokens' model (US-14); a Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam + injected clock (US-2 / Principle #7) that creates tokens rows from the ACTIVE config's detection filter (US-11 resolver), dedupes within dedupe_window_s, and pre-stages near-graduation mints by prestage_progress_pct — offline-gated by replaying a captured/synthetic MEME stream through ReplaySource -> expected token rows (US-15); and detection resilience — the Helius 'migrate' reconciler backstop (D4) + a periodic Birdeye REST graduation sweep (third belt) + a dedicated 'listener' container in docker-compose.yml and docker-compose.staging.yml (US-16). Build order: US-12 FIRST (P0 closeout, the gating milestone — retrospective C2/B5; it is independent of the P2 chain and MAY run in parallel) and US-13 (process guard, independent); then the P2 chain US-14 -> US-15 -> US-16 (US-15 needs the tokens model + resolver + DataSource seam; US-16 needs the consumer).
@@ -309,10 +309,11 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 ---
 
 ### US-15: P2 — Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam -> tokens rows (§6.1, Principle #7)
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-15.1:** A detection consumer reads MEME events from a DataSource (NOT a concrete Birdeye client) and reads time from an injected clock — the live/replay seam from US-2 / Principle #7. Verified by (a) a pytest test driving the consumer from an in-memory/Replay source, and (b) the US-2-style static-analysis guard holding: no concrete-source import and no time.time()/datetime.now() on the core detection path.
+- [x] **AC-15.1:** A detection consumer reads MEME events from a DataSource (NOT a concrete Birdeye client) and reads time from an injected clock — the live/replay seam from US-2 / Principle #7. Verified by (a) a pytest test driving the consumer from an in-memory/Replay source, and (b) the US-2-style static-analysis guard holding: no concrete-source import and no time.time()/datetime.now() on the core detection path.
+  - Dev: done
 - [ ] **AC-15.2:** On a graduation MEME_DATA event (graduated=true, source=pump_dot_fun) the consumer creates/updates a tokens row — mint (from event 'address'), pool_address, graduated_at=t0 (from the event), and the raw event stored verbatim in raw_graduation JSONB — with the detection FILTER (source/graduated/prestage_progress_pct/dedupe_window_s) read from get_active_config() (US-11 resolver), NOT a hardcoded constant or os.getenv (Principle #1). Verified by a pytest test asserting an event yields the expected tokens row and that changing the active config's detection section changes consumer behavior.
 - [ ] **AC-15.3:** Dedupe + pre-stage: a duplicate graduation event for the same mint within dedupe_window_s does NOT create a second tokens row (idempotent on mint); and near-graduation mints (progress_percent >= prestage_progress_pct, not yet graduated) are pre-staged on a warm path WITHOUT being written as graduated tokens prematurely. Verified by pytest tests for (a) a within-window duplicate creating exactly one row and (b) a pre-stage event not producing a graduated token row until graduation arrives.
 - [ ] **AC-15.4:** P2 OFFLINE GATE (PRD §16): replaying a captured-or-synthetic MEME stream through a ReplaySource + virtual clock yields EXACTLY the expected set of tokens rows, deterministically (run twice -> identical rows). The fixture is a schema-faithful MEME stream (§3.2); if a live Birdeye activation is spent to bank a real capture, it is logged in ops/firehose_activation_log.md per §15.7 and banks the durable fixture. Verified by the replay test asserting the expected token rows and determinism. New files carry metadata front matter.
@@ -320,6 +321,22 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 **Dependencies:** US-14, US-11, US-2
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-15.1 done: All done. The implementation is committed and pushed to `feature/US-15-AC-15.1`.
+  
+  ---
+  
+  ## Implementation Summary (for orchestrator)
+  
+  **Files changed (3 new):**
+  
+  - `core/detection/__init__.py` *(new, 9 lines)* — package marker with metadata front matter; makes `core.detection` a proper Python package so the existing US-2 static-analysis guard in `test_datasource_interface.py` now scans it.
+  
+  - `core/detection/consumer.py` *(new, 55 lines)* — `DetectionConsumer` class. Constructor accepts `source: DataSource` and `clock: Clock` (abstract types only — zero concrete-source imports). `async run()` iterates `stamp_events(self._source, self._clock)` and accumulates `(event, timestamp)` pairs in `self._processed`. Never calls `datetime.now()` or `time.time()`. `processed` property exposes results for tests.
+  
+  - `core/tests/test_detection_consumer_ac151.py` *(new, 310 lines, 6 tests)* — covers both verification criteria:
+    - **(a) Behavioral tests:** consumer processes 3 MEME events from `ReplaySource`; timestamps come from `VirtualClock(t0)` not wall time (all equal `t0`); empty source yields zero events; single event round-trips correctly.
+    - **(b) Static-analysis guards:** AST scan of `co …
 
 **Tester Status:** approved
 **Tester Notes:**
