@@ -2,7 +2,7 @@
 file: ops/firehose_activation_log.md
 purpose: Project-wide live-firehose activation ledger — budget tracking for Birdeye and Helius WS activations (PRD §15.7)
 sprint: sprint-2
-story: US-7 AC-7.1
+story: US-7 AC-7.1 AC-7.2
 status: seeded
 created-by: dev-team
 last-updated: 2026-06-15
