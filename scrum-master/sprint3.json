@@ -160,7 +160,7 @@
     {
       "id": "US-11",
       "title": "P1 \u2014 The config resolver: single cached get_active_config() + atomic activation/rollback (\u00a75.3)",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-9",
@@ -170,8 +170,8 @@
         {
           "id": "11.1",
           "text": "A single cached get_active_config() resolver is the ONLY way any service reads a tunable: it returns the is_active PipelineConfig (resolved/validated via US-10's schema). Verified by (a) a pytest test that get_active_config() returns the active config and is cached (a second call does not re-query), and (b) a static-analysis guard (in the spirit of US-2) asserting no core/service module reads a pipeline tunable via os.getenv or a code constant instead of the resolver \u2014 passing now, becoming a regression gate as services land.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -190,11 +190,11 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-11.1 done: Implementation is complete and pushed. Here is the summary for the orchestrator:\n\n---\n\n## Implementation Summary \u2014 US-11 AC-11.1\n\n**Files changed (2):**\n\n1. **`core/resolver.py`** *(new)* \u2014 The single sanctioned read path for pipeline tunables (`get_active_config()`). On cache miss: queries `PipelineConfig.objects.get(is_active=True)`, stores the five section dicts under key `active_pipeline_config_sections` (TTL 300 s), returns a validated `PipelineConfigSchema`. On cache hit: reconstructs the schema from cached dicts \u2014 zero DB queries. Returns `None` when no active row exists. `invalidate_active_config_cache()` clears the key and will be called by the AC-11.2 activation helper.\n\n2. **`core/tests/test_resolver_ac111.py`** *(new)* \u2014 5 tests covering AC-11.1:\n   - `test_get_active_config_returns_active_config` \u2014 resolver returns a valid `PipelineConfigSchema` with correct section values (spot-check: `scoring.score_at_elapsed_s == 120`)\n   - `test_get_active_config_returns_none_when_no_active_config` \u2014 resolver returns `None` when only inactive rows exist\n   - `test_get_active_config_is_cached` \u2014 `CaptureQueriesContext` asserts the second call issues **zero** DB queries\n   - `test_no \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements review PASSED \u2014 all 3 ACs are clear, specific, and verifiable. AC-11.1's cache test requires verifying the second get_active_config() call does not re-query the DB \u2014 implementation must mock or count queries (e.g. django.test.utils.CaptureQueriesContext or assertNumQueries(0) on the second call). The static-analysis guard trivially passes at sprint start (no service modules yet) \u2014 this is the established US-2 regression-gate pattern and is correct. AC-11.2 is the most thorough of the sprint: the three-step activation sequence with an is_active count assertion at each step covers both the atomicity and the rollback path. AC-11.3 boot-time no-auto-start test should use Django's AppConfig.ready() path to confirm no signal/hook auto-flips the flags on startup."
     }
   ],
-  "last_updated": "2026-06-15T10:03:45+00:00",
+  "last_updated": "2026-06-15T10:17:25+00:00",
   "deploy_summary": ""
 }

@@ -1,9 +1,8 @@
 # Sprint 3
 
 **Phase:** planning
-**Progress:** 3/4 stories | 13/16 ACs
-**Last Updated:** 2026-06-15T12:00:00+00:00
-**last-updated-by:** dev-team
+**Progress:** 3/4 stories | 14/16 ACs
+**Last Updated:** 2026-06-15T10:17:25+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -321,36 +320,33 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
 ---
 
 ### US-11: P1 — The config resolver: single cached get_active_config() + atomic activation/rollback (§5.3)
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-11.1:** A single cached get_active_config() resolver is the ONLY way any service reads a tunable: it returns the is_active PipelineConfig (resolved/validated via US-10's schema). Verified by (a) a pytest test that get_active_config() returns the active config and is cached (a second call does not re-query), and (b) a static-analysis guard (in the spirit of US-2) asserting no core/service module reads a pipeline tunable via os.getenv or a code constant instead of the resolver — passing now, becoming a regression gate as services land.
+- [x] **AC-11.1:** A single cached get_active_config() resolver is the ONLY way any service reads a tunable: it returns the is_active PipelineConfig (resolved/validated via US-10's schema). Verified by (a) a pytest test that get_active_config() returns the active config and is cached (a second call does not re-query), and (b) a static-analysis guard (in the spirit of US-2) asserting no core/service module reads a pipeline tunable via os.getenv or a code constant instead of the resolver — passing now, becoming a regression gate as services land.
+  - Dev: done
 - [ ] **AC-11.2:** Activation is one ATOMIC flip of is_active with instant rollback: activating version N deactivates the previously active version in the same transaction (never two actives), and re-activating the prior version restores it. The resolver cache invalidates on activation so the next get_active_config() returns the newly active config. Verified by a pytest test that activates v1, reads, activates v2, reads (gets v2), rolls back to v1, reads (gets v1) — with exactly one is_active row at every step.
 - [ ] **AC-11.3:** No silent auto-start: pipeline_state's firehose_active / trading_enabled / scoring_enabled are only ever changed by an explicit, deliberate action — no code path sets them True on boot, on app ready, on resolver read, or on a WS drop (§5.3, §15.6). Verified by a pytest test that boots/imports the app and calls get_active_config() and asserts pipeline_state flags remain at their persisted values (a False stays False — nothing auto-flips). New files carry metadata front matter.
 
 **Dependencies:** US-9, US-10
 
-**Dev Team Status:** in-progress
+**Dev Team Status:** not-started
 **Dev Team Notes:**
-  AC-11.1 done: Pushed to `feature/US-11-AC-11.1`.
-
-  **Implementation summary — US-11 AC-11.1**
-
-  **Files created (2):**
-
-  1. **`core/resolver.py`** *(new)* — Single cached resolver for the active PipelineConfig (PRD §5.3). Exports:
-     - `get_active_config() -> PipelineConfigSchema | None`: On cache hit, reconstructs PipelineConfigSchema from cached section dicts (no DB query). On cache miss, queries `PipelineConfig.objects.get(is_active=True)`, caches the five raw section dicts for 300 s, and returns the validated schema. Returns `None` when no active row exists.
-     - `invalidate_active_config_cache()`: Deletes the cache key; called by the activation helper (AC-11.2) on every activation change.
-     - Cache key: `"active_pipeline_config_sections"`, TTL 300 s.
-
+  AC-11.1 done: Implementation is complete and pushed. Here is the summary for the orchestrator:
+  
+  ---
+  
+  ## Implementation Summary — US-11 AC-11.1
+  
+  **Files changed (2):**
+  
+  1. **`core/resolver.py`** *(new)* — The single sanctioned read path for pipeline tunables (`get_active_config()`). On cache miss: queries `PipelineConfig.objects.get(is_active=True)`, stores the five section dicts under key `active_pipeline_config_sections` (TTL 300 s), returns a validated `PipelineConfigSchema`. On cache hit: reconstructs the schema from cached dicts — zero DB queries. Returns `None` when no active row exists. `invalidate_active_config_cache()` clears the key and will be called by the AC-11.2 activation helper.
+  
   2. **`core/tests/test_resolver_ac111.py`** *(new)* — 5 tests covering AC-11.1:
-     - `test_get_active_config_returns_active_config` — returns a `PipelineConfigSchema` for the active row; spot-checks `scoring.score_at_elapsed_s == 120`.
-     - `test_get_active_config_returns_none_when_no_active_config` — returns `None` when only an inactive row exists.
-     - `test_get_active_config_is_cached` — second call issues zero DB queries via `CaptureQueriesContext`.
-     - `test_no_service_module_uses_os_getenv_or_environ` — AST-scans `core/` (excluding tests/migrations) for `os.getenv`, bare `getenv`, and `os.environ` usages; asserts none found.
-     - `test_pipeline_service_file_scan_is_non_degenerate` — asserts scan finds ≥1 file so the guard cannot trivially pass on an empty directory.
-
-  **Test count:** 5 new tests. **Full suite:** 290 passed. **Ruff lint:** clean (fixed F541 spurious f-string prefix). **blocker-type:** none
+     - `test_get_active_config_returns_active_config` — resolver returns a valid `PipelineConfigSchema` with correct section values (spot-check: `scoring.score_at_elapsed_s == 120`)
+     - `test_get_active_config_returns_none_when_no_active_config` — resolver returns `None` when only inactive rows exist
+     - `test_get_active_config_is_cached` — `CaptureQueriesContext` asserts the second call issues **zero** DB queries
+     - `test_no …
 
 **Tester Status:** approved
 **Tester Notes:**
