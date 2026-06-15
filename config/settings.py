@@ -1,11 +1,11 @@
 # ---
 # module: config.settings
-# sprint: sprint-1
-# story: US-1 AC-1.1
+# sprint: sprint-1, sprint-3
+# story: US-1 AC-1.1, US-9 AC-9.2
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-14
-# dependencies: django, django-environ, djangorestframework, channels, daphne, celery
+# last-updated: 2026-06-15
+# dependencies: django, django-environ, djangorestframework, channels, daphne, celery, simple_history
 # ---
 """Django settings — 12-factor, environment-driven via django-environ."""
 from pathlib import Path
@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "channels",
     "rest_framework",
+    "simple_history",
     "core",
 ]
 
@@ -46,6 +47,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "simple_history.middleware.HistoryRequestMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"

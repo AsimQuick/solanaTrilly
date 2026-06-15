@@ -1,16 +1,17 @@
 # ---
 # module: core.models
 # sprint: sprint-3
-# story: US-5 AC-5.2, US-9 AC-9.1
+# story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
-# dependencies: django, core.encoders
+# dependencies: django, core.encoders, simple_history
 # ---
 # Domain models live here. Run `docker compose run --rm web python manage.py
 # makemigrations` after adding models, and commit the generated migration.
 from django.contrib.auth import get_user_model
 from django.db import models
+from simple_history.models import HistoricalRecords
 
 from core.encoders import JsonSafeEncoder
 
@@ -68,6 +69,9 @@ class PipelineConfig(models.Model):
     # FK placeholder slots — filled in P5 (FeatureSet) and P7 (ModelRegistry).
     feature_set_id = models.PositiveIntegerField(null=True, blank=True)
     model_id = models.PositiveIntegerField(null=True, blank=True)
+
+    # Audit trail — every create/update records who and when (US-9 AC-9.2).
+    history = HistoricalRecords()
 
     class Meta:
         app_label = "core"
