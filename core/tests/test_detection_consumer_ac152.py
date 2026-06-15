@@ -339,5 +339,5 @@ def test_event_without_block_time_uses_clock_timestamp() -> None:
         f"got {token.graduated_at}"
     )
     assert token.graduated_block_time == int(clock_t0.timestamp()), (
-        f"graduated_block_time should be int(clock_t0.timestamp()) when blockTime absent"
+        "graduated_block_time should be int(clock_t0.timestamp()) when blockTime absent"
     )
