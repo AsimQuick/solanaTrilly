@@ -1,15 +1,18 @@
 # ---
 # file: deploy.yml
 # stack: django
-# purpose: CD pipeline — on push to main runs hardened CI then builds and pushes web image to GHCR
+# purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
+#          then deploys to VPS staging stack (-p solanatrilly, port 8002)
 # sprint: sprint-2
-# story: US-6 AC-6.1
+# story: US-6 AC-6.1 AC-6.3
 # created-by: dev-team
 # last-updated: 2026-06-15
 # ---
 #
-# Uses the built-in GITHUB_TOKEN with packages:write — no extra secrets required.
+# GHCR auth uses the built-in GITHUB_TOKEN with packages:write — no extra secrets required.
+# VPS deploy (AC-6.3) uses VPS_SSH_KEY, VPS_USER, VPS_HOST repo secrets.
 # All action refs are pinned to full 40-char commit SHAs (H1 / AC-3.1).
+# Every docker compose command is scoped: -p solanatrilly (PRD §15.3, hard isolation).
 
 name: Deploy
 
@@ -50,3 +53,26 @@ jobs:
           tags: |
             ghcr.io/asimquick/solanatrilly:latest
             ghcr.io/asimquick/solanatrilly:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Deploy to VPS staging stack
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          printf '%s\n' "$VPS_SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          scp -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
+            docker-compose.staging.yml \
+            "${VPS_USER}@${VPS_HOST}:/root/solanatrilly/docker-compose.staging.yml"
+          ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
+            "${VPS_USER}@${VPS_HOST}" \
+            'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml pull && docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml up -d'
+          rm -f /tmp/deploy_key
