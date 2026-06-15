@@ -2,9 +2,9 @@
 # file: deploy.yml
 # stack: django
 # purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
-#          then deploys to VPS staging stack (-p solanatrilly, port 8002)
+#          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
 # sprint: sprint-2
-# story: US-6 AC-6.1 AC-6.3
+# story: US-6 AC-6.1 AC-6.3 AC-6.4
 # created-by: dev-team
 # last-updated: 2026-06-15
 # ---
@@ -76,3 +76,20 @@ jobs:
             "${VPS_USER}@${VPS_HOST}" \
             'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml pull && docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml up -d'
           rm -f /tmp/deploy_key
+
+      - name: Smoke-test staging stack (AC-6.4)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "Smoke-testing solanatrilly staging stack at http://${VPS_HOST}:8002/health/"
+          for i in $(seq 1 12); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_HOST}:8002/health/")
+            if [ "$status" = "200" ]; then
+              echo "Smoke test PASSED: GET /health/ returned HTTP 200"
+              exit 0
+            fi
+            echo "Attempt $i/12: HTTP $status — retrying in 5s"
+            sleep 5
+          done
+          echo "Smoke test FAILED: /health/ did not return HTTP 200 after 60 seconds"
+          exit 1
