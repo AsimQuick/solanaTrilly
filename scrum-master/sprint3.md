@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 3/4 stories | 15/16 ACs
-**Last Updated:** 2026-06-15T12:00:00+00:00
+**Last Updated:** 2026-06-15T10:24:14+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -331,10 +331,8 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
 
 **Dependencies:** US-9, US-10
 
-**Dev Team Status:** in-progress
+**Dev Team Status:** not-started
 **Dev Team Notes:**
-  AC-11.2 done: `activate_config(config_id)` added to `core/resolver.py`. Uses `transaction.atomic()` to deactivate all active rows then activate the target in one transaction — exactly one `is_active=True` row at every point. Cache is invalidated via `invalidate_active_config_cache()` after the transaction commits. `PipelineConfig.DoesNotExist` raised for non-existent IDs. 9 new tests in `core/tests/test_resolver_ac112.py` cover: single-active-row invariant after each step, cache invalidation, rollback (v1→v2→v1), and DoesNotExist guard. All 299 tests pass, ruff lint clean.
-
   AC-11.1 done: Implementation is complete and pushed. Here is the summary for the orchestrator:
   
   ---
@@ -350,6 +348,20 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
      - `test_get_active_config_returns_none_when_no_active_config` — resolver returns `None` when only inactive rows exist
      - `test_get_active_config_is_cached` — `CaptureQueriesContext` asserts the second call issues **zero** DB queries
      - `test_no …
+  AC-11.2 done: The commit `f5660f8 [US-11] AC-11.2: atomic activate_config() + cache invalidation + rollback test` is on the correct branch (`feature/US-11-AC-11.2`). The implementation is complete and verified.
+  
+  ---
+  
+  ## Implementation Summary — US-11 AC-11.2
+  
+  **Files changed (2):**
+  
+  1. **`core/resolver.py`** (modified) — Added `activate_config(config_id: int) -> PipelineConfig` function. Uses `transaction.atomic()` to atomically clear all `is_active=True` flags via `PipelineConfig.objects.filter(is_active=True).update(is_active=False)`, then sets the target with `PipelineConfig.objects.filter(pk=config_id).update(is_active=True)` — both `.update()` calls (not `.save()`) to stay inside the transaction cleanly. A `get(pk=config_id)` inside the transaction raises `DoesNotExist` if the ID is bad. `invalidate_active_config_cache()` is called after the transaction commits. Updated front matter to include `AC-11.2`.
+  
+  2. **`core/tests/test_resolver_ac112.py`** (new) — 9 `@pytest.mark.django_db` tests:
+     - `test_activate_v1_sets_exactly_one_active_row` — one active row after v1 activation
+     - `test_get_active_config_returns_v1_after_activating_v1` — resolver spot-check
+     - `test_activate_v2_deactivate …
 
 **Tester Status:** approved
 **Tester Notes:**
