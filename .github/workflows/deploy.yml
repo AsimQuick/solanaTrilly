@@ -4,7 +4,7 @@
 # purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
 #          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
 # sprint: sprint-3
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4
 # created-by: dev-team
 # last-updated: 2026-06-15
 # ---
