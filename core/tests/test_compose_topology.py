@@ -1,13 +1,13 @@
 # ---
 # module: core.tests.test_compose_topology
 # sprint: sprint-1
-# story: US-1 AC-1.1
+# story: US-1 AC-1.1, US-16 AC-16.3
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-14
+# last-updated: 2026-06-15
 # dependencies: pyyaml
 # ---
-"""AC-1.1 — verify docker-compose.yml defines the full containerised service topology."""
+"""AC-1.1 / AC-16.3 — verify docker-compose.yml defines the full containerised service topology."""
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,7 @@ import yaml
 
 COMPOSE_FILE = Path(__file__).resolve().parents[2] / "docker-compose.yml"
 
-REQUIRED_SERVICES = {"web", "db", "redis", "celery-worker", "celery-beat"}
+REQUIRED_SERVICES = {"web", "db", "redis", "celery-worker", "celery-beat", "listener"}
 
 
 @pytest.fixture(scope="module")
