@@ -23,12 +23,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-
 from django.db import connection
 
 from core.encoders import JsonSafeEncoder
 from core.models import RawEvent
-
 
 # ---------------------------------------------------------------------------
 # Field introspection — encoder must be set at the field level
