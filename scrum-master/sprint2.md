@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 3/6 stories | 12/22 ACs
-**Last Updated:** 2026-06-15T06:38:50+00:00
+**Progress:** 3/6 stories | 13/22 ACs
+**Last Updated:** 2026-06-15T06:51:25+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -192,7 +192,8 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 #### Acceptance Criteria
 - [x] **AC-5.1:** One json_safe() encoder exists (non-finite float NaN/Inf -> null, Decimal -> float, datetime -> ISO-8601 string), implemented as a custom Django JSONField encoder class — a single shared implementation, not duplicated per call site (PRD §12 S7/H3).
   - Dev: done
-- [ ] **AC-5.2:** The encoder is applied at every JSONB write site (every models.JSONField uses encoder=json_safe / all JSONB writes route through it) — verified by a test that round-trips a NaN/Inf/Decimal/datetime payload and asserts the stored value is psycopg-safe, valid JSON.
+- [x] **AC-5.2:** The encoder is applied at every JSONB write site (every models.JSONField uses encoder=json_safe / all JSONB writes route through it) — verified by a test that round-trips a NaN/Inf/Decimal/datetime payload and asserts the stored value is psycopg-safe, valid JSON.
+  - Dev: done
 - [ ] **AC-5.3:** A guard test asserts no model JSONField is declared WITHOUT the json_safe encoder, so a future field cannot silently bypass it and reintroduce the #331/#332/#388 JSONB/psycopg crash class. New files carry metadata front matter.
 
 **Dependencies:** US-1
@@ -212,10 +213,46 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   2. **`core/tests/test_json_safe_encoder.py`** — 28 unit tests covering: NaN/Inf/-Inf at top-level, in dict values, in lists, and nested; `Decimal` → `float` (including `Decimal('Infinity')` → null); `datetime` → ISO-8601 string (parseable); standard Python types (None, str, int, bool, dict, list) pass through unchanged; mixed payload produces valid JSON parseable by `json.loads`; encoder is a `DjangoJSONEncoder` subclass; direct instantiation and `encode()` call works.
   
   **Test cou …
+  AC-5.2 fixed: **Fix:** Removed the blank line between `import pytest` and `from django.db import connection` in `core/tests/test_json_safe_jsonfield_ac52.py`. Both are third-party imports and ruff (isort) requires them in a single contiguous block with no intra-group blank lines. Ruff `--fix` resolved the residual `I001` violation; all checks now pass. Pushed to `feature/US-5-AC-5.2`.
 
 **Tester Status:** approved
 **Tester Notes:**
-  All 3 ACs are testable and verifiable. No fixes required. AC 5.1 states a single shared implementation (verifiable by code inspection and by the guard test in 5.3 catching any duplication). AC 5.2 specifies a round-trip test with explicit payload types and a psycopg-safe assertion. AC 5.3 closes the regression loop with a structural guard test. The three ACs form a coherent triad: implementation + behavioral test + structural guard. Approved for development.
+  AC-5.2 diagnosis: I have everything I need. The root cause is clear.
+  
+  ---
+  
+  ## Diagnosis: US-5 AC-5.2 CI Failure
+  
+  **Type: CODE BUG** — same lint class as the prior US-2/AC-2.2 failure.
+  
+  **Root cause:** `ruff` reports `I001` (import block unsorted/unformatted) at `core/tests/test_json_safe_jsonfield_ac52.py:20`. The file separates `import pytest` and `from django.db import connection` with a blank line, but isort treats both as third-party and requires them in a single contiguous block.
+  
+  **Current imports (lines 20–30):**
+  ```python
+  import pytest
+  
+  from django.db import connection     # ← blank line here is wrong
+  ```
+  
+  **Required layout:**
+  ```python
+  import pytest
+  from django.db import connection     # ← no blank line; same isort group
+  ```
+  
+  **Severity: LOW** — the lint error is style-only and auto-fixable (`ruff --fix`). Pytest was never reached; all round-trip test logic is correct and untouched.
+  
+  **Recommended fix (for Dev Team):**
+  Remove the blank line between `import pytest` and `from django.db import connection` in `core/tests/test_json_safe_jsonfield_ac52.py`, yielding:
+  
+  ```python
+  import json
+  import math
+  from datetime import datetime, timezone
+  from decimal import Decimal
+  
+  import pytest
+  from django.d …
 
 ---
 
