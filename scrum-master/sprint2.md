@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 3/6 stories | 11/22 ACs
-**Last Updated:** 2026-06-15T06:32:25+00:00
+**Last Updated:** 2026-06-15T06:32:50+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -178,6 +178,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
      - `test_contributing_md_contains_git_show_stat_step` — asserts `git show --stat HEAD` is present
      - `test_contributing_md_warns_against_git_stash` — asserts `git stash` appears (as an explicit warning)
      - `test_ci_runs_manifest_test_via_pytest` — loads `ci.yml` via `yaml.safe_load`, find …
+  [DEPLOY] Deploy trigger failed. Will be caught by full sprint deploy.
 
 **Tester Status:** approved
 **Tester Notes:**
