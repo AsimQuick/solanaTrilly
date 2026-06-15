@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 1/6 stories | 7/22 ACs
-**Last Updated:** 2026-06-15T05:31:53+00:00
+**Progress:** 2/6 stories | 8/22 ACs
+**Last Updated:** 2026-06-15T05:37:38+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -50,7 +50,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-3: H1 — hardened, SHA-pinned CI as a hard merge gate
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-3.1:** Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action — verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD §12 S5/H1).
@@ -59,7 +59,8 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   - Dev: done
 - [x] **AC-3.3:** CI is a hard merge gate: the 'test' job runs pytest with the >=80% coverage gate (pytest --cov-fail-under=80) and must be green before merge, enforced via the gitops orchestrator (require_ci_pass: true) since GitHub Free branch protection is unavailable on this private repo (per po-requests.md item 1).
   - Dev: done
-- [ ] **AC-3.4:** A CI-config self-test asserts the H1 invariants (all actions SHA-pinned + runner frozen to a non-*-latest image + single workflow file for the test job) so a future unpinned 'uses:' or a *-latest runner FAILS CI — the 11-PR Node-24 CI flail (S5) cannot recur. New files carry metadata front matter.
+- [x] **AC-3.4:** A CI-config self-test asserts the H1 invariants (all actions SHA-pinned + runner frozen to a non-*-latest image + single workflow file for the test job) so a future unpinned 'uses:' or a *-latest runner FAILS CI — the 11-PR Node-24 CI flail (S5) cannot recur. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-1
 
@@ -82,6 +83,24 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
      - `test_gitops_coverage_threshold_matches_ci` — cross-checks that `gitops.json`'s `coverage_threshold` matches the `--cov-fail-under` value in `ci.yml`, preventing silent drift between the two sources of truth
   
   **Note:** The coverage flag `--cov-fail-under=80` was already present in `ci.yml` (line 33) from prior work; AC …
+  AC-3.4 done: Pushed successfully.
+  
+  ---
+  
+  **Implementation summary for the orchestrator:**
+  
+  **AC-3.4: CI-config self-test for H1 invariants**
+  
+  **Files changed (1 new):**
+  
+  1. **`core/tests/test_ci_config_selftest.py`** — The authoritative H1 self-test module. Contains 3 tests that assert all three CI hardening invariants in one place:
+     - `test_h1_all_actions_sha_pinned` — scans all `*.yml`/`*.yaml` files under `.github/workflows/`, extracts every step-level `uses:` value, exempts local (`./`) and Docker (`docker://`) actions, and asserts each remaining ref is pinned to exactly 40 lowercase hex characters after `@`. Any mutable tag or branch ref fails CI.
+     - `test_h1_runner_frozen_no_latest` — scans all workflow files and asserts no job's `runs-on` value contains the substring `latest` (handles string, list, and expression forms). Any `*-latest` runner fails CI.
+     - `test_h1_single_workflow_defines_test_job` — asserts exactly one workflow file defines a job with id `test`, keeping `ci.yml` as the single canonical CI workflow and preventing split-brain CI state.
+     
+     File carries metadata front matter (`module`, `sprint`, `story`, `status`, `created-by`, `last-updated`, `dependencies`).
+  
+  **Te …
 
 **Tester Status:** approved
 **Tester Notes:**
