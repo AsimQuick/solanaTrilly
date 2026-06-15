@@ -1,8 +1,8 @@
 # Sprint 4
 
 **Phase:** planning
-**Progress:** 0/5 stories | 0/18 ACs
-**Last Updated:** 2026-06-15T00:00:00+00:00
+**Progress:** 0/5 stories | 1/18 ACs
+**Last Updated:** 2026-06-15T11:12:44+00:00
 
 ## Sprint Goal
 Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only remaining P0 blocker — the VPS deploy whose smoke-test has failed with curl exit code 7 on all 13 Sprint-3 deploy runs. Per retrospective C1, DIAGNOSE port-8002 ON the VPS (agents have root SSH per CLAUDE.md — the 'human escalation required' claim in the Sprint-3 review contradicts CLAUDE.md): ssh root@140.82.43.36, run 'curl -v localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the port publish/bind in docker-compose.staging.yml, and check ufw/iptables — to distinguish an operator-style firewall fix (which agents CAN apply as root: 'ufw allow 8002/tcp') from a code-level port-publish/bind bug (e.g. the container binding 127.0.0.1 or the host port not published). Apply whatever the on-box diagnosis finds, make the CD smoke-test retry with backoff AT RUNTIME (C3 — the Sprint-3 run showed the curl failing immediately with no retry) and upgrade its structural test to verify runtime retry behavior, not just file text, then run the deploy GREEN on main and confirm HTTP 200 on 8002 with solanaBilly untouched on 8001 — closing US-8 AC-8.3/8.4/8.5, US-6, and retroactively US-1's deploy-gated DoD, and finally EXITING P0 (US-12). Enforce status integrity PROGRAMMATICALLY with a CI guard on sprintN.json that forbids status:done while tester_status is failed/blocked and flags stale phase/dev_status (US-13; retrospective C4, logged unactioned in sprint-1/2/3). THEN deliver P2 detection (PRD §6.1, §8, §16): the 'tokens' model (US-14); a Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam + injected clock (US-2 / Principle #7) that creates tokens rows from the ACTIVE config's detection filter (US-11 resolver), dedupes within dedupe_window_s, and pre-stages near-graduation mints by prestage_progress_pct — offline-gated by replaying a captured/synthetic MEME stream through ReplaySource -> expected token rows (US-15); and detection resilience — the Helius 'migrate' reconciler backstop (D4) + a periodic Birdeye REST graduation sweep (third belt) + a dedicated 'listener' container in docker-compose.yml and docker-compose.staging.yml (US-16). Build order: US-12 FIRST (P0 closeout, the gating milestone — retrospective C2/B5; it is independent of the P2 chain and MAY run in parallel) and US-13 (process guard, independent); then the P2 chain US-14 -> US-15 -> US-16 (US-15 needs the tokens model + resolver + DataSource seam; US-16 needs the consumer).
@@ -30,10 +30,11 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 ## User Stories
 
 ### US-12: P0 closeout (4th attempt) — diagnose+fix the VPS port-8002 deploy ON the box, GREEN smoke-test, exit P0 (closes US-8 AC-8.3/8.4/8.5 + US-6 + US-1's deploy-gated DoD)
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-12.1:** DIAGNOSE port-8002 ON the VPS before concluding a cause (retrospective C1; agents have root SSH per CLAUDE.md). SSH to root@140.82.43.36 and run: 'curl -v http://localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the 'ports:' publish/bind for the web service in docker-compose.staging.yml (rule out a 127.0.0.1-only bind or an unpublished host port), and check 'ufw status' / 'iptables -L' for inbound 8002. Record the findings in dev_notes, classifying the root cause as (a) a firewall blocking inbound 8002 from GitHub Actions runner IPs, or (b) a code-level port-publish/bind bug in docker-compose.staging.yml. Verified by the recorded on-box diagnosis distinguishing (a) from (b).
+- [x] **AC-12.1:** DIAGNOSE port-8002 ON the VPS before concluding a cause (retrospective C1; agents have root SSH per CLAUDE.md). SSH to root@140.82.43.36 and run: 'curl -v http://localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the 'ports:' publish/bind for the web service in docker-compose.staging.yml (rule out a 127.0.0.1-only bind or an unpublished host port), and check 'ufw status' / 'iptables -L' for inbound 8002. Record the findings in dev_notes, classifying the root cause as (a) a firewall blocking inbound 8002 from GitHub Actions runner IPs, or (b) a code-level port-publish/bind bug in docker-compose.staging.yml. Verified by the recorded on-box diagnosis distinguishing (a) from (b).
+  - Dev: done
 - [ ] **AC-12.2:** APPLY the fix the diagnosis (AC-12.1) identifies. If (a) firewall: open inbound 8002 on the VPS as root (e.g. 'ufw allow 8002/tcp' or the equivalent cloud-firewall/iptables rule) — this is an agent task, not an operator blocker, since CLAUDE.md grants root SSH. If (b) port-bind bug: correct the 'ports:' mapping/bind in docker-compose.staging.yml (publish 0.0.0.0:8002->8002 for the web service) under -p solanatrilly scope, with NO destructive/unscoped docker command. Verified by 'curl http://localhost:8002/health/' on the VPS returning 200 AND (for a firewall fix) an external curl from off-box reaching 8002.
 - [ ] **AC-12.3:** The CD smoke-test RETRIES with backoff AT RUNTIME, not just in file text (retrospective C3; the Sprint-3 run 27540260960 showed the curl failing immediately with no retry right after the container started). deploy.yml's smoke-test step loops the curl against http://VPS:8002/health/ with a bounded backoff (sleep between attempts, configurable max-attempts), and the structural test is upgraded to assert the RUNTIME retry behavior — verifying loop iteration, sleep/backoff calls, and a max-attempts bound in the parsed workflow YAML — not merely that a loop keyword appears in the file. Verified by the upgraded structural test AND a deploy run whose log shows the smoke-test retrying when the container is slow to start.
 - [ ] **AC-12.4:** A deploy on main (or via workflow_dispatch) succeeds END-TO-END and GREEN: image built+pushed to GHCR, pulled on the VPS, stack up with 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d', the smoke-test hits http://VPS:8002/health/ and asserts HTTP 200, and the isolation step then confirms solanaBilly is still up on 8001 ('docker compose -p solanabilly ps' + 8001 responds). This closes US-8 AC-8.3 (200 on 8002), AC-8.4 (runtime isolation), US-6, and EXITS P0. Verified by the green Deploy run with both the smoke-test and isolation steps passing.
@@ -42,6 +43,30 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 **Dependencies:** US-8
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-12.1 done: Pushed successfully. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-12.1 Implementation Summary**
+  
+  **On-box diagnosis performed** (SSH root@140.82.43.36, 2026-06-15):
+  
+  | Check | Finding |
+  |---|---|
+  | `curl -v http://localhost:8002/health/` | HTTP 200 `{"status": "ok"}` |
+  | `docker compose -p solanatrilly ps` | web: Up (healthy), `0.0.0.0:8002->8000/tcp` |
+  | `ports:` in docker-compose.staging.yml | `"8002:8000"` — no 127.0.0.1 prefix |
+  | `ufw status` | ufw NOT installed |
+  | `iptables -L INPUT` | policy ACCEPT, zero rules |
+  | External curl `140.82.43.36:8002` | HTTP 200 |
+  
+  **Root cause classification:**
+  - **(a) Firewall blocking inbound 8002: RULED OUT** — no ufw; iptables INPUT is ACCEPT-all; external HTTP 200 confirmed.
+  - **(b) Port-publish/bind bug: RULED OUT** — `0.0.0.0:8002->8000/tcp` is correct; no 127.0.0.1-only bind.
+  - **Actual root cause: smoke-test timing race** — the Sprint-3 smoke-test ran immediately after `docker compose up -d` with no retry backoff, hitting the container during its startup window (migrations running before daphne binds port 8000), producing curl exit code 7 (connection refused). Fix is runtime retry-with-backoff (AC-12.3).
+  
+  **File …
 
 **Tester Status:** approved
 **Tester Notes:**
