@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 4/6 stories | 16/22 ACs
-**Last Updated:** 2026-06-15T07:08:43+00:00
+**Progress:** 4/6 stories | 17/22 ACs
+**Last Updated:** 2026-06-15T07:15:45+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -278,7 +278,8 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   - Dev: done
 - [x] **AC-6.2:** The repo ships docker-compose.staging.yml as the ONLY VPS compose (PRD §15.4): compose project -p solanatrilly, web on port 8002, distinct Postgres database + volume, distinct Redis, distinct Docker network — the VPS is never hand-edited; it runs exactly what is in the repo.
   - Dev: done
-- [ ] **AC-6.3:** The deploy step SSHes to the VPS (VPS_USER@VPS_HOST via VPS_SSH_KEY repo secrets) and runs 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d' to pull the tested GHCR image. Every docker command in the deploy script is -p solanatrilly-scoped — verified by inspecting deploy.yml for any unscoped down / up --force-recreate / prune / volume removal command; solanaBilly's containers/volumes (port 8001) are never touched (PRD §15.3, hard isolation).
+- [x] **AC-6.3:** The deploy step SSHes to the VPS (VPS_USER@VPS_HOST via VPS_SSH_KEY repo secrets) and runs 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d' to pull the tested GHCR image. Every docker command in the deploy script is -p solanatrilly-scoped — verified by inspecting deploy.yml for any unscoped down / up --force-recreate / prune / volume removal command; solanaBilly's containers/volumes (port 8001) are never touched (PRD §15.3, hard isolation).
+  - Dev: done
 - [ ] **AC-6.4:** A hello-world Django endpoint is live on the VPS staging stack at port 8002, and a CD smoke-test step (run after deploy) hits it and asserts HTTP 200 — proving the local -> GitHub -> GHCR -> VPS path end-to-end (PRD §15.5, 'VPS presence from P0').
 - [ ] **AC-6.5:** Deploying US-1's containerized topology through this pipeline retroactively closes US-1's story-level DoD (the sprint-1 deploy blocker recorded in retrospective A1); the deployed stack's hard isolation from live solanaBilly is verified on the VPS by confirming solanaBilly's containers remain running ('docker compose -p solanabilly ps' shows containers up) and port 8001 still responds after the solanatrilly deployment. New files carry metadata front matter.
 
@@ -314,6 +315,19 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   2. **`core/tests/test_staging_compose_ac62.py`** (new) — 10 tests asserting all AC-6.2 invariants: file exists, project name is `solanatrilly`, web port is 8002, Postgres volume is `solanatrilly_pgdata` (distinct from dev), DB name is `solanatrilly` (distinct from dev `app`), dedicated network `solanatrilly_net` is defined, all services are on that network, web uses GHCR image (no `build:`), no source volume mounts, and no other VPS-scoped compose files exist in the repo.
   
   **Test count:** 10 new tests (129 total). **Coverage:** …
+  AC-6.3 done: Pushed successfully.
+  
+  ---
+  
+  **Implementation summary for the orchestrator:**
+  
+  **AC-6.3: SSH deploy step — scoped pull+up with hard isolation**
+  
+  **Files changed (3):**
+  
+  1. **`.github/workflows/deploy.yml`** (modified) — Added `deploy` job that runs after `build-and-push`. Uses `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (SHA-pinned, H1). The single `Deploy to VPS staging stack` step injects `VPS_SSH_KEY`, `VPS_USER`, `VPS_HOST` from repo secrets via `env:`, writes the key to `/tmp/deploy_key` (chmod 600), SCPs `docker-compose.staging.yml` to `/root/solanatrilly/` on the VPS, then SSHes and runs `docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml pull && docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml up -d`. Every docker command is `-p solanatrilly`-scoped; no unscoped `down`/`prune`/`volume rm` commands exist anywhere in the file. Uses raw SSH (no extra action) so no additional SHA-pins required. Updated metadata header from AC-6.1 to AC-6.1 AC-6.3.
+  
+  2. **`core/tests/test_deploy_workflow_ac61.py`** (modified) — Updated `test_deploy_yml_no_custom_secrets` to expand the allowed secrets set from `{GITHUB_TOKEN …
 
 **Tester Status:** approved
 **Tester Notes:**
