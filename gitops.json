@@ -1,0 +1,5 @@
+{
+  "_comment": "Gitops orchestrator configuration. require_ci_pass enforces CI as a hard merge gate since GitHub Free does not support branch protection on private repos (po-requests.md item 1).",
+  "require_ci_pass": true,
+  "coverage_threshold": 80
+}
