@@ -74,7 +74,7 @@
     {
       "id": "US-9",
       "title": "P1 \u2014 PipelineConfig model: versioned, audited, admin-editable + pipeline_state singleton (\u00a75.1, \u00a78)",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-1"
@@ -83,8 +83,8 @@
         {
           "id": "9.1",
           "text": "A PipelineConfig Django model (table 'pipeline_config', PRD \u00a78) holds an immutable, versioned config snapshot with columns id, version, label, is_active, created_at, created_by, notes and the tunable sections detection, tape, scoring, outcome, trading as JSONField \u2014 each JSONField declared with encoder=JsonSafeEncoder (H3 / US-5, so the US-5 guard test stays green) \u2014 plus nullable feature_set and model FK slots (filled in P5/P7). 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a config row and reads every section back.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -110,7 +110,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-9.1 done: Pushed successfully. Here is the implementation summary for the orchestrator:\n\n---\n\n## Implementation Summary \u2014 US-9 AC-9.1\n\n**Files changed (3):**\n\n1. **`core/models.py`** \u2014 Added `PipelineConfig` model with: `id` (BigAutoField PK), `version` (PositiveIntegerField), `label` (CharField 255), `is_active` (BooleanField, default=False), `created_at` (DateTimeField auto_now_add), `created_by` (ForeignKey \u2192 auth.User, null/blank=True, SET_NULL), `notes` (TextField, blank=True), five tunable JSONFields (`detection`, `tape`, `scoring`, `outcome`, `trading`) each declared with `encoder=JsonSafeEncoder` (H3/US-5 guard preserved), and nullable placeholder integer slots `feature_set_id` / `model_id` (converted to proper FKs in P5/P7). `Meta.db_table = \"pipeline_config\"`.\n\n2. **`core/migrations/0002_pipelineconfig.py`** \u2014 Django-generated migration creating the `pipeline_config` table. Applied cleanly against real Postgres (`docker compose run --rm web python manage.py makemigrations` + `migrate`).\n\n3. **`core/tests/test_pipeline_config_ac91.py`** \u2014 18 tests covering: field introspection (db_table name, all column types, is_active default=False, created_at auto_now_add, created_by nullable FK, \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements review PASSED \u2014 all 4 ACs are clear, specific, and verifiable. AC-9.1 correctly ties the JsonSafeEncoder requirement to the existing US-5 guard test, ensuring regression coverage. AC-9.2 covers the Django Rules image-rebuild requirement inline. AC-9.3 singleton enforcement is precise: both the constraint (second insert prevented/normalized) and the default-False check are testable. AC-9.4 wording updated (minor fix applied directly): verification now explicitly covers both the admin changelist AND the change-detail page (HTTP 200 on both), rather than only the changelist \u2014 this ensures the 'list + detail' claim in the AC text is actually tested."
     },
@@ -195,6 +195,6 @@
       "tester_notes": "Requirements review PASSED \u2014 all 3 ACs are clear, specific, and verifiable. AC-11.1's cache test requires verifying the second get_active_config() call does not re-query the DB \u2014 implementation must mock or count queries (e.g. django.test.utils.CaptureQueriesContext or assertNumQueries(0) on the second call). The static-analysis guard trivially passes at sprint start (no service modules yet) \u2014 this is the established US-2 regression-gate pattern and is correct. AC-11.2 is the most thorough of the sprint: the three-step activation sequence with an is_active count assertion at each step covers both the atomicity and the rollback path. AC-11.3 boot-time no-auto-start test should use Django's AppConfig.ready() path to confirm no signal/hook auto-flips the flags on startup."
     }
   ],
-  "last_updated": "2026-06-15T09:00:56+00:00",
+  "last_updated": "2026-06-15T09:08:10+00:00",
   "deploy_summary": ""
 }
