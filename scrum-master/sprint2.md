@@ -1,9 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 2/6 stories | 11/22 ACs
-**Last Updated:** 2026-06-15T00:00:00+00:00
-**Last Updated By:** dev-team
+**Progress:** 3/6 stories | 11/22 ACs
+**Last Updated:** 2026-06-15T06:32:25+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -111,7 +110,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-4: H2 — Celery task-manifest registration test
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-4.1:** A committed task manifest (e.g. core/task_manifest.json) enumerates every expected registered Celery task; Django app autodiscovery (celery_app.autodiscover_tasks) registers tasks from installed apps (PRD §12 S6/H2).
@@ -123,7 +122,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 
 **Dependencies:** US-1
 
-**Dev Team Status:** in-progress
+**Dev Team Status:** not-started
 **Dev Team Notes:**
   AC-4.1 done: Branch is up to date with remote. The implementation is complete and pushed.
   
@@ -160,26 +159,25 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
      - `test_manifest_tasks_is_nonempty` — paired guard ensuring the manifest itself is non-empty.
   
   **Test count:** 3 new tests (62 total). **Coverage:** 100%. No production code changes required — the manifest and tasks from A …
-  AC-4.3 done: CI gate confirmed and CONTRIBUTING.md dev workflow guard created.
-
+  AC-4.3 done: Both files look correct. The commit is on the right branch and pushed. Here's the implementation summary for the orchestrator:
+  
   ---
-
-  **AC-4.3: CI manifest gate + CONTRIBUTING.md dev workflow guard**
-
+  
+  ## AC-4.3 Implementation Summary
+  
   **Files changed (2 new):**
-
-  1. **`CONTRIBUTING.md`** (new, repo root) — Dev workflow guide with YAML front matter. Documents the Celery task-manifest guard with: (a) the S6 incident explanation (git stash between add and commit silently drops staged changes, causing manifest divergence); (b) Step 1: run `git show --stat HEAD` before every push; (c) Step 2: never run `git stash` between `git add` and `git commit`; (d) safe sequencing examples for updating the manifest. Includes general commit hygiene (format, branch naming, lint/test commands).
-
-  2. **`core/tests/test_contributing_guard_ac43.py`** (new) — 4 tests with metadata front matter:
-     - `test_contributing_md_exists` — asserts CONTRIBUTING.md exists at repo root
-     - `test_contributing_md_contains_git_show_stat_step` — asserts file contains `git show --stat HEAD`
-     - `test_contributing_md_warns_against_git_stash` — asserts file contains `git stash` (the warning)
-     - `test_ci_runs_manifest_test_via_pytest` — loads ci.yml with yaml.safe_load, locates the `test` job, asserts at least one `run:` step contains `pytest` (proving manifest tests run in CI via auto-discovery)
-
-  **CI gate proof:** The existing ci.yml `test` job runs `pytest --cov=. --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=80 --tb=short -q` which auto-discovers all test files including the manifest tests. No ci.yml changes were required.
-
-  **Test count:** 4 new tests (66 total). **Coverage:** 100%. **Lint:** clean (ruff check passes).
-  - blocker-type: none
+  
+  1. **`CONTRIBUTING.md`** (repo root) — YAML front matter. Documents the Celery task-manifest dev workflow guard with two required steps:
+     - Step 1: run `git show --stat HEAD` after every commit and before every push to verify commit content
+     - Step 2: never run `git stash` between `git add` and `git commit` (S6 scars — this class of mistake caused a committed manifest to diverge silently from the task registry)
+     
+     Also includes the S6 incident explanation, safe commit sequencing examples, and a manifest-update how-to guide.
+  
+  2. **`core/tests/test_contributing_guard_ac43.py`** — Metadata front matter. 4 tests:
+     - `test_contributing_md_exists` — asserts CONTRIBUTING.md exists at the repo root
+     - `test_contributing_md_contains_git_show_stat_step` — asserts `git show --stat HEAD` is present
+     - `test_contributing_md_warns_against_git_stash` — asserts `git stash` appears (as an explicit warning)
+     - `test_ci_runs_manifest_test_via_pytest` — loads `ci.yml` via `yaml.safe_load`, find …
 
 **Tester Status:** approved
 **Tester Notes:**
