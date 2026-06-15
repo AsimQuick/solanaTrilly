@@ -2,12 +2,13 @@
 # module: core.tape.recorder
 # sprint: sprint-5
 # story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3, US-18 AC-18.4,
-#        US-19 AC-19.1, US-19 AC-19.2
+#        US-19 AC-19.1, US-19 AC-19.2, US-20 AC-20.2
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-16
 # dependencies: core.datasource, core.clock, core.normalized_swap,
-#               core.tape.lake_writer, core.tape.swap_writer, datetime, typing
+#               core.tape.idle_kill, core.tape.lake_writer, core.tape.swap_writer,
+#               datetime, typing
 # ---
 """TapeRecorder — reads swap events from a DataSource seam with an injected clock.
 
@@ -40,6 +41,7 @@ from core.datasource import DataSource
 from core.normalized_swap import NormalizedSwap
 
 if TYPE_CHECKING:
+    from core.tape.idle_kill import IdleKillMonitor
     from core.tape.lake_writer import LakeWriter
     from core.tape.swap_writer import SwapWriter
 
@@ -108,21 +110,29 @@ class TapeRecorder:
              to the 'swaps' DB table (idempotent on (mint, signature)) after all
              events are consumed.  (mint, NormalizedSwap) pairs are tracked
              internally so the SwapWriter has the base-token mint for the upsert.
+    AC-20.2: Optional IdleKillMonitor — when provided, run() calls check_idle()
+             on EVERY event arrival and record_swap() on each landed tracked swap.
+             Deactivated mints re-attach on the next swap (never goes blind).
 
     Args:
-        source:      Any DataSource implementation (live or replay).
-        clock:       Any Clock implementation (wall or virtual).
-        token_store: Dict mapping mint → token-like object with graduated_block_time.
-                     Required for NormalizedSwap emission (AC-18.2).
-                     Defaults to {} — no normalization when empty.
-        swap_source: NormalizedSwap source vocabulary value. Defaults to "birdeye_live".
-        swap_phase:  NormalizedSwap phase vocabulary value. Defaults to "pre".
-        lake_writer: Optional LakeWriter (AC-19.1).  When provided, all normalized
-                     swaps are written to the lake after run() finishes.
-                     Defaults to None — existing callers are unaffected.
-        swap_writer: Optional SwapWriter (AC-19.2).  When provided, all normalized
-                     swaps are mirrored to the 'swaps' DB table after run() finishes.
-                     Defaults to None — existing callers are unaffected.
+        source:       Any DataSource implementation (live or replay).
+        clock:        Any Clock implementation (wall or virtual).
+        token_store:  Dict mapping mint → token-like object with graduated_block_time.
+                      Required for NormalizedSwap emission (AC-18.2).
+                      Defaults to {} — no normalization when empty.
+        swap_source:  NormalizedSwap source vocabulary value. Defaults to "birdeye_live".
+        swap_phase:   NormalizedSwap phase vocabulary value. Defaults to "pre".
+        lake_writer:  Optional LakeWriter (AC-19.1).  When provided, all normalized
+                      swaps are written to the lake after run() finishes.
+                      Defaults to None — existing callers are unaffected.
+        swap_writer:  Optional SwapWriter (AC-19.2).  When provided, all normalized
+                      swaps are mirrored to the 'swaps' DB table after run() finishes.
+                      Defaults to None — existing callers are unaffected.
+        idle_monitor: Optional IdleKillMonitor (AC-20.2).  When provided, run()
+                      invokes check_idle(timestamp) on every event and record_swap()
+                      on each landed swap for a tracked mint, enabling TTL-based
+                      deactivation and re-attachment driven by get_active_config().
+                      Defaults to None — existing callers are unaffected.
     """
 
     def __init__(
@@ -135,6 +145,7 @@ class TapeRecorder:
         swap_phase: str = "pre",
         lake_writer: "LakeWriter | None" = None,
         swap_writer: "SwapWriter | None" = None,
+        idle_monitor: "IdleKillMonitor | None" = None,
     ) -> None:
         self._source: DataSource = source
         self._clock: Clock = clock
@@ -143,6 +154,7 @@ class TapeRecorder:
         self._swap_phase: str = swap_phase
         self._lake_writer: "LakeWriter | None" = lake_writer
         self._swap_writer: "SwapWriter | None" = swap_writer
+        self._idle_monitor: "IdleKillMonitor | None" = idle_monitor
         self._processed: list[tuple[dict[str, Any], datetime]] = []
         # AC-19.2: track (mint, NormalizedSwap) pairs so SwapWriter has the base-token mint.
         self._normalized_swaps_with_mints: list[tuple[str, NormalizedSwap]] = []
@@ -188,9 +200,19 @@ class TapeRecorder:
         there are normalized swaps, they are persisted to the daily-partitioned lake.
         AC-19.2: If a swap_writer was injected, normalized swaps are also mirrored
         to the 'swaps' DB table (idempotent on (mint, signature)).
+        AC-20.2: If an idle_monitor was injected, check_idle(timestamp) is called
+        on every event and record_swap(mint, timestamp) on every landed tracked swap.
         """
         async for event, timestamp in stamp_events(self._source, self._clock):
             self._processed.append((event, timestamp))
+
+            # AC-20.2: idle-kill TTL check on every event (any type) so that
+            # non-swap events (heartbeats, ticks) also advance the deactivation timer.
+            # asyncio.to_thread: check_idle calls config_resolver (Django cache/ORM),
+            # which is a SynchronousOnlyOperation in async context — same pattern as
+            # SwapWriter.write().
+            if self._idle_monitor is not None:
+                await asyncio.to_thread(self._idle_monitor.check_idle, timestamp)
 
             # Drop failed swaps — landed-only per §6.2 / AC-18.2
             if event.get("failed", False):
@@ -205,6 +227,11 @@ class TapeRecorder:
             mint = event.get("mint")
             if mint and mint in self._token_store:
                 token = self._token_store[mint]
+
+                # AC-20.2: record swap — re-attaches mint if previously deactivated.
+                if self._idle_monitor is not None:
+                    self._idle_monitor.record_swap(mint, timestamp)
+
                 normalized = NormalizedSwap.from_raw_swap(
                     event,
                     token,
