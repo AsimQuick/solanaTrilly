@@ -190,7 +190,7 @@
     {
       "id": "US-21",
       "title": "P3 \u2014 the offline gate: deterministic ReplaySource swap-stream replay + live\u2194backfill byte-parity on golden tokens + recorder regression suite (\u00a716, \u00a76.4)",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-18",
@@ -201,8 +201,8 @@
         {
           "id": "21.1",
           "text": "P3 OFFLINE GATE (\u00a716): replaying a captured-or-synthetic Birdeye swap stream through a ReplaySource + virtual clock yields EXACTLY the expected set of NormalizedSwaps / 'swaps' rows, deterministically \u2014 run twice and the rows AND the jsonl.gz content are byte-identical. The fixture is a schema-faithful Birdeye SUBSCRIBE_TXS stream (\u00a73.3); if US-22 banks a real capture it is used here. Verified by the replay test asserting the expected normalized swaps and run-twice determinism.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -221,7 +221,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-21.1 done: Pushed successfully to `feature/US-21-AC-21.1`.\n\n---\n\n**Implementation summary for AC-21.1:**\n\n**File added (1 new file):**\n\n- **`core/tests/test_replay_offline_gate_ac211.py`** \u2014 The P3 OFFLINE GATE test. Contains a synthetic schema-faithful Birdeye SUBSCRIBE_TXS fixture (\u00a73.3) with 6 events (5 landed: 4 buy + 1 sell; 1 failed). Drives `TapeRecorder(ReplaySource, VirtualClock)` and verifies determinism.\n\n**7 tests, all passing:**\n1. `test_fixture_schema_faithful` \u2014 All \u00a73.3 fields present, types correct, vocabulary valid\n2. `test_replay_yields_expected_normalized_swaps` \u2014 Exactly 5 NormalizedSwaps; correct rel anchoring, source/phase, side distribution, canonical ordering\n3. `test_replay_failed_swap_excluded` \u2014 Failed event absent from normalized output\n4. `test_replay_deterministic_rows_run_twice` \u2014 JSON-serialized swaps byte-identical between two independent runs\n5. `test_replay_deterministic_lake_run_twice` \u2014 Decompressed jsonl.gz content byte-identical between two independent runs\n6. `test_replay_swaps_rows_correct` *(django_db)* \u2014 Exactly 5 'swaps' rows; rel, side, vol_sol spot-checked\n7. `test_replay_swaps_rows_idempotent_run_twice` *(django_db)* \u2014 Row count stays 5 after tw \u2026",
       "tester_status": "approved",
       "tester_notes": "All 3 ACs testable. AC-21.1 synthetic-fixture fallback resolves fixture conditionality without ambiguity. Byte-identical and CI-wiring assertions are clear pass/fail."
     },
@@ -264,7 +264,7 @@
       "tester_notes": "All 3 ACs testable. AC-22.3 amended directly to specify the two durable evidence items (VPS psql count >= 1 + committed fixture path) so the live-proof gate has an unambiguous pass/fail criterion; no PO judgment needed."
     }
   ],
-  "last_updated": "2026-06-15T21:07:03+00:00",
+  "last_updated": "2026-06-15T21:20:01+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-5 in planning.",
   "tester_sprint_status": "not-started",
   "tester_sprint_notes": "Requirements validation complete 2026-06-15. All 6 stories / 20 ACs approved. One minor wording fix applied directly to AC-22.3 (added two durable VPS evidence items so the live-proof gate has a binary pass/fail; no scope change). Sprint ready for development to begin in build order: US-17 \u2192 US-18 \u2192 US-19/US-20 (sequential) \u2192 US-21 \u2192 US-22."
