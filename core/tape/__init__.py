@@ -1,11 +1,11 @@
 # ---
 # module: core.tape
 # sprint: sprint-5
-# story: US-18 AC-18.1
+# story: US-18 AC-18.1, US-20 AC-20.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
-# dependencies: core.tape.recorder
+# last-updated: 2026-06-16
+# dependencies: core.tape.recorder, core.tape.reconciler
 # ---
 """tape — the PumpSwap swap-tape recorder package (PRD §6.2).
 
