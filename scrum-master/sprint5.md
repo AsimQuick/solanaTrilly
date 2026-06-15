@@ -1,8 +1,8 @@
 # Sprint 5
 
 **Phase:** planning
-**Progress:** 0/6 stories | 0/20 ACs
-**Last Updated:** 2026-06-15T00:00:00+00:00
+**Progress:** 0/6 stories | 1/20 ACs
+**Last Updated:** 2026-06-15T16:01:40+00:00
 
 ## Sprint Goal
 Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and prove detection live (retrospective D4). P0/P1/P2 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, and P2 detection lands graduated tokens in the 'tokens' table with graduated_block_time carried as the integer rel-anchor the recorder needs. Sprint-5 builds the PumpSwap swap-tape recorder that captures every swap from t0 and turns it into the project's primary dataset. Deliver, IN ORDER: (1) the persistence target — the 'swaps' table (§8) + the one NormalizedSwap schema (§7.1) with rel ANCHORED to the DB Token.graduated_block_time/graduated_at (never the first swap's time) and the source/phase/side constrained vocabularies (US-17); (2) the recorder CORE behind the DataSource seam + injected clock (US-2 / Principle #7) — port tape_recorder.py's queue/writer/window/coverage scaffolding source-agnostically, emit one NormalizedSwap per LANDED swap with owner=the tx signer and all three units (vol_sol/vol_usd/sol_usd, D1), drop failed swaps, enforce the canonical STABLE sort on (block_time, slot, signature) (never block_time alone — #403), and keep the zero/degenerate-swap guard (#405 ZeroDivisionError) (US-18); (3) the lake + queryable mirror — append-only daily-partitioned jsonl.gz at lake/tapes/dt=YYYY-MM-DD/part-*.jsonl.gz (raw=immutable truth, §6.4.1) + the 'swaps' table writer (idempotent on (mint, signature)) + a truncated-tail-tolerant reader (port _iter_tape_rows — recovered 161k rows) (US-19); (4) recorder resilience — seek_by_time reconciliation that closes WS gaps using the IDENTICAL call/path the offline backfill uses (one code path → backfill parity by construction) + idle-kill TTL deactivate-but-RE-ATTACH on the next swap, with idle_kill_ttl_s read from get_active_config() (Principle #1, the §5.2 TTL≥outcome.window_s invariant already enforced in P1) (US-20); (5) the P3 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye swap stream through ReplaySource + virtual clock → EXACTLY the expected NormalizedSwaps/swaps rows, deterministically (run twice → byte-identical), plus live↔backfill byte-parity on golden token(s) and the ordering/truncated-tail/zero-guard regression suite green in CI (US-21). FINALLY (retrospective D4): wire a concrete Birdeye SUBSCRIBE_TXS source into run_listener on the VPS listener container (behind the existing seam — core path untouched, US-2 guard still green), spend the FIRST of the 10 Birdeye firehose activations — deliberate, time-boxed ≤30 min, logged in ops/firehose_activation_log.md (§15.7) — confirm a real graduated token's PumpSwap swaps flow end-to-end to swaps rows + jsonl.gz on the box, and BANK the durable capture as the golden-token fixture US-21's parity/replay test runs against offline forever (US-22). Build order: US-17 FIRST (the persistence target everything writes to); then US-18 (core) → US-19 (lake) → US-20 (resilience) are sequential on the core; US-21 (offline gate) needs US-18/19/20; US-22 (live D4) is LAST and depends on the listener (US-16) + the built recorder — the offline P3 gate (US-21) does NOT depend on the live activation, so a failed/abbreviated firehose window never blocks P3 exit. Process carries: update phase + story dev_status to their real values BEFORE any sprint-end deploy so the US-13 integrity guard isn't tripped by our own staleness (D2); promote story-level dev_status to 'done' at closeout instead of relying on US-13's --skip-complete carve-out (D3); and the standing rule — before declaring any blocker 'human/operator required', run the on-box check the root SSH we already have allows (D5).
@@ -32,10 +32,11 @@ Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and pro
 ## User Stories
 
 ### US-17: P3 — the 'swaps' table + the one NormalizedSwap schema: tape persistence target (§8, §7.1)
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-17.1:** A Swap Django model (table 'swaps', PRD §8) holds one row per recorded swap with columns: mint (CharField, FK-or-index to tokens), block_time (INT), slot (INT), signature (CharField), side, price (FLOAT), vol_sol (FLOAT), vol_usd (FLOAT), sol_usd (FLOAT), owner (CharField, nullable — the signer; None excluded from counts), base_reserve (BigIntegerField, nullable), quote_reserve (BigIntegerField, nullable), rel (FLOAT). 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a swap row and reads every column back.
+- [x] **AC-17.1:** A Swap Django model (table 'swaps', PRD §8) holds one row per recorded swap with columns: mint (CharField, FK-or-index to tokens), block_time (INT), slot (INT), signature (CharField), side, price (FLOAT), vol_sol (FLOAT), vol_usd (FLOAT), sol_usd (FLOAT), owner (CharField, nullable — the signer; None excluded from counts), base_reserve (BigIntegerField, nullable), quote_reserve (BigIntegerField, nullable), rel (FLOAT). 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a swap row and reads every column back.
+  - Dev: done
 - [ ] **AC-17.2:** A composite index on (mint, block_time, slot, signature) — the canonical-ordering key (§8) — is declared in the model's Meta.indexes, and 'side' uses a constrained vocabulary {buy, sell} on a width-bounded column (the §8 VARCHAR-width discipline; choices in the field's choices= parameter, not DB-only). Verified by a pytest test asserting the index over exactly (mint, block_time, slot, signature) is present in the model/migration, that side.choices is non-empty, and that each choice value fits within the declared max_length.
 - [ ] **AC-17.3:** A single NormalizedSwap schema (§7.1; a typed dataclass/TypedDict in core, the ONE schema the vendored feature math will eat later) defines fields {rel, price, side, vol_sol, vol_usd, sol_usd, owner, block_time, slot, signature, base_reserve, quote_reserve, quote_mint, source, phase}, with source constrained to {birdeye_live, birdeye_backfill, helius_verify} and phase to {pre, post}. 'rel' is defined as block_time minus the token's graduated_block_time/graduated_at — ANCHORED to the DB Token row on BOTH sides, NEVER the first swap's time. Verified by a pytest test: building a NormalizedSwap from a raw swap + a Token anchors rel to graduated_block_time, and out-of-vocabulary source/phase/side values are rejected. Any JSON persisted alongside uses encoder=JsonSafeEncoder so the H3/US-5 guard stays green.
 - [ ] **AC-17.4:** Swap is registered in the Django admin (changelist + detail), read-only on the immutable raw fields. Verified by pytest tests that request the admin changelist and a change-detail page for Swap as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
@@ -43,10 +44,39 @@ Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and pro
 **Dependencies:** US-14, US-5
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-17.1 fixed: **Fix:** Removed one extra blank line in `core/tests/test_swap_model_ac171.py` (line 21 in the original) — ruff's I001 flagged a double blank line between the last import and the first comment as a formatting violation. `ruff check --fix` applied the single-line deletion; CI lint gate should now pass.
 
 **Tester Status:** approved
 **Tester Notes:**
-  All 4 ACs testable with clear pytest assertions. 'FK-or-index' in AC-17.1 is deliberate flexibility, not ambiguity — approved as written.
+  AC-17.1 diagnosis: ---
+  
+  **Diagnosis: Code Bug — Ruff I001 lint error in the test file**
+  
+  **What failed:** The CI `Lint` step failed with a single `ruff` error:
+  
+  ```
+  I001 [*] Import block is un-sorted or un-formatted
+    --> core/tests/test_swap_model_ac171.py:15:1
+  ```
+  
+  The import block in `core/tests/test_swap_model_ac171.py` (lines 15–19) is flagged by ruff's isort integration as not conforming to the project's import ordering rules. Ruff reports it as auto-fixable with `--fix`.
+  
+  **Type:** Code bug (not a requirements issue). AC-17.1 is correctly specified; the implementation and test logic are unrelated to this failure. This is purely a style/formatting defect introduced in the test file.
+  
+  **Severity:** Low. The test suite itself never ran — the lint gate blocked it. No correctness problem, no logic error, no missing functionality.
+  
+  **Recommended fix (for Dev agent):** In `core/tests/test_swap_model_ac171.py`, fix the import ordering. The current block is:
+  
+  ```python
+  from datetime import datetime, timezone
+  
+  import pytest
+  
+  from core.models import Swap, Token
+  ```
+  
+  Run `ruff check --fix core/tests/test_swap_model_ac171.py` inside the container (or adjust the import order manually to match ruff's isort e …
 
 ---
 
