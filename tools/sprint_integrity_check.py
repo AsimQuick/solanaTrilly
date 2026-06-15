@@ -1,7 +1,7 @@
 # ---
 # module: tools.sprint_integrity_check
 # sprint: sprint-4
-# story: US-13 AC-13.1 AC-13.2
+# story: US-13 AC-13.1 AC-13.2 AC-13.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
@@ -48,8 +48,10 @@ def check_sprint(data: dict) -> list[str]:
                     f"AC {ac_id} (story {story_id}): checked=true but tester_status='{ac_tester}'"
                 )
 
-        # AC-13.2: stale story dev_status — all ACs done but story still not-started/in-progress
-        if acs and story_dev in _INCOMPLETE_DEV_STATUSES:
+        # AC-13.2: stale story dev_status — all ACs done but story still not-started/in-progress.
+        # Skip for already-done stories: a stale dev_status on an accepted story is a harmless
+        # historical artifact (the story has been promoted past dev tracking by the tester).
+        if acs and story_dev in _INCOMPLETE_DEV_STATUSES and story_status != "done":
             ac_dev_statuses = [ac.get("dev_status", "") for ac in acs]
             if all(s == "done" for s in ac_dev_statuses):
                 violations.append(
@@ -71,12 +73,19 @@ def check_sprint(data: dict) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sprint integrity checker")
     parser.add_argument("files", nargs="+", help="Sprint JSON file paths")
+    parser.add_argument(
+        "--skip-complete",
+        action="store_true",
+        help="Skip sprint files whose phase is 'complete' (archived sprints)",
+    )
     args = parser.parse_args()
 
     all_violations = []
     for file_path in args.files:
         path = Path(file_path)
         data = json.loads(path.read_text())
+        if args.skip_complete and data.get("phase") == "complete":
+            continue
         violations = check_sprint(data)
         for v in violations:
             print(f"[{path.name}] {v}", file=sys.stderr)

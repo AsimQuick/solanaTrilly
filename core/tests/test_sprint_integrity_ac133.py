@@ -112,6 +112,16 @@ def test_sprint_integrity_step_appears_before_teardown():
     )
 
 
+def test_sprint_integrity_step_uses_skip_complete_flag():
+    """The step must pass --skip-complete to exclude archived (phase=complete) sprints."""
+    step = _sprint_integrity_step()
+    assert step is not None
+    run = step.get("run", "")
+    assert "--skip-complete" in run, (
+        f"Step must pass --skip-complete to skip archived sprints; got: {run!r}"
+    )
+
+
 def test_sprint_integrity_step_comes_after_checkout():
     """The step runs after checkout (files must be on disk first)."""
     steps = _test_job_steps()
