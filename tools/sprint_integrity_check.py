@@ -1,7 +1,7 @@
 # ---
 # module: tools.sprint_integrity_check
 # sprint: sprint-4
-# story: US-13 AC-13.1
+# story: US-13 AC-13.1 AC-13.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
@@ -14,20 +14,32 @@ import sys
 from pathlib import Path
 
 _FAIL_STATUSES = {"failed", "fail", "blocked"}
+# Story dev_status values that indicate work is not finished
+_INCOMPLETE_DEV_STATUSES = {"not-started", "in-progress"}
+# Sprint phase values that indicate work is not finished
+_INCOMPLETE_PHASES = {"planning", "in-progress"}
 
 
 def check_sprint(data: dict) -> list[str]:
     """Return a list of integrity violation strings for the given sprint dict."""
     violations = []
-    for story in data.get("stories", []):
+    stories = data.get("stories", [])
+
+    for story in stories:
         story_id = story.get("id", "<unknown>")
         story_status = story.get("status", "")
         story_tester = story.get("tester_status", "")
+        story_dev = story.get("dev_status", "")
+
+        # AC-13.1: done + failed/blocked is forbidden
         if story_status == "done" and story_tester in _FAIL_STATUSES:
             violations.append(
                 f"Story {story_id}: status='done' but tester_status='{story_tester}'"
             )
-        for ac in story.get("acceptance_criteria", []):
+
+        acs = story.get("acceptance_criteria", [])
+
+        for ac in acs:
             ac_id = ac.get("id", "<unknown>")
             ac_checked = ac.get("checked", False)
             ac_tester = ac.get("tester_status", "")
@@ -35,6 +47,24 @@ def check_sprint(data: dict) -> list[str]:
                 violations.append(
                     f"AC {ac_id} (story {story_id}): checked=true but tester_status='{ac_tester}'"
                 )
+
+        # AC-13.2: stale story dev_status — all ACs done but story still not-started/in-progress
+        if acs and story_dev in _INCOMPLETE_DEV_STATUSES:
+            ac_dev_statuses = [ac.get("dev_status", "") for ac in acs]
+            if all(s == "done" for s in ac_dev_statuses):
+                violations.append(
+                    f"Story {story_id}: all ACs have dev_status='done' but "
+                    f"story dev_status='{story_dev}' (stale)"
+                )
+
+    # AC-13.2: stale sprint phase — planning/in-progress while all stories are done
+    phase = data.get("phase", "")
+    if phase in _INCOMPLETE_PHASES and stories:
+        if all(s.get("status", "") == "done" for s in stories):
+            violations.append(
+                f"Sprint phase='{phase}' but all stories have status='done' (stale)"
+            )
+
     return violations
 
 
