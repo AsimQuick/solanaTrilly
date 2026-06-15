@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 3/6 stories | 11/22 ACs
-**Last Updated:** 2026-06-15T06:32:50+00:00
+**Progress:** 3/6 stories | 12/22 ACs
+**Last Updated:** 2026-06-15T06:38:50+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -187,16 +187,31 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-5: H3 — single json_safe JSONField encoder at every write site
-**Status:** ready | **Priority:** medium
+**Status:** in-progress | **Priority:** medium
 
 #### Acceptance Criteria
-- [ ] **AC-5.1:** One json_safe() encoder exists (non-finite float NaN/Inf -> null, Decimal -> float, datetime -> ISO-8601 string), implemented as a custom Django JSONField encoder class — a single shared implementation, not duplicated per call site (PRD §12 S7/H3).
+- [x] **AC-5.1:** One json_safe() encoder exists (non-finite float NaN/Inf -> null, Decimal -> float, datetime -> ISO-8601 string), implemented as a custom Django JSONField encoder class — a single shared implementation, not duplicated per call site (PRD §12 S7/H3).
+  - Dev: done
 - [ ] **AC-5.2:** The encoder is applied at every JSONB write site (every models.JSONField uses encoder=json_safe / all JSONB writes route through it) — verified by a test that round-trips a NaN/Inf/Decimal/datetime payload and asserts the stored value is psycopg-safe, valid JSON.
 - [ ] **AC-5.3:** A guard test asserts no model JSONField is declared WITHOUT the json_safe encoder, so a future field cannot silently bypass it and reintroduce the #331/#332/#388 JSONB/psycopg crash class. New files carry metadata front matter.
 
 **Dependencies:** US-1
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-5.1 done: Pushed successfully. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-5.1 Implementation Summary**
+  
+  **Files changed (2 new):**
+  
+  1. **`core/encoders.py`** — `JsonSafeEncoder` class, the single shared implementation for all JSONB write sites. Subclasses `DjangoJSONEncoder`. Overrides `default()` to convert `Decimal` → `float` (returning `None` if the result is non-finite), and overrides `encode()` to pre-process the object tree via `_sanitize()`, which recursively replaces non-finite `float` values (NaN, Infinity, -Infinity) with `None` before encoding. `datetime`/`date`/`time` → ISO-8601 is inherited from `DjangoJSONEncoder` unchanged. Usage: `models.JSONField(encoder=JsonSafeEncoder)`.
+  
+  2. **`core/tests/test_json_safe_encoder.py`** — 28 unit tests covering: NaN/Inf/-Inf at top-level, in dict values, in lists, and nested; `Decimal` → `float` (including `Decimal('Infinity')` → null); `datetime` → ISO-8601 string (parseable); standard Python types (None, str, int, bool, dict, list) pass through unchanged; mixed payload produces valid JSON parseable by `json.loads`; encoder is a `DjangoJSONEncoder` subclass; direct instantiation and `encode()` call works.
+  
+  **Test cou …
 
 **Tester Status:** approved
 **Tester Notes:**
