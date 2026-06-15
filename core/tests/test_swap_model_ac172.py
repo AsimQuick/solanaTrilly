@@ -22,7 +22,6 @@ from django.db.migrations.operations.models import AddIndex
 
 from core.models import Swap
 
-
 _TARGET_FIELDS = ["mint", "block_time", "slot", "signature"]
 
 
