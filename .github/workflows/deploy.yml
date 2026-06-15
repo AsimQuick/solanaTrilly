@@ -3,8 +3,8 @@
 # stack: django
 # purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
 #          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
-# sprint: sprint-3
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5
+# sprint: sprint-4
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3
 # created-by: dev-team
 # last-updated: 2026-06-15
 # ---
@@ -81,21 +81,24 @@ jobs:
             'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml pull && docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml up -d'
           rm -f /tmp/deploy_key
 
-      - name: Smoke-test staging stack (AC-6.4)
+      - name: Smoke-test staging stack (AC-6.4 / AC-12.3)
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
+          SMOKE_MAX_ATTEMPTS=12
+          SMOKE_RETRY_DELAY=5
           echo "Smoke-testing solanatrilly staging stack at http://${VPS_HOST}:8002/health/"
-          for i in $(seq 1 12); do
+          echo "Backoff config: max_attempts=${SMOKE_MAX_ATTEMPTS} retry_delay=${SMOKE_RETRY_DELAY}s"
+          for i in $(seq 1 "${SMOKE_MAX_ATTEMPTS}"); do
             status=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_HOST}:8002/health/" || true)
             if [ "$status" = "200" ]; then
-              echo "Smoke test PASSED: GET /health/ returned HTTP 200"
+              echo "Smoke test PASSED on attempt ${i}/${SMOKE_MAX_ATTEMPTS}: GET /health/ returned HTTP 200"
               exit 0
             fi
-            echo "Attempt $i/12: HTTP $status — retrying in 5s"
-            sleep 5
+            echo "Attempt ${i}/${SMOKE_MAX_ATTEMPTS}: HTTP ${status} — retrying in ${SMOKE_RETRY_DELAY}s"
+            sleep "${SMOKE_RETRY_DELAY}"
           done
-          echo "Smoke test FAILED: /health/ did not return HTTP 200 after 60 seconds"
+          echo "Smoke test FAILED: /health/ did not return HTTP 200 after all ${SMOKE_MAX_ATTEMPTS} attempts (${SMOKE_MAX_ATTEMPTS} x ${SMOKE_RETRY_DELAY}s)"
           exit 1
 
       - name: Verify solanaBilly isolation (AC-6.5)
