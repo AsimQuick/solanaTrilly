@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 1/6 stories | 5/22 ACs
-**Last Updated:** 2026-06-14T22:06:20+00:00
+**Progress:** 1/6 stories | 7/22 ACs
+**Last Updated:** 2026-06-15T05:31:53+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -55,15 +55,33 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 #### Acceptance Criteria
 - [x] **AC-3.1:** Every GitHub Action in ci.yml is pinned to a full 40-char commit SHA (not a tag/branch ref): actions/checkout, setup-python, and any other action — verified by a script/test that scans the workflow and fails on any 'uses:' line not pinned to a SHA (PRD §12 S5/H1).
   - Dev: done
-- [ ] **AC-3.2:** The CI runner is frozen to a specific OS image (e.g. ubuntu-24.04, never *-latest); ci.yml is the single canonical CI workflow — one source of CI truth, no parallel/duplicate workflows — verified by the CI-config self-test (AC 3.4) which also asserts no *-latest runner string appears in any workflow file and that only one workflow file defines the test job.
-- [ ] **AC-3.3:** CI is a hard merge gate: the 'test' job runs pytest with the >=80% coverage gate (pytest --cov-fail-under=80) and must be green before merge, enforced via the gitops orchestrator (require_ci_pass: true) since GitHub Free branch protection is unavailable on this private repo (per po-requests.md item 1).
+- [x] **AC-3.2:** The CI runner is frozen to a specific OS image (e.g. ubuntu-24.04, never *-latest); ci.yml is the single canonical CI workflow — one source of CI truth, no parallel/duplicate workflows — verified by the CI-config self-test (AC 3.4) which also asserts no *-latest runner string appears in any workflow file and that only one workflow file defines the test job.
+  - Dev: done
+- [x] **AC-3.3:** CI is a hard merge gate: the 'test' job runs pytest with the >=80% coverage gate (pytest --cov-fail-under=80) and must be green before merge, enforced via the gitops orchestrator (require_ci_pass: true) since GitHub Free branch protection is unavailable on this private repo (per po-requests.md item 1).
+  - Dev: done
 - [ ] **AC-3.4:** A CI-config self-test asserts the H1 invariants (all actions SHA-pinned + runner frozen to a non-*-latest image + single workflow file for the test job) so a future unpinned 'uses:' or a *-latest runner FAILS CI — the 11-PR Node-24 CI flail (S5) cannot recur. New files carry metadata front matter.
 
 **Dependencies:** US-1
 
 **Dev Team Status:** in-progress
 **Dev Team Notes:**
-  AC-3.1 done. Two files changed: (1) .github/workflows/ci.yml — actions/checkout@v4 replaced with actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (full 40-char commit SHA, verified via gh api); (2) core/tests/test_ci_sha_pins.py (new) — single test test_all_workflow_actions_sha_pinned that discovers all *.yml/*.yaml workflow files under .github/workflows/, parses each with yaml.safe_load, extracts every job-step uses: value, exempts local (./) and Docker (docker://) actions, and asserts the ref after @ matches ^[0-9a-f]{40}$. Fails with per-violation detail if any action is tag/branch-pinned. 47 tests pass; coverage 100%.
+  AC-3.1 done. Two files changed: (1) .github/workflows/ci.yml — actions/checkout@v4 replaced with actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (full 40-char commit SHA, verified via gh api); (2) core/tests/test_ci_sha_pins.py (new) — single test test_all_workflow_actions_sha_pinned that discovers all *.yml/*.yaml workflow files under .github/workflows/, parses each with yaml.safe_load, extracts every job-step uses: value, exempts local (./) and Docker (docker://) actions, and asserts the ref after @ matches ^[0-9a-f]{40}$. Fails with per-violation detail if any action is tag/branch-pinned. 47 tests pass; coverage 100%. AC-3.2 done. Two changes: (1) .github/workflows/ci.yml — runs-on changed from ubuntu-latest to ubuntu-24.04, freezing the runner to an explicit versioned OS image; (2) core/tests/test_ci_runner_freeze.py (new) — two tests: test_no_latest_runner_in_any_workflow scans all workflow files and asserts no job runs-on value contains 'latest' (handles string, list, and expression forms); test_single_workflow_defines_test_job asserts exactly one workflow file defines a job with id 'test', enforcing ci.yml as the single canonical CI workflow. Both tests are the AC-3.4 self-test assertions for the runner-frozen and single-workflow invariants. 49 tests pass; coverage 100%.
+  AC-3.3 done: Pushed successfully. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-3.3 Implementation Summary**
+  
+  **Files changed (2 new):**
+  
+  1. **`gitops.json`** (new) — Machine-readable orchestrator config at repo root. Sets `require_ci_pass: true` and `coverage_threshold: 80`. The project-lead script reads this before merging any PR; since GitHub Free does not support branch protection on private repos, this config is the sole enforcement mechanism preventing a merge while the `test` CI job is red.
+  
+  2. **`core/tests/test_ci_merge_gate.py`** (new) — 3 tests that assert all AC-3.3 invariants:
+     - `test_ci_test_job_has_coverage_gate` — parses `ci.yml`, locates the `test` job, and asserts at least one `run:` step contains `--cov-fail-under=N` with N ≥ 80
+     - `test_gitops_config_requires_ci_pass` — reads `gitops.json` and asserts `require_ci_pass` is `true`
+     - `test_gitops_coverage_threshold_matches_ci` — cross-checks that `gitops.json`'s `coverage_threshold` matches the `--cov-fail-under` value in `ci.yml`, preventing silent drift between the two sources of truth
+  
+  **Note:** The coverage flag `--cov-fail-under=80` was already present in `ci.yml` (line 33) from prior work; AC …
 
 **Tester Status:** approved
 **Tester Notes:**
