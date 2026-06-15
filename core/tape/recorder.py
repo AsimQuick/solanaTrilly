@@ -2,7 +2,7 @@
 # module: core.tape.recorder
 # sprint: sprint-5
 # story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3, US-18 AC-18.4,
-#        US-19 AC-19.1, US-19 AC-19.2, US-20 AC-20.2
+#        US-19 AC-19.1, US-19 AC-19.2, US-20 AC-20.2, US-20 AC-20.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-16
