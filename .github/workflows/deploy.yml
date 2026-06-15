@@ -17,10 +17,12 @@
 name: Deploy
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'scrum-master/**'
+  # Deploys are driven SOLELY by the gitops orchestrator via workflow_dispatch
+  # (per-story when all of a story's ACs merge, plus the full-sprint deploy phase).
+  # The push-to-main trigger was removed to (1) avoid double-deploys — the
+  # orchestrator already dispatches — and (2) honor the per-story (not per-AC)
+  # deploy cadence (epic3: ~5 deploys/sprint, not ~24).
+  # Manual deploy: `gh workflow run deploy.yml`.
   workflow_dispatch:
 
 permissions:
