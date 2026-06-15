@@ -45,8 +45,8 @@
         {
           "id": "17.2",
           "text": "A composite index on (mint, block_time, slot, signature) \u2014 the canonical-ordering key (\u00a78) \u2014 is declared in the model's Meta.indexes, and 'side' uses a constrained vocabulary {buy, sell} on a width-bounded column (the \u00a78 VARCHAR-width discipline; choices in the field's choices= parameter, not DB-only). Verified by a pytest test asserting the index over exactly (mint, block_time, slot, signature) is present in the model/migration, that side.choices is non-empty, and that each choice value fits within the declared max_length.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -65,9 +65,9 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "AC-17.1 fixed: **Fix:** Removed one extra blank line in `core/tests/test_swap_model_ac171.py` (line 21 in the original) \u2014 ruff's I001 flagged a double blank line between the last import and the first comment as a formatting violation. `ruff check --fix` applied the single-line deletion; CI lint gate should now pass.",
+      "dev_notes": "AC-17.1 fixed: **Fix:** Removed one extra blank line in `core/tests/test_swap_model_ac171.py` (line 21 in the original) \u2014 ruff's I001 flagged a double blank line between the last import and the first comment as a formatting violation. `ruff check --fix` applied the single-line deletion; CI lint gate should now pass.\nAC-17.2 fixed: **Fix summary:** Two lint defects resolved in a single commit on `feature/US-17-AC-17.2`:\n\n1. **`core/models.py:4` (E501)** \u2014 Split the 134-char `# story:` front-matter comment across two lines so neither exceeds the 120-char limit.\n2. **`core/tests/test_swap_model_ac172.py:19` (I001)** \u2014 Ran `ruff check --fix` inside the container to reorder the import block to match isort rules.",
       "tester_status": "approved",
-      "tester_notes": "AC-17.1 diagnosis: ---\n\n**Diagnosis: Code Bug \u2014 Ruff I001 lint error in the test file**\n\n**What failed:** The CI `Lint` step failed with a single `ruff` error:\n\n```\nI001 [*] Import block is un-sorted or un-formatted\n  --> core/tests/test_swap_model_ac171.py:15:1\n```\n\nThe import block in `core/tests/test_swap_model_ac171.py` (lines 15\u201319) is flagged by ruff's isort integration as not conforming to the project's import ordering rules. Ruff reports it as auto-fixable with `--fix`.\n\n**Type:** Code bug (not a requirements issue). AC-17.1 is correctly specified; the implementation and test logic are unrelated to this failure. This is purely a style/formatting defect introduced in the test file.\n\n**Severity:** Low. The test suite itself never ran \u2014 the lint gate blocked it. No correctness problem, no logic error, no missing functionality.\n\n**Recommended fix (for Dev agent):** In `core/tests/test_swap_model_ac171.py`, fix the import ordering. The current block is:\n\n```python\nfrom datetime import datetime, timezone\n\nimport pytest\n\nfrom core.models import Swap, Token\n```\n\nRun `ruff check --fix core/tests/test_swap_model_ac171.py` inside the container (or adjust the import order manually to match ruff's isort e \u2026"
+      "tester_notes": "AC-17.2 diagnosis: I now have everything I need. Here is the diagnosis:\n\n---\n\n## Diagnosis: Code Bug \u2014 Two Lint Defects in the AC-17.2 Implementation\n\n**Type:** Code bugs (not a requirements issue). AC-17.2 is correctly specified and testable; the test logic itself was never reached because the `Lint` CI step blocked the run first.\n\n**Severity:** Low. Tests never executed \u2014 pure style violations that ruff caught at the gate.\n\n---\n\n### Error 1 \u2014 E501 (not auto-fixable) in `core/models.py:4`\n\n```\nE501 Line too long (134 > 120)\n  --> core/models.py:4:121\n```\n\nThe metadata front matter `# story:` comment on line 4 lists every AC from US-5 through US-17 on a single line (134 chars). The project's `pyproject.toml` sets `line-length = 120`. This is not auto-fixable.\n\n**Fix for Dev:** Break line 4 across two comment lines so neither exceeds 120 chars, e.g.:\n```python\n# story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4,\n#        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2\n```\n\n---\n\n### Error 2 \u2014 I001 (auto-fixable) in `core/tests/test_swap_model_ac172.py:19`\n\n```\nI001 [*] Import block is un-sorted or un-formatted\n  --> core/tests/test_swap_model_ac172.py:19:1\n```\n\nSame ro \u2026"
     },
     {
       "id": "US-18",
@@ -264,7 +264,7 @@
       "tester_notes": "All 3 ACs testable. AC-22.3 amended directly to specify the two durable evidence items (VPS psql count >= 1 + committed fixture path) so the live-proof gate has an unambiguous pass/fail criterion; no PO judgment needed."
     }
   ],
-  "last_updated": "2026-06-15T16:01:40+00:00",
+  "last_updated": "2026-06-15T16:11:13+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-5 in planning.",
   "tester_sprint_status": "not-started",
   "tester_sprint_notes": "Requirements validation complete 2026-06-15. All 6 stories / 20 ACs approved. One minor wording fix applied directly to AC-22.3 (added two durable VPS evidence items so the live-proof gate has a binary pass/fail; no scope change). Sprint ready for development to begin in build order: US-17 \u2192 US-18 \u2192 US-19/US-20 (sequential) \u2192 US-21 \u2192 US-22."
