@@ -1,13 +1,23 @@
 # ---
 # module: core.admin
-# sprint: pre-sprint
-# story: setup
+# sprint: sprint-3
+# story: US-9 AC-9.4
 # status: implemented
-# created-by: project-lead
-# last-updated: 2026-06-14
-# dependencies: django
+# created-by: dev-team
+# last-updated: 2026-06-15
+# dependencies: django, core.models, simple_history
 # ---
-# Register models with the Django admin here, e.g.:
-#   from django.contrib import admin
-#   from .models import MyModel
-#   admin.site.register(MyModel)
+from django.contrib import admin
+from simple_history.admin import SimpleHistoryAdmin
+
+from core.models import PipelineConfig
+
+
+@admin.register(PipelineConfig)
+class PipelineConfigAdmin(SimpleHistoryAdmin):
+    """Admin for PipelineConfig — list + detail with history/diff (§5 operator surface)."""
+
+    list_display = ["id", "version", "label", "is_active", "created_at", "created_by"]
+    list_filter = ["is_active"]
+    readonly_fields = ["created_at"]
+    ordering = ["-created_at"]
