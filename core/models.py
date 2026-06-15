@@ -1,7 +1,7 @@
 # ---
 # module: core.models
-# sprint: sprint-4
-# story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4, US-14 AC-14.1, US-14 AC-14.2
+# sprint: sprint-5
+# story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4, US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
@@ -187,3 +187,38 @@ class Token(models.Model):
     class Meta:
         app_label = "core"
         db_table = "tokens"
+
+
+class Swap(models.Model):
+    """One row per recorded PumpSwap swap (PRD §8, US-17).
+
+    mint is indexed against the 'tokens' table (FK-or-index per AC-17.1).
+    owner is the tx signer (nullable — None excluded from aggregate counts).
+    rel = block_time − token.graduated_block_time (anchored to DB Token row).
+    """
+
+    SIDE_BUY = "buy"
+    SIDE_SELL = "sell"
+    SIDE_CHOICES = [
+        (SIDE_BUY, "Buy"),
+        (SIDE_SELL, "Sell"),
+    ]
+    _SIDE_MAX_LENGTH = 4
+
+    mint = models.CharField(max_length=64, db_index=True)
+    block_time = models.IntegerField()
+    slot = models.IntegerField()
+    signature = models.CharField(max_length=128)
+    side = models.CharField(max_length=_SIDE_MAX_LENGTH, choices=SIDE_CHOICES)
+    price = models.FloatField()
+    vol_sol = models.FloatField()
+    vol_usd = models.FloatField()
+    sol_usd = models.FloatField()
+    owner = models.CharField(max_length=64, null=True, blank=True)
+    base_reserve = models.BigIntegerField(null=True, blank=True)
+    quote_reserve = models.BigIntegerField(null=True, blank=True)
+    rel = models.FloatField()
+
+    class Meta:
+        app_label = "core"
+        db_table = "swaps"
