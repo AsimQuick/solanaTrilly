@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 3/6 stories | 13/22 ACs
-**Last Updated:** 2026-06-15T06:51:25+00:00
+**Progress:** 4/6 stories | 14/22 ACs
+**Last Updated:** 2026-06-15T06:56:29+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -187,14 +187,15 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-5: H3 — single json_safe JSONField encoder at every write site
-**Status:** in-progress | **Priority:** medium
+**Status:** done | **Priority:** medium
 
 #### Acceptance Criteria
 - [x] **AC-5.1:** One json_safe() encoder exists (non-finite float NaN/Inf -> null, Decimal -> float, datetime -> ISO-8601 string), implemented as a custom Django JSONField encoder class — a single shared implementation, not duplicated per call site (PRD §12 S7/H3).
   - Dev: done
 - [x] **AC-5.2:** The encoder is applied at every JSONB write site (every models.JSONField uses encoder=json_safe / all JSONB writes route through it) — verified by a test that round-trips a NaN/Inf/Decimal/datetime payload and asserts the stored value is psycopg-safe, valid JSON.
   - Dev: done
-- [ ] **AC-5.3:** A guard test asserts no model JSONField is declared WITHOUT the json_safe encoder, so a future field cannot silently bypass it and reintroduce the #331/#332/#388 JSONB/psycopg crash class. New files carry metadata front matter.
+- [x] **AC-5.3:** A guard test asserts no model JSONField is declared WITHOUT the json_safe encoder, so a future field cannot silently bypass it and reintroduce the #331/#332/#388 JSONB/psycopg crash class. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-1
 
@@ -214,6 +215,18 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   
   **Test cou …
   AC-5.2 fixed: **Fix:** Removed the blank line between `import pytest` and `from django.db import connection` in `core/tests/test_json_safe_jsonfield_ac52.py`. Both are third-party imports and ruff (isort) requires them in a single contiguous block with no intra-group blank lines. Ruff `--fix` resolved the residual `I001` violation; all checks now pass. Pushed to `feature/US-5-AC-5.2`.
+  AC-5.3 done: Pushed. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-5.3 Implementation Summary**
+  
+  **Files changed (1 new):**
+  
+  1. **`core/tests/test_json_safe_encoder_guard_ac53.py`** — Guard test module with metadata front matter. Three tests across two complementary layers:
+     - `test_all_registered_json_fields_use_json_safe_encoder` — Runtime layer: iterates every model in the Django app registry via `apps.get_models(include_auto_created=True)`, inspects each `JSONField` instance, and asserts `field.encoder is JsonSafeEncoder`. Reports all violations at once with model label and current encoder value. Fails if any future field is added without the encoder argument.
+     - `test_json_field_guard_is_non_degenerate` — Asserts the registry contains at least one `JSONField`, preventing the degenerate state where an empty app makes the first test trivially pass.
+     - `test_no_model_file_json_field_lacks_encoder_kwarg` — Static AST layer: discovers every `models.py` under the repo root (excluding migrations, venvs, `__pycache__`), parses each with `ast.parse`, finds all `JSONField(...)` call nodes, and asserts each has an `encoder=` keyword argument. Catches newly written fields b …
 
 **Tester Status:** approved
 **Tester Notes:**
