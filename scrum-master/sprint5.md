@@ -1,8 +1,8 @@
 # Sprint 5
 
 **Phase:** planning
-**Progress:** 1/6 stories | 6/20 ACs
-**Last Updated:** 2026-06-15T16:40:19+00:00
+**Progress:** 1/6 stories | 7/20 ACs
+**Last Updated:** 2026-06-15T16:47:43+00:00
 
 ## Sprint Goal
 Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and prove detection live (retrospective D4). P0/P1/P2 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, and P2 detection lands graduated tokens in the 'tokens' table with graduated_block_time carried as the integer rel-anchor the recorder needs. Sprint-5 builds the PumpSwap swap-tape recorder that captures every swap from t0 and turns it into the project's primary dataset. Deliver, IN ORDER: (1) the persistence target — the 'swaps' table (§8) + the one NormalizedSwap schema (§7.1) with rel ANCHORED to the DB Token.graduated_block_time/graduated_at (never the first swap's time) and the source/phase/side constrained vocabularies (US-17); (2) the recorder CORE behind the DataSource seam + injected clock (US-2 / Principle #7) — port tape_recorder.py's queue/writer/window/coverage scaffolding source-agnostically, emit one NormalizedSwap per LANDED swap with owner=the tx signer and all three units (vol_sol/vol_usd/sol_usd, D1), drop failed swaps, enforce the canonical STABLE sort on (block_time, slot, signature) (never block_time alone — #403), and keep the zero/degenerate-swap guard (#405 ZeroDivisionError) (US-18); (3) the lake + queryable mirror — append-only daily-partitioned jsonl.gz at lake/tapes/dt=YYYY-MM-DD/part-*.jsonl.gz (raw=immutable truth, §6.4.1) + the 'swaps' table writer (idempotent on (mint, signature)) + a truncated-tail-tolerant reader (port _iter_tape_rows — recovered 161k rows) (US-19); (4) recorder resilience — seek_by_time reconciliation that closes WS gaps using the IDENTICAL call/path the offline backfill uses (one code path → backfill parity by construction) + idle-kill TTL deactivate-but-RE-ATTACH on the next swap, with idle_kill_ttl_s read from get_active_config() (Principle #1, the §5.2 TTL≥outcome.window_s invariant already enforced in P1) (US-20); (5) the P3 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye swap stream through ReplaySource + virtual clock → EXACTLY the expected NormalizedSwaps/swaps rows, deterministically (run twice → byte-identical), plus live↔backfill byte-parity on golden token(s) and the ordering/truncated-tail/zero-guard regression suite green in CI (US-21). FINALLY (retrospective D4): wire a concrete Birdeye SUBSCRIBE_TXS source into run_listener on the VPS listener container (behind the existing seam — core path untouched, US-2 guard still green), spend the FIRST of the 10 Birdeye firehose activations — deliberate, time-boxed ≤30 min, logged in ops/firehose_activation_log.md (§15.7) — confirm a real graduated token's PumpSwap swaps flow end-to-end to swaps rows + jsonl.gz on the box, and BANK the durable capture as the golden-token fixture US-21's parity/replay test runs against offline forever (US-22). Build order: US-17 FIRST (the persistence target everything writes to); then US-18 (core) → US-19 (lake) → US-20 (resilience) are sequential on the core; US-21 (offline gate) needs US-18/19/20; US-22 (live D4) is LAST and depends on the listener (US-16) + the built recorder — the offline P3 gate (US-21) does NOT depend on the live activation, so a failed/abbreviated firehose window never blocks P3 exit. Process carries: update phase + story dev_status to their real values BEFORE any sprint-end deploy so the US-13 integrity guard isn't tripped by our own staleness (D2); promote story-level dev_status to 'done' at closeout instead of relying on US-13's --skip-complete carve-out (D3); and the standing rule — before declaring any blocker 'human/operator required', run the on-box check the root SSH we already have allows (D5).
@@ -135,7 +135,8 @@ Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and pro
   - Dev: done
 - [x] **AC-18.2:** For each LANDED swap the recorder emits exactly one NormalizedSwap (US-17 §7.1) with owner=the tx SIGNER (= Birdeye 'owner', canonical both sides per §3.3), rel anchored to the token's graduated_block_time, and ALL THREE units stored (vol_sol, vol_usd, sol_usd — D1). FAILED swaps are DROPPED (landed-only, §6.2). Verified by pytest: a failed swap produces no NormalizedSwap; a landed swap maps every field correctly; owner equals the signer; all three unit fields are populated.
   - Dev: done
-- [ ] **AC-18.3:** Swaps are ordered by the canonical key (block_time, slot, signature) with a STABLE sort — never block_time alone (the #403 within-second-order disaster). Verified by a pytest test feeding within-second, out-of-order swaps (equal block_time, differing slot/signature, plus a fully-equal-key pair) and asserting the emitted order matches the stable (block_time, slot, signature) ordering with input order preserved on ties.
+- [x] **AC-18.3:** Swaps are ordered by the canonical key (block_time, slot, signature) with a STABLE sort — never block_time alone (the #403 within-second-order disaster). Verified by a pytest test feeding within-second, out-of-order swaps (equal block_time, differing slot/signature, plus a fully-equal-key pair) and asserting the emitted order matches the stable (block_time, slot, signature) ordering with input order preserved on ties.
+  - Dev: done
 - [ ] **AC-18.4:** Zero-/degenerate-swap guard (S8 / #405): a swap with zero/None reserves, zero volume, or a degenerate price field never raises (no ZeroDivisionError) and is handled per an explicit declared policy (skipped or flagged — never a silent 0 row, never a crash). Verified by a pytest test feeding a degenerate swap and asserting no exception is raised and the documented handling occurs. New files carry metadata front matter.
 
 **Dependencies:** US-17, US-2, US-15
@@ -174,6 +175,20 @@ Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and pro
      - `test_landed_swap_maps_every_field_correctly` — all 15 §7.1 fields verified
      - `test_owner_equals_signer` — `owner` == raw event's `owner` (tx signer, §3.3)
      - `test_all …
+  AC-18.3 done: Pushed successfully. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-18.3 Implementation Summary**
+  
+  **Files changed (2):**
+  
+  1. **`core/tape/recorder.py`** (modified) — Updated `story:` front matter to include `US-18 AC-18.3`. Changed the `normalized_swaps` property from a plain `list(self._normalized_swaps)` copy to `sorted(..., key=lambda s: (s.block_time, s.slot, s.signature))`. Python's `sorted()` is a stable sort (guaranteed by language spec), so swaps with an identical canonical triple preserve their original insertion order. No other logic changed; all AC-18.1 and AC-18.2 behavior is unaffected.
+  
+  2. **`core/tests/test_tape_recorder_ac183.py`** (new) — Metadata front matter carried. 6 pytest tests:
+     - `test_within_second_out_of_order_ordered_by_slot` — equal `block_time`, descending slot input → ascending slot output (the #403 scenario)
+     - `test_within_second_equal_slot_ordered_by_signature` — equal `(block_time, slot)`, reverse-alpha signature input → lexicographic signature output
+     - `test_fully_equal_key_pair_preserves_input_order` — identical `(block_time, slot, signature)` pair → stable sort, first input remains first (distinguishable by `vol_sol …
 
 **Tester Status:** approved
 **Tester Notes:**
