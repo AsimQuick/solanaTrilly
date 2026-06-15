@@ -1,8 +1,8 @@
 # Sprint 4
 
 **Phase:** planning
-**Progress:** 0/5 stories | 4/18 ACs
-**Last Updated:** 2026-06-15T11:40:24+00:00
+**Progress:** 1/5 stories | 5/18 ACs
+**Last Updated:** 2026-06-15T11:53:29+00:00
 
 ## Sprint Goal
 Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only remaining P0 blocker — the VPS deploy whose smoke-test has failed with curl exit code 7 on all 13 Sprint-3 deploy runs. Per retrospective C1, DIAGNOSE port-8002 ON the VPS (agents have root SSH per CLAUDE.md — the 'human escalation required' claim in the Sprint-3 review contradicts CLAUDE.md): ssh root@140.82.43.36, run 'curl -v localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the port publish/bind in docker-compose.staging.yml, and check ufw/iptables — to distinguish an operator-style firewall fix (which agents CAN apply as root: 'ufw allow 8002/tcp') from a code-level port-publish/bind bug (e.g. the container binding 127.0.0.1 or the host port not published). Apply whatever the on-box diagnosis finds, make the CD smoke-test retry with backoff AT RUNTIME (C3 — the Sprint-3 run showed the curl failing immediately with no retry) and upgrade its structural test to verify runtime retry behavior, not just file text, then run the deploy GREEN on main and confirm HTTP 200 on 8002 with solanaBilly untouched on 8001 — closing US-8 AC-8.3/8.4/8.5, US-6, and retroactively US-1's deploy-gated DoD, and finally EXITING P0 (US-12). Enforce status integrity PROGRAMMATICALLY with a CI guard on sprintN.json that forbids status:done while tester_status is failed/blocked and flags stale phase/dev_status (US-13; retrospective C4, logged unactioned in sprint-1/2/3). THEN deliver P2 detection (PRD §6.1, §8, §16): the 'tokens' model (US-14); a Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam + injected clock (US-2 / Principle #7) that creates tokens rows from the ACTIVE config's detection filter (US-11 resolver), dedupes within dedupe_window_s, and pre-stages near-graduation mints by prestage_progress_pct — offline-gated by replaying a captured/synthetic MEME stream through ReplaySource -> expected token rows (US-15); and detection resilience — the Helius 'migrate' reconciler backstop (D4) + a periodic Birdeye REST graduation sweep (third belt) + a dedicated 'listener' container in docker-compose.yml and docker-compose.staging.yml (US-16). Build order: US-12 FIRST (P0 closeout, the gating milestone — retrospective C2/B5; it is independent of the P2 chain and MAY run in parallel) and US-13 (process guard, independent); then the P2 chain US-14 -> US-15 -> US-16 (US-15 needs the tokens model + resolver + DataSource seam; US-16 needs the consumer).
@@ -30,7 +30,7 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 ## User Stories
 
 ### US-12: P0 closeout (4th attempt) — diagnose+fix the VPS port-8002 deploy ON the box, GREEN smoke-test, exit P0 (closes US-8 AC-8.3/8.4/8.5 + US-6 + US-1's deploy-gated DoD)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-12.1:** DIAGNOSE port-8002 ON the VPS before concluding a cause (retrospective C1; agents have root SSH per CLAUDE.md). SSH to root@140.82.43.36 and run: 'curl -v http://localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the 'ports:' publish/bind for the web service in docker-compose.staging.yml (rule out a 127.0.0.1-only bind or an unpublished host port), and check 'ufw status' / 'iptables -L' for inbound 8002. Record the findings in dev_notes, classifying the root cause as (a) a firewall blocking inbound 8002 from GitHub Actions runner IPs, or (b) a code-level port-publish/bind bug in docker-compose.staging.yml. Verified by the recorded on-box diagnosis distinguishing (a) from (b).
@@ -41,7 +41,8 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
   - Dev: done
 - [x] **AC-12.4:** A deploy on main (or via workflow_dispatch) succeeds END-TO-END and GREEN: image built+pushed to GHCR, pulled on the VPS, stack up with 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d', the smoke-test hits http://VPS:8002/health/ and asserts HTTP 200, and the isolation step then confirms solanaBilly is still up on 8001 ('docker compose -p solanabilly ps' + 8001 responds). This closes US-8 AC-8.3 (200 on 8002), AC-8.4 (runtime isolation), US-6, and EXITS P0. Verified by the green Deploy run with both the smoke-test and isolation steps passing.
   - Dev: done
-- [ ] **AC-12.5:** VPS verification gates 'done' (retrospective B3/C2): the Tester confirms, from the ACTUAL green deploy run, that the running stack answers HTTP 200 on 8002 and solanaBilly is untouched on 8001 — not from green pytest alone. On confirmation, US-8 AC-8.3/8.4/8.5 and US-1's story-level DoD (the sprint-1 deploy blocker, retrospective A1) are retroactively CLOSED and P0 is declared EXITED. The US-8 record is normalized so no AC reads done while failed (retrospective C4). New/changed files carry metadata front matter.
+- [x] **AC-12.5:** VPS verification gates 'done' (retrospective B3/C2): the Tester confirms, from the ACTUAL green deploy run, that the running stack answers HTTP 200 on 8002 and solanaBilly is untouched on 8001 — not from green pytest alone. On confirmation, US-8 AC-8.3/8.4/8.5 and US-1's story-level DoD (the sprint-1 deploy blocker, retrospective A1) are retroactively CLOSED and P0 is declared EXITED. The US-8 record is normalized so no AC reads done while failed (retrospective C4). New/changed files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-8
 
@@ -115,10 +116,34 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
     2. `test_smoke_test_success_condition_is_exactly_200` — smoke-test compares status to exactly `"200"`, not any 2xx
     3. `test_isolation_grep_matches_running_or_up_case_insensitive` — isolation greps PS output for `running|up` case-insensitively
     4. `t …
+  AC-12.5 fixed: **Fix:** Renamed loop variable `l` to `line` in the generator expression at `core/tests/test_vps_verification_ac125.py:307`, resolving ruff E741 (ambiguous variable name). No logic change. Committed and pushed to `feature/US-12-AC-12.5`.
 
 **Tester Status:** approved
 **Tester Notes:**
-  All 5 ACs are testable and verifiable. AC-12.1 specifies exact on-box commands and requires a classified root-cause record — clear pass/fail. AC-12.2 specifies the exact fix command for each branch and a concrete 200-on-localhost verification. AC-12.3 tightened: added explicit language requiring the structural test to verify loop iteration, sleep/backoff calls, and max-attempts in parsed YAML — not merely a keyword search — and that the deploy log shows retries; this closes the 'green test masking divergent runtime' gap from sprint-3 B3. AC-12.4 and AC-12.5 together enforce the VPS-gate DoD: the Tester must confirm from an actual green run, not from pytest. No scope issues.
+  AC-12.5 diagnosis: ---
+  
+  **Diagnosis: CODE BUG — trivial lint violation**
+  
+  **File:** `core/tests/test_vps_verification_ac125.py:307`
+  
+  **Error:** ruff E741 — ambiguous variable name `l` (lowercase letter L, visually indistinguishable from the digit `1`)
+  
+  ```python
+  # Line 307 — failing:
+  story_line = next((l for l in front_matter_lines if l.startswith("story:")), None)
+  ```
+  
+  **Severity:** Low. Single-character rename, no logic change, no requirements ambiguity.
+  
+  **Root cause:** Not a requirements issue. AC-12.5 is clear and implementable. The new test file (`test_vps_verification_ac125.py`) was committed with a generator expression using `l` as the loop variable, which ruff flags as E741 (ambiguous variable name) because `l` is visually indistinguishable from `1`.
+  
+  **Recommended fix (for Dev agent):** In `core/tests/test_vps_verification_ac125.py` line 307, rename `l` to `line` in the generator expression:
+  
+  ```python
+  story_line = next((line for line in front_matter_lines if line.startswith("story:")), None)
+  ```
+  
+  No other files need changes. This is the only ruff error and the only CI failure.
 
 ---
 
