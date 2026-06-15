@@ -116,3 +116,11 @@ CELERY_RESULT_BACKEND = env("REDIS_URL", default="redis://redis:6379/0")
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+
+# Celery-beat periodic task schedule (AC-16.2 — third-belt graduation sweep)
+CELERY_BEAT_SCHEDULE = {
+    "birdeye-graduation-sweep": {
+        "task": "core.tasks.birdeye_graduation_sweep",
+        "schedule": 300.0,  # every 5 minutes
+    },
+}
