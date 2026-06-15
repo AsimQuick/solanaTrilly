@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 4/6 stories | 14/22 ACs
-**Last Updated:** 2026-06-15T06:56:39+00:00
+**Progress:** 4/6 stories | 15/22 ACs
+**Last Updated:** 2026-06-15T07:04:19+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -271,10 +271,11 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-6: CD pipeline (GitHub Actions → GHCR → VPS staging) + hello-world live under hard isolation
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-6.1:** A deploy.yml GitHub Actions workflow exists: on merge to main it runs the hardened CI (H1, US-3), builds the web image, and pushes it to GHCR (ghcr.io/asimquick/solanatrilly) using the built-in GITHUB_TOKEN with permissions: { packages: write } (no extra secret — per po-requests.md item 2). Every action in deploy.yml is SHA-pinned (H1).
+- [x] **AC-6.1:** A deploy.yml GitHub Actions workflow exists: on merge to main it runs the hardened CI (H1, US-3), builds the web image, and pushes it to GHCR (ghcr.io/asimquick/solanatrilly) using the built-in GITHUB_TOKEN with permissions: { packages: write } (no extra secret — per po-requests.md item 2). Every action in deploy.yml is SHA-pinned (H1).
+  - Dev: done
 - [ ] **AC-6.2:** The repo ships docker-compose.staging.yml as the ONLY VPS compose (PRD §15.4): compose project -p solanatrilly, web on port 8002, distinct Postgres database + volume, distinct Redis, distinct Docker network — the VPS is never hand-edited; it runs exactly what is in the repo.
 - [ ] **AC-6.3:** The deploy step SSHes to the VPS (VPS_USER@VPS_HOST via VPS_SSH_KEY repo secrets) and runs 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d' to pull the tested GHCR image. Every docker command in the deploy script is -p solanatrilly-scoped — verified by inspecting deploy.yml for any unscoped down / up --force-recreate / prune / volume removal command; solanaBilly's containers/volumes (port 8001) are never touched (PRD §15.3, hard isolation).
 - [ ] **AC-6.4:** A hello-world Django endpoint is live on the VPS staging stack at port 8002, and a CD smoke-test step (run after deploy) hits it and asserts HTTP 200 — proving the local -> GitHub -> GHCR -> VPS path end-to-end (PRD §15.5, 'VPS presence from P0').
@@ -283,6 +284,22 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 **Dependencies:** US-1, US-3
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-6.1 done: Pushed successfully.
+  
+  ---
+  
+  **Implementation summary for the orchestrator:**
+  
+  **AC-6.1: deploy.yml GitHub Actions CD workflow**
+  
+  **Files changed (3):**
+  
+  1. **`.github/workflows/ci.yml`** (modified) — Added `workflow_call:` to the `on:` trigger block, enabling deploy.yml to reuse the hardened CI as a reusable workflow without duplicating test logic.
+  
+  2. **`.github/workflows/deploy.yml`** (new) — CD workflow with metadata front matter. Triggers on `push: branches: [main]`. Declares `permissions: { contents: read, packages: write }` at the workflow level — no extra secrets, only `secrets.GITHUB_TOKEN` is referenced. Two jobs:
+     - `ci`: calls `./.github/workflows/ci.yml` as a reusable workflow (hardened H1 CI, local action — exempt from SHA-pinning per existing H1 rules)
+     - `build-and-push`: `needs: ci`, runs on `ubuntu-24.04`, uses four SHA-pinned actions: `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2), `docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772` (v3.4.0), `docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5` (v4.1.0), `docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83` (v6.18.0). Pushes `ghcr.io/asimquick/sola …
 
 **Tester Status:** approved
 **Tester Notes:**

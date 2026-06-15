@@ -179,7 +179,7 @@
     {
       "id": "US-6",
       "title": "CD pipeline (GitHub Actions \u2192 GHCR \u2192 VPS staging) + hello-world live under hard isolation",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-1",
@@ -189,8 +189,8 @@
         {
           "id": "6.1",
           "text": "A deploy.yml GitHub Actions workflow exists: on merge to main it runs the hardened CI (H1, US-3), builds the web image, and pushes it to GHCR (ghcr.io/asimquick/solanatrilly) using the built-in GITHUB_TOKEN with permissions: { packages: write } (no extra secret \u2014 per po-requests.md item 2). Every action in deploy.yml is SHA-pinned (H1).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -223,7 +223,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-6.1 done: Pushed successfully.\n\n---\n\n**Implementation summary for the orchestrator:**\n\n**AC-6.1: deploy.yml GitHub Actions CD workflow**\n\n**Files changed (3):**\n\n1. **`.github/workflows/ci.yml`** (modified) \u2014 Added `workflow_call:` to the `on:` trigger block, enabling deploy.yml to reuse the hardened CI as a reusable workflow without duplicating test logic.\n\n2. **`.github/workflows/deploy.yml`** (new) \u2014 CD workflow with metadata front matter. Triggers on `push: branches: [main]`. Declares `permissions: { contents: read, packages: write }` at the workflow level \u2014 no extra secrets, only `secrets.GITHUB_TOKEN` is referenced. Two jobs:\n   - `ci`: calls `./.github/workflows/ci.yml` as a reusable workflow (hardened H1 CI, local action \u2014 exempt from SHA-pinning per existing H1 rules)\n   - `build-and-push`: `needs: ci`, runs on `ubuntu-24.04`, uses four SHA-pinned actions: `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2), `docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772` (v3.4.0), `docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5` (v4.1.0), `docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83` (v6.18.0). Pushes `ghcr.io/asimquick/sola \u2026",
       "tester_status": "approved",
       "tester_notes": "All 5 ACs are testable and verifiable. Minor fixes applied: AC 6.3 tightened the isolation claim by adding 'verified by inspecting deploy.yml for any unscoped command', giving the Tester a concrete artifact to check. AC 6.5 replaced the vague 'verified on the box' with a concrete method: 'docker compose -p solanabilly ps shows containers up' and 'port 8001 still responds after the solanatrilly deployment', making isolation falsifiable. ACs 6.1, 6.2, and 6.4 are well-defined with clear artifacts (deploy.yml, docker-compose.staging.yml, HTTP 200 smoke test). Approved for development."
     },
@@ -262,6 +262,6 @@
       "tester_notes": "All 3 ACs are testable and verifiable by file inspection. Minor fix applied to AC 7.2: replaced the unresolved placeholder '[TO TUNE]' with '<=30 min default; adjustable by explicit PO decision', making the criterion concrete and auditable. ACs 7.1 and 7.3 are clear: 7.1 requires specific budget numbers and a no-commit-keys rule, both verifiable by inspection; 7.3 requires a stated hard rule and re-indexing confirmation. Approved for development."
     }
   ],
-  "last_updated": "2026-06-15T06:56:39+00:00",
+  "last_updated": "2026-06-15T07:04:19+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-2 in planning. US-6 delivers the CD pipeline that brings the first VPS staging deploy (-p solanatrilly, port 8002) and closes US-1's outstanding deploy DoD."
 }
