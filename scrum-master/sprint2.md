@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 2/6 stories | 9/22 ACs
-**Last Updated:** 2026-06-15T06:20:54+00:00
+**Progress:** 2/6 stories | 10/22 ACs
+**Last Updated:** 2026-06-15T06:25:06+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -115,7 +115,8 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 #### Acceptance Criteria
 - [x] **AC-4.1:** A committed task manifest (e.g. core/task_manifest.json) enumerates every expected registered Celery task; Django app autodiscovery (celery_app.autodiscover_tasks) registers tasks from installed apps (PRD §12 S6/H2).
   - Dev: done
-- [ ] **AC-4.2:** A pytest test asserts the live registered-task set (celery_app.tasks, excluding celery built-ins) EQUALS the committed manifest: it FAILS when a task is removed/renamed (even if that task's own test was also deleted — the #404 failure mode) AND FAILS when a task is added without updating the manifest.
+- [x] **AC-4.2:** A pytest test asserts the live registered-task set (celery_app.tasks, excluding celery built-ins) EQUALS the committed manifest: it FAILS when a task is removed/renamed (even if that task's own test was also deleted — the #404 failure mode) AND FAILS when a task is added without updating the manifest.
+  - Dev: done
 - [ ] **AC-4.3:** The manifest test runs inside the CI merge gate; the dev workflow guard is documented in CONTRIBUTING.md (or a dedicated section of the project README) — listing the steps: 'git show --stat HEAD' before push, and never 'git stash' between add and commit (S6 scars). New files carry metadata front matter.
 
 **Dependencies:** US-1
@@ -141,6 +142,22 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   **Test count:** 4 new tests (no broker/Redis required — registry-only inspection).
   
   **Coverage:** No new production code branches added; new tests exercise the manifest fil …
+  AC-4.2 done: Done.
+  
+  ---
+  
+  **Implementation summary for the orchestrator:**
+  
+  **AC-4.2: Bidirectional manifest-equality test**
+  
+  **Files changed (1 new):**
+  
+  1. **`core/tests/test_task_manifest_ac42.py`** — 3 tests implementing the strict bidirectional equality check between the live Celery task registry and `core/task_manifest.json`:
+     - `test_registered_tasks_equal_manifest` — computes `manifest_tasks` set and `registered_tasks` set (non-builtin only, filtered by `celery.` prefix), reports both failure modes separately: tasks in manifest but not registered (#404 failure mode — removed/renamed task) and tasks registered but not in manifest (added without manifest update). This single test catches both AC-required failure scenarios by strict set equality without needing to delete or add tasks in test code.
+     - `test_registered_set_is_nonempty` — guards against the degenerate case where both registry and manifest are emptied simultaneously (would make equality trivially pass).
+     - `test_manifest_tasks_is_nonempty` — paired guard ensuring the manifest itself is non-empty.
+  
+  **Test count:** 3 new tests (62 total). **Coverage:** 100%. No production code changes required — the manifest and tasks from A …
 
 **Tester Status:** approved
 **Tester Notes:**
