@@ -1,8 +1,8 @@
 # Sprint 3
 
 **Phase:** planning
-**Progress:** 1/4 stories | 7/16 ACs
-**Last Updated:** 2026-06-15T09:18:38+00:00
+**Progress:** 1/4 stories | 8/16 ACs
+**Last Updated:** 2026-06-15T09:29:57+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -146,7 +146,8 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
   - Dev: done
 - [x] **AC-9.2:** Config change history is audited via django-simple-history (added to requirements.txt with explicit version bounds and to INSTALLED_APPS; image rebuilt per Docker Rules): every create/activate records who and when. Verified by a pytest test that creates then activates a config and asserts a historical record row is written capturing the change.
   - Dev: done
-- [ ] **AC-9.3:** A pipeline_state singleton model (PRD §8; id=1) exists with booleans firehose_active, scoring_enabled, trading_enabled — ALL defaulting to False (explicit start; no silent auto-recovery, §5.3). Verified by a pytest test asserting the row is a true singleton (a second instance is prevented/normalized to id=1) and that all three flags default False.
+- [x] **AC-9.3:** A pipeline_state singleton model (PRD §8; id=1) exists with booleans firehose_active, scoring_enabled, trading_enabled — ALL defaulting to False (explicit start; no silent auto-recovery, §5.3). Verified by a pytest test asserting the row is a true singleton (a second instance is prevented/normalized to id=1) and that all three flags default False.
+  - Dev: done
 - [ ] **AC-9.4:** PipelineConfig is registered in the Django admin (list + detail) with django-simple-history's audit/diff history available — the foundation of the §5 operator config-control surface (view/diff/activate with audit history). Verified by pytest tests that request the admin changelist and a change-detail page for PipelineConfig as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
 
 **Dependencies:** US-1
@@ -185,10 +186,29 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
   5. **`core/tests/test_pipeline_config_ac92.py`** — 5 new tests verifying the audit trail:
      - `test_history_created_on_pipeline_config_create` — 1 record on create, `history_type == "+"`
      - `test_history_written_on_pipeline_config_activate` — 2 records a …
+  AC-9.3 fixed: Fixed and pushed. The I001 violation was a blank line between the `import pytest` and `from core.models import PipelineState` lines — ruff's isort formatter requires no blank line between third-party and first-party imports in this project's configuration. Removing that blank line resolved it; `ruff check .` now exits clean.
 
 **Tester Status:** approved
 **Tester Notes:**
-  Requirements review PASSED — all 4 ACs are clear, specific, and verifiable. AC-9.1 correctly ties the JsonSafeEncoder requirement to the existing US-5 guard test, ensuring regression coverage. AC-9.2 covers the Django Rules image-rebuild requirement inline. AC-9.3 singleton enforcement is precise: both the constraint (second insert prevented/normalized) and the default-False check are testable. AC-9.4 wording updated (minor fix applied directly): verification now explicitly covers both the admin changelist AND the change-detail page (HTTP 200 on both), rather than only the changelist — this ensures the 'list + detail' claim in the AC text is actually tested.
+  AC-9.3 diagnosis: The lint check confirms the failure. It's an **isort I001 violation** in `core/tests/test_pipeline_config_ac93.py:19` — the import block is flagged as unsorted or unformatted by ruff. This matches the exact same pattern as the AC-8.3 failure (a lint issue in a test file caught by the Lint CI step).
+  
+  ---
+  
+  ## Diagnosis — CODE BUG
+  
+  **Type:** Ruff `I001` lint violation — import block is un-sorted or un-formatted
+  **Location:** `core/tests/test_pipeline_config_ac93.py`, line 19, the two-line import block:
+  ```python
+  import pytest
+  
+  from core.models import PipelineState
+  ```
+  **Severity:** Low (same class as AC-8.3 — trivial one-line fix, no logic is wrong, no AC is mis-specified)
+  **CI step that fails:** The **Lint** step (`docker compose run --rm web ruff check .`) — the test step is never reached
+  **Root cause:** Ruff's isort formatter disagrees with the current formatting of the import block; `[*] 1 fixable with the --fix option` confirms it is auto-fixable with no manual judgment required
+  
+  **Recommended fix (for Dev agent):**
+  Run `ruff check --fix core/tests/test_pipeline_config_ac93.py` inside Docker (or apply the equivalent manual reformat), verify `ruff check .` exits 0, then commit. No …
 
 ---
 
