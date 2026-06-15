@@ -5,7 +5,8 @@
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
-# dependencies: core.detection.consumer, core.models, core.resolver, core.clock, core.replay_source, asyncio, json, pathlib, pytest
+# dependencies: core.detection.consumer, core.models, core.resolver, core.clock,
+#   core.replay_source, asyncio, json, pathlib, pytest
 # ---
 """AC-15.4 — P2 Offline Gate: replay a synthetic MEME stream → expected token rows, deterministically.
 
