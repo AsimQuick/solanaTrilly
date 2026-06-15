@@ -1,7 +1,7 @@
 # ---
 # module: core.tape.recorder
 # sprint: sprint-5
-# story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3
+# story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3, US-18 AC-18.4
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
@@ -21,6 +21,13 @@ AC-18.2 extension:
     For each LANDED swap (failed != True), exactly one NormalizedSwap is emitted,
     anchored to the token's graduated_block_time.  Failed swaps are dropped (§6.2).
     owner is always the tx signer (Birdeye 'owner' field, canonical per §3.3).
+
+AC-18.4 / S8 / #405 — degenerate-swap guard:
+    POLICY = "skip"
+    Swaps with zero/None reserves, zero volume, or a degenerate price field are
+    SKIPPED before NormalizedSwap emission.  They are never emitted as a silent
+    0-value row and never raise ZeroDivisionError.  Skipped swaps are tracked in
+    TapeRecorder.skipped_degenerate for audit.
 """
 from datetime import datetime
 from typing import Any
@@ -28,6 +35,59 @@ from typing import Any
 from core.clock import Clock, stamp_events
 from core.datasource import DataSource
 from core.normalized_swap import NormalizedSwap
+
+# ---------------------------------------------------------------------------
+# Degenerate-swap guard (S8 / #405 / AC-18.4)
+# ---------------------------------------------------------------------------
+
+#: Explicit policy (AC-18.4): degenerate swaps are SKIPPED — never a silent
+#: 0-value row in the tape, never a crash.  Skipped swaps land in
+#: TapeRecorder.skipped_degenerate so callers can audit them.
+DEGENERATE_SWAP_POLICY: str = "skip"
+
+
+def _is_degenerate_swap(event: dict) -> bool:
+    """Return True if *event* is degenerate and must be skipped (S8 / #405).
+
+    Degenerate conditions (AC-18.4):
+    - price is None or zero       → ZeroDivisionError / degenerate price field
+    - vol_sol is None or zero     → zero/missing volume
+    - base_reserve is None or 0   → zero/None reserves
+    - quote_reserve is None or 0  → zero/None reserves
+
+    All of these would produce either a ZeroDivisionError in downstream feature
+    math (tape_microstructure) or an undetectable silent 0-value row in the lake.
+    """
+    price = event.get("price")
+    vol_sol = event.get("vol_sol")
+    base_reserve = event.get("base_reserve")
+    quote_reserve = event.get("quote_reserve")
+
+    # Degenerate price: None or zero (or un-castable)
+    if price is None:
+        return True
+    try:
+        if float(price) == 0.0:
+            return True
+    except (TypeError, ValueError):
+        return True
+
+    # Zero/missing volume
+    if vol_sol is None:
+        return True
+    try:
+        if float(vol_sol) == 0.0:
+            return True
+    except (TypeError, ValueError):
+        return True
+
+    # Zero/None reserves (§18.4 literal: "zero/None reserves")
+    if base_reserve is None or base_reserve == 0:
+        return True
+    if quote_reserve is None or quote_reserve == 0:
+        return True
+
+    return False
 
 
 class TapeRecorder:
@@ -62,11 +122,22 @@ class TapeRecorder:
         self._swap_phase: str = swap_phase
         self._processed: list[tuple[dict[str, Any], datetime]] = []
         self._normalized_swaps: list[NormalizedSwap] = []
+        self._skipped_degenerate: list[dict[str, Any]] = []
 
     @property
     def processed(self) -> list[tuple[dict[str, Any], datetime]]:
         """Return a copy of all (event, timestamp) pairs processed so far."""
         return list(self._processed)
+
+    @property
+    def skipped_degenerate(self) -> list[dict[str, Any]]:
+        """Return a copy of all degenerate landed swaps skipped per AC-18.4 policy.
+
+        DEGENERATE_SWAP_POLICY == "skip": these events were received (they appear
+        in processed) but were not emitted as NormalizedSwaps.  Callers can
+        inspect this list to audit what was dropped and why.
+        """
+        return list(self._skipped_degenerate)
 
     @property
     def normalized_swaps(self) -> list[NormalizedSwap]:
@@ -94,6 +165,12 @@ class TapeRecorder:
 
             # Drop failed swaps — landed-only per §6.2 / AC-18.2
             if event.get("failed", False):
+                continue
+
+            # Degenerate-swap guard (S8 / #405 / AC-18.4)
+            # Policy: SKIP — track in skipped_degenerate, never emit, never crash.
+            if _is_degenerate_swap(event):
+                self._skipped_degenerate.append(event)
                 continue
 
             mint = event.get("mint")
