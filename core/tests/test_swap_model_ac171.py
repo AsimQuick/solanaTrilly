@@ -18,7 +18,6 @@ import pytest
 
 from core.models import Swap, Token
 
-
 # ---------------------------------------------------------------------------
 # Field introspection — schema invariants
 # ---------------------------------------------------------------------------
