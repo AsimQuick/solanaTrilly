@@ -16,6 +16,7 @@ on:
       - 'scrum-master/**'
   pull_request:
     branches: [main]
+  workflow_call:
 
 jobs:
   test:
