@@ -1,0 +1,8 @@
+{
+  "version": "1",
+  "description": "Enumeration of all expected registered Celery tasks. Update this manifest whenever a task is added or removed.",
+  "tasks": [
+    "core.tasks.add",
+    "core.tasks.ping"
+  ]
+}
