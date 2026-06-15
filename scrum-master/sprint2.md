@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 5/6 stories | 20/22 ACs
-**Last Updated:** 2026-06-15T07:35:33+00:00
+**Progress:** 5/6 stories | 21/22 ACs
+**Last Updated:** 2026-06-15T07:39:34+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -372,7 +372,8 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 #### Acceptance Criteria
 - [x] **AC-7.1:** ops/firehose_activation_log.md is created and seeded with the project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10 / 10). API keys are already in .env (per po-requests.md item 3) — the ledger references them, never commits them (PRD §15.7).
   - Dev: done
-- [ ] **AC-7.2:** The ledger documents the per-activation protocol — deliberate, time-boxed (<=30 min default; adjustable by explicit PO decision), PR-reviewed — with a table schema of columns: date, role/agent, which WS (Birdeye/Helius), purpose, duration, count-remaining, fixtures banked.
+- [x] **AC-7.2:** The ledger documents the per-activation protocol — deliberate, time-boxed (<=30 min default; adjustable by explicit PO decision), PR-reviewed — with a table schema of columns: date, role/agent, which WS (Birdeye/Helius), purpose, duration, count-remaining, fixtures banked.
+  - Dev: done
 - [ ] **AC-7.3:** The ledger states the HARD RULE that every activation MUST bank durable fixtures (a tape/detection sample or golden vectors) into the lake / golden set so the spend compounds into the replay corpus; the doc is re-indexed via mcp__devrag__reindex_document (project convention). New files carry metadata front matter.
 
 **Dev Team Status:** not-started
@@ -393,6 +394,19 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
      - `test_ledger_birdeye_budget_is_ten` — Birdeye total budget of 10 stated
      - `test_ledger_helius_budget_is_ten` — Helius total budget of 10 stated
      - `test_ledger_zero_activations_used` — 0 ac …
+  AC-7.2 done: Pushed successfully.
+  
+  ---
+  
+  **Implementation summary:**
+  
+  **Files changed (2):**
+  
+  1. **`ops/firehose_activation_log.md`** (modified) — Updated front matter `story` field from `US-7 AC-7.1` to `US-7 AC-7.1 AC-7.2`. The protocol section and table schema were already present from AC-7.1 and fully satisfy AC-7.2: the protocol states activations are deliberate, time-boxed (≤ 30 min default; adjustable by explicit PO decision), and PR-reviewed. The table schema documents all 7 required columns: `date`, `role/agent`, `ws`, `purpose`, `duration`, `count_remaining`, `fixtures_banked`.
+  
+  2. **`core/tests/test_firehose_ledger_ac72.py`** (new) — 12 unit tests validating all AC-7.2 invariants: protocol section existence, "deliberate" keyword, 30-min time-box, PO-adjustable qualifier, PR-reviewed requirement, and all 7 required table schema columns (date, role/agent, ws, purpose, duration, count-remaining, fixtures banked). Metadata front matter included.
+  
+  **Test count:** 12 new tests (172 total, was 160). **Coverage:** ≥80% gate passes.
 
 **Tester Status:** approved
 **Tester Notes:**
