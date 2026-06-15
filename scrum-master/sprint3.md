@@ -1,8 +1,8 @@
 # Sprint 3
 
 **Phase:** planning
-**Progress:** 0/4 stories | 1/16 ACs
-**Last Updated:** 2026-06-15T08:23:34+00:00
+**Progress:** 0/4 stories | 2/16 ACs
+**Last Updated:** 2026-06-15T08:28:35+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -33,7 +33,8 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
 #### Acceptance Criteria
 - [x] **AC-8.1:** deploy.yml creates the deploy target directory on the VPS BEFORE the SCP: an 'ssh … mkdir -p /root/solanatrilly' (or equivalent) runs ahead of the 'scp docker-compose.staging.yml …:/root/solanatrilly/' step so the SCP no longer errors 'No such file or directory' (retrospective B1; the root cause Tester recorded for run 27531582183). Verified by (a) a structural test asserting a mkdir -p of the SCP target path precedes the scp step in deploy.yml, and (b) the actual deploy run on main completing the SCP successfully.
   - Dev: done
-- [ ] **AC-8.2:** deploy.yml gains a 'workflow_dispatch:' trigger in addition to 'push: branches: [main]' so a deploy can be fired on demand — fixing the HTTP 422 'Workflow does not have workflow_dispatch trigger' that blocked the orchestrator's full-sprint deploy (retrospective B2; deploy_summary in sprint2.json). Verified by parsing deploy.yml for the workflow_dispatch key AND by a successful manual dispatch of the workflow.
+- [x] **AC-8.2:** deploy.yml gains a 'workflow_dispatch:' trigger in addition to 'push: branches: [main]' so a deploy can be fired on demand — fixing the HTTP 422 'Workflow does not have workflow_dispatch trigger' that blocked the orchestrator's full-sprint deploy (retrospective B2; deploy_summary in sprint2.json). Verified by parsing deploy.yml for the workflow_dispatch key AND by a successful manual dispatch of the workflow.
+  - Dev: done
 - [ ] **AC-8.3:** A deploy on main (or via workflow_dispatch) succeeds end-to-end: the web image is built and pushed to GHCR (ghcr.io/asimquick/solanatrilly), pulled on the VPS, and the stack is brought up with 'docker compose -p solanatrilly -f docker-compose.staging.yml pull && up -d'; the CD smoke-test step then hits http://VPS:8002/health/ and asserts HTTP 200 — proving the local -> GitHub -> GHCR -> VPS path end-to-end (closes US-6 AC-6.4; PRD §15.5 'VPS presence from P0'). Verified by the green deploy run with the smoke-test step passing 200.
 - [ ] **AC-8.4:** solanaBilly hard isolation is verified on the VPS after the solanatrilly deploy: 'docker compose -p solanabilly ps' shows solanaBilly containers still running/up and port 8001 still responds; every docker command in deploy.yml remains -p solanatrilly-scoped with NO unscoped down / up --force-recreate / prune / volume-removal anywhere in the file (closes US-6 AC-6.5; PRD §15.3). Verified by the deploy run's isolation step passing AND a structural test re-asserting the scope/no-destructive-command invariants.
 - [ ] **AC-8.5:** VPS verification gates 'done' (retrospective B3): the story is NOT Done on green pytest alone — the Tester confirms, from the actual deploy run, that the running stack answers HTTP 200 on 8002 and solanaBilly is untouched on 8001. On confirmation, US-1's story-level DoD (the sprint-1 deploy blocker, retrospective A1) is retroactively CLOSED and P0 is exited. The US-6 record is normalized so no AC reads done while failed (retrospective B4). New/changed files carry metadata front matter.
@@ -55,6 +56,17 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
   2. **`core/tests/test_deploy_workflow_ac81.py`** *(new)* — Structural test file (4 tests) that parses `deploy.yml` as YAML and asserts: (a) `mkdir -p /root/solanatrilly` is present in the deploy job's run script, (b) the mkdir line precedes the scp line by line-index comparison, (c) the mkdir targets the correct path `/root/solanatrilly`, and (d) the scp destination path `/root/solanatrilly/` is still present (regression guard).
   
   **Test count:** 4 new tests (AC-8.1 structural). **Total suite:** 184 passed. **Coverage:** 100% (threshold ≥ 80% met).
+  AC-8.2 done: ---
+  
+  **Implementation summary — US-8 AC-8.2**
+  
+  **Files changed (2):**
+  
+  1. **`.github/workflows/deploy.yml`** — Added `workflow_dispatch:` as a sibling trigger alongside the existing `push: branches: [main]` in the `on:` block. Updated front-matter `story` field to include `AC-8.2`. This fixes the HTTP 422 error (retrospective B2) that blocked on-demand orchestrator deploys.
+  
+  2. **`core/tests/test_deploy_workflow_ac82.py`** *(new)* — Structural test file (3 tests) that parses `deploy.yml` as YAML and asserts: (a) `workflow_dispatch` key is present in the `on:` block, (b) it is a top-level sibling key of the `on:` mapping (not nested), and (c) the `push: branches: [main]` trigger was not accidentally removed (regression guard).
+  
+  **Test count:** 3 new tests (AC-8.2 structural). **Total suite:** 187 passed. **Coverage:** 100% (threshold ≥ 80% met).
 
 **Tester Status:** approved
 **Tester Notes:**
