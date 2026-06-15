@@ -1,19 +1,22 @@
 # ---
 # module: core.models
 # sprint: sprint-3
-# story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3
+# story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
-# dependencies: django, core.encoders, simple_history
+# dependencies: django, core.encoders, simple_history, core.schemas, pydantic
 # ---
 # Domain models live here. Run `docker compose run --rm web python manage.py
 # makemigrations` after adding models, and commit the generated migration.
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models
+from pydantic import ValidationError as PydanticValidationError
 from simple_history.models import HistoricalRecords
 
 from core.encoders import JsonSafeEncoder
+from core.schemas import PipelineConfigSchema
 
 
 class RawEvent(models.Model):
@@ -72,6 +75,41 @@ class PipelineConfig(models.Model):
 
     # Audit trail — every create/update records who and when (US-9 AC-9.2).
     history = HistoricalRecords()
+
+    def clean(self):
+        """Validate sections through the Pydantic schema on the write path (AC-10.4, PRD §5.2).
+
+        Only fires when the invariant-bearing sections carry their minimum required
+        fields, so that empty or partial draft rows remain storable.  A populated
+        config that violates a §5.2 invariant is rejected with Django ValidationError
+        so it CANNOT be persisted via the admin UI or direct .save() calls.
+        """
+        tape = self.tape or {}
+        scoring = self.scoring or {}
+        outcome = self.outcome or {}
+        # Skip when the required cross-section fields are absent (incomplete config).
+        if not (
+            "idle_kill_ttl_s" in tape
+            and "score_at_elapsed_s" in scoring
+            and "window_s" in scoring
+            and "window_s" in outcome
+        ):
+            return
+        try:
+            PipelineConfigSchema.from_model_sections(
+                detection=self.detection or {},
+                tape=tape,
+                scoring=scoring,
+                outcome=outcome,
+                trading=self.trading or {},
+            )
+        except PydanticValidationError as exc:
+            raise DjangoValidationError(str(exc)) from exc
+
+    def save(self, *args, **kwargs):
+        """Run Pydantic schema validation before persisting (AC-10.4, PRD §5.2)."""
+        self.clean()
+        super().save(*args, **kwargs)
 
     class Meta:
         app_label = "core"
