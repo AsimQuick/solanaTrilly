@@ -1,8 +1,8 @@
 # Sprint 3
 
 **Phase:** planning
-**Progress:** 3/4 stories | 14/16 ACs
-**Last Updated:** 2026-06-15T10:17:25+00:00
+**Progress:** 3/4 stories | 15/16 ACs
+**Last Updated:** 2026-06-15T12:00:00+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -325,13 +325,16 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
 #### Acceptance Criteria
 - [x] **AC-11.1:** A single cached get_active_config() resolver is the ONLY way any service reads a tunable: it returns the is_active PipelineConfig (resolved/validated via US-10's schema). Verified by (a) a pytest test that get_active_config() returns the active config and is cached (a second call does not re-query), and (b) a static-analysis guard (in the spirit of US-2) asserting no core/service module reads a pipeline tunable via os.getenv or a code constant instead of the resolver — passing now, becoming a regression gate as services land.
   - Dev: done
-- [ ] **AC-11.2:** Activation is one ATOMIC flip of is_active with instant rollback: activating version N deactivates the previously active version in the same transaction (never two actives), and re-activating the prior version restores it. The resolver cache invalidates on activation so the next get_active_config() returns the newly active config. Verified by a pytest test that activates v1, reads, activates v2, reads (gets v2), rolls back to v1, reads (gets v1) — with exactly one is_active row at every step.
+- [x] **AC-11.2:** Activation is one ATOMIC flip of is_active with instant rollback: activating version N deactivates the previously active version in the same transaction (never two actives), and re-activating the prior version restores it. The resolver cache invalidates on activation so the next get_active_config() returns the newly active config. Verified by a pytest test that activates v1, reads, activates v2, reads (gets v2), rolls back to v1, reads (gets v1) — with exactly one is_active row at every step.
+  - Dev: done
 - [ ] **AC-11.3:** No silent auto-start: pipeline_state's firehose_active / trading_enabled / scoring_enabled are only ever changed by an explicit, deliberate action — no code path sets them True on boot, on app ready, on resolver read, or on a WS drop (§5.3, §15.6). Verified by a pytest test that boots/imports the app and calls get_active_config() and asserts pipeline_state flags remain at their persisted values (a False stays False — nothing auto-flips). New files carry metadata front matter.
 
 **Dependencies:** US-9, US-10
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
 **Dev Team Notes:**
+  AC-11.2 done: `activate_config(config_id)` added to `core/resolver.py`. Uses `transaction.atomic()` to deactivate all active rows then activate the target in one transaction — exactly one `is_active=True` row at every point. Cache is invalidated via `invalidate_active_config_cache()` after the transaction commits. `PipelineConfig.DoesNotExist` raised for non-existent IDs. 9 new tests in `core/tests/test_resolver_ac112.py` cover: single-active-row invariant after each step, cache invalidation, rollback (v1→v2→v1), and DoesNotExist guard. All 299 tests pass, ruff lint clean.
+
   AC-11.1 done: Implementation is complete and pushed. Here is the summary for the orchestrator:
   
   ---
