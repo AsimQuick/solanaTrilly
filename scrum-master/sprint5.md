@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 5/6 stories | 18/20 ACs
-**Last Updated:** 2026-06-15T21:55:48+00:00
+**Last Updated:** 2026-06-15T22:41:42+00:00
 
 ## Sprint Goal
 Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and prove detection live (retrospective D4). P0/P1/P2 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, and P2 detection lands graduated tokens in the 'tokens' table with graduated_block_time carried as the integer rel-anchor the recorder needs. Sprint-5 builds the PumpSwap swap-tape recorder that captures every swap from t0 and turns it into the project's primary dataset. Deliver, IN ORDER: (1) the persistence target — the 'swaps' table (§8) + the one NormalizedSwap schema (§7.1) with rel ANCHORED to the DB Token.graduated_block_time/graduated_at (never the first swap's time) and the source/phase/side constrained vocabularies (US-17); (2) the recorder CORE behind the DataSource seam + injected clock (US-2 / Principle #7) — port tape_recorder.py's queue/writer/window/coverage scaffolding source-agnostically, emit one NormalizedSwap per LANDED swap with owner=the tx signer and all three units (vol_sol/vol_usd/sol_usd, D1), drop failed swaps, enforce the canonical STABLE sort on (block_time, slot, signature) (never block_time alone — #403), and keep the zero/degenerate-swap guard (#405 ZeroDivisionError) (US-18); (3) the lake + queryable mirror — append-only daily-partitioned jsonl.gz at lake/tapes/dt=YYYY-MM-DD/part-*.jsonl.gz (raw=immutable truth, §6.4.1) + the 'swaps' table writer (idempotent on (mint, signature)) + a truncated-tail-tolerant reader (port _iter_tape_rows — recovered 161k rows) (US-19); (4) recorder resilience — seek_by_time reconciliation that closes WS gaps using the IDENTICAL call/path the offline backfill uses (one code path → backfill parity by construction) + idle-kill TTL deactivate-but-RE-ATTACH on the next swap, with idle_kill_ttl_s read from get_active_config() (Principle #1, the §5.2 TTL≥outcome.window_s invariant already enforced in P1) (US-20); (5) the P3 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye swap stream through ReplaySource + virtual clock → EXACTLY the expected NormalizedSwaps/swaps rows, deterministically (run twice → byte-identical), plus live↔backfill byte-parity on golden token(s) and the ordering/truncated-tail/zero-guard regression suite green in CI (US-21). FINALLY (retrospective D4): wire a concrete Birdeye SUBSCRIBE_TXS source into run_listener on the VPS listener container (behind the existing seam — core path untouched, US-2 guard still green), spend the FIRST of the 10 Birdeye firehose activations — deliberate, time-boxed ≤30 min, logged in ops/firehose_activation_log.md (§15.7) — confirm a real graduated token's PumpSwap swaps flow end-to-end to swaps rows + jsonl.gz on the box, and BANK the durable capture as the golden-token fixture US-21's parity/replay test runs against offline forever (US-22). Build order: US-17 FIRST (the persistence target everything writes to); then US-18 (core) → US-19 (lake) → US-20 (resilience) are sequential on the core; US-21 (offline gate) needs US-18/19/20; US-22 (live D4) is LAST and depends on the listener (US-16) + the built recorder — the offline P3 gate (US-21) does NOT depend on the live activation, so a failed/abbreviated firehose window never blocks P3 exit. Process carries: update phase + story dev_status to their real values BEFORE any sprint-end deploy so the US-13 integrity guard isn't tripped by our own staleness (D2); promote story-level dev_status to 'done' at closeout instead of relying on US-13's --skip-complete carve-out (D3); and the standing rule — before declaring any blocker 'human/operator required', run the on-box check the root SSH we already have allows (D5).
@@ -452,10 +452,34 @@ Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and pro
   2. **`core/tape/birdeye_swap_source.py`** (new) — `BirdeyeSwapSource(DataSource)` concrete adapter. Connects to `wss://public-api.birdeye.so/socket/solana` with `X-API-KEY` auth header, sends `SUBSCRIBE_TXS` subscription for the given mint (`txType: "swap"`), and yields parsed swap-event dicts (unwrapped from Birdeye's `{"type":…,"data":{…}}` envelope). `websockets` is imported lazily inside `connect()` to keep module import-time free of network side effects. Contains no `datetime.now()`, `time.time()`, `LiveSource`, or `ReplaySource` references — all existing US-2 guards remain green.
   
   3. **`core/management/commands/run_listener.py`** (modified) — Added top-level imports (`BirdeyeSwapSource`, `WallClock`, `TapeRecorder`, `settings`) and the module-level function `build_swap_recorder(api_key: str, mint: str) -> TapeRecorder` — the single, declared adapter-wiring point where conc …
+  AC-22.2.1 fixed: **Fix:** Staged and committed the previously-omitted `ops/firehose_activation_log.md` to `feature/US-22-AC-22.2.1`. No code changes were needed — the file was already correct on disk with the `| Birdeye | 10 | 1 | 9 |` budget row and the `Birdeye SUBSCRIBE_TXS` activation log entry; it just hadn't been included in commit `a0a89d2`. CI will now see both entries that `test_ledger_budget_decremented_to_9_birdeye` and `test_ledger_has_activation_row` assert on.
 
 **Tester Status:** approved
 **Tester Notes:**
-  All 3 ACs testable. AC-22.3 amended directly to specify the two durable evidence items (VPS psql count >= 1 + committed fixture path) so the live-proof gate has an unambiguous pass/fail criterion; no PO judgment needed.
+  AC-22.2.1 diagnosis: I have the full diagnosis.
+  
+  ---
+  
+  ## Diagnosis: Code Bug — Missing Commit of Updated Ledger File
+  
+  **Classification:** Code bug (incomplete commit). Not a requirements issue.
+  
+  **Severity:** Low — single-file fix.
+  
+  ---
+  
+  ### What failed
+  
+  Two tests in `core/tests/test_firehose_activation_ac222.py`:
+  
+  - `test_ledger_budget_decremented_to_9_birdeye` (line 244) — reads `ops/firehose_activation_log.md` and regex-searches for `| Birdeye | 10 | 1 | 9 |`. Found nothing.
+  - `test_ledger_has_activation_row` (line 252) — asserts `"Birdeye SUBSCRIBE_TXS"` is present in the same file. Also not found.
+  
+  ### Root cause
+  
+  The dev-team updated `ops/firehose_activation_log.md` locally — the file on disk already has the correct budget row (`| Birdeye | 10 | 1 | 9 |`) and the full activation log entry (`Birdeye SUBSCRIBE_TXS`, `9 Birdeye / 10 Helius`, fixture path) — but **never staged or committed it**. `git status` at session start shows `M ops/firehose_activation_log.md` (modified, unstaged). The AC-22.2.1 commit (`a0a89d2`) only pushed three files: `tools/firehose_activate.py`, the golden fixture `.jsonl.gz`, and `core/tests/test_firehose_activation_ac222.py`. The ledger was left behind.
+  
+  CI runs against …
 
 ---
 
