@@ -72,7 +72,7 @@
     {
       "id": "US-18",
       "title": "P3 \u2014 the tape recorder core behind the DataSource seam: NormalizedSwap emission, canonical ordering, owner=signer, drop-failed, zero-guard (\u00a76.2, Principle #7)",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-17",
@@ -83,8 +83,8 @@
         {
           "id": "18.1",
           "text": "A TapeRecorder consumer reads swap events from a DataSource (NOT a concrete Birdeye client) and reads time from an injected clock \u2014 the live/replay seam from US-2 / Principle #7, consuming events via the existing stamp_events helper as the detection consumer does. Verified by (a) a pytest test driving the recorder from an in-memory/ReplaySource and (b) the US-2-style static-analysis guard holding: no concrete-source import and no time.time()/datetime.now() on the core recorder path.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -110,7 +110,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-18.1 done: Pushed successfully to `feature/US-18-AC-18.1`.\n\n---\n\n**Implementation Summary**\n\n**Files changed (3 new files):**\n\n1. **`core/tape/__init__.py`** \u2014 Package init for the `tape` sub-package. Metadata front matter carried. Documents the Principle #7 constraint for all tape modules (no concrete-source imports, no direct time calls).\n\n2. **`core/tape/recorder.py`** \u2014 `TapeRecorder` class. Mirrors the `DetectionConsumer` pattern exactly: accepts `DataSource` + `Clock` in `__init__`, calls `stamp_events(self._source, self._clock)` in `run()`, accumulates `(event, timestamp)` pairs in `self._processed`. No concrete-source imports; no `datetime.now()` or `time.time()` anywhere.\n\n3. **`core/tests/test_tape_recorder_ac181.py`** \u2014 6 pytest tests:\n   - `test_recorder_processes_swap_events_from_replay_source` \u2014 drives TapeRecorder from ReplaySource, asserts all 3 events stored with correct payloads (criterion a)\n   - `test_recorder_timestamps_use_injected_clock` \u2014 proves timestamps come from VirtualClock, not wall time (criterion a)\n   - `test_recorder_empty_source_processes_zero_events` \u2014 empty source \u2192 empty processed list\n   - `test_recorder_single_event` \u2014 single-event source \u2192 1 entry with \u2026",
       "tester_status": "approved",
       "tester_notes": "All 4 ACs testable. AC-18.4 'documented handling occurs' is bounded by the skipped-or-flagged policy stated in the same AC \u2014 not ambiguous."
     },
@@ -264,7 +264,7 @@
       "tester_notes": "All 3 ACs testable. AC-22.3 amended directly to specify the two durable evidence items (VPS psql count >= 1 + committed fixture path) so the live-proof gate has an unambiguous pass/fail criterion; no PO judgment needed."
     }
   ],
-  "last_updated": "2026-06-15T16:24:01+00:00",
+  "last_updated": "2026-06-15T16:31:01+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-5 in planning.",
   "tester_sprint_status": "not-started",
   "tester_sprint_notes": "Requirements validation complete 2026-06-15. All 6 stories / 20 ACs approved. One minor wording fix applied directly to AC-22.3 (added two durable VPS evidence items so the live-proof gate has a binary pass/fail; no scope change). Sprint ready for development to begin in build order: US-17 \u2192 US-18 \u2192 US-19/US-20 (sequential) \u2192 US-21 \u2192 US-22."
