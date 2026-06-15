@@ -1,7 +1,7 @@
 # ---
 # module: core.admin
-# sprint: sprint-3, sprint-4
-# story: US-9 AC-9.4, US-14 AC-14.3
+# sprint: sprint-3, sprint-4, sprint-5
+# story: US-9 AC-9.4, US-14 AC-14.3, US-17 AC-17.4
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
@@ -10,7 +10,7 @@
 from django.contrib import admin
 from simple_history.admin import SimpleHistoryAdmin
 
-from core.models import PipelineConfig, Token
+from core.models import PipelineConfig, Swap, Token
 
 
 @admin.register(PipelineConfig)
@@ -31,3 +31,26 @@ class TokenAdmin(admin.ModelAdmin):
     list_filter = ["status", "dex_source"]
     readonly_fields = ["mint", "graduated_at", "graduated_block_time", "raw_graduation"]
     ordering = ["-graduated_at"]
+
+
+@admin.register(Swap)
+class SwapAdmin(admin.ModelAdmin):
+    """Admin for Swap — immutable raw blockchain swap tape, read-only (US-17 AC-17.4)."""
+
+    list_display = ["id", "mint", "side", "price", "block_time", "owner"]
+    readonly_fields = [
+        "mint",
+        "block_time",
+        "slot",
+        "signature",
+        "side",
+        "price",
+        "vol_sol",
+        "vol_usd",
+        "sol_usd",
+        "owner",
+        "base_reserve",
+        "quote_reserve",
+        "rel",
+    ]
+    ordering = ["-block_time", "-slot"]
