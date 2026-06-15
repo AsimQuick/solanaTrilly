@@ -3,8 +3,8 @@
 # stack: django
 # purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
 #          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
-# sprint: sprint-2
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5
+# sprint: sprint-3
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1
 # created-by: dev-team
 # last-updated: 2026-06-15
 # ---
@@ -69,6 +69,9 @@ jobs:
         run: |
           printf '%s\n' "$VPS_SSH_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
+          ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
+            "${VPS_USER}@${VPS_HOST}" \
+            'mkdir -p /root/solanatrilly'
           scp -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
             docker-compose.staging.yml \
             "${VPS_USER}@${VPS_HOST}:/root/solanatrilly/docker-compose.staging.yml"
