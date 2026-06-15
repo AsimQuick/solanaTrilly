@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 2/6 stories | 8/22 ACs
-**Last Updated:** 2026-06-15T05:37:38+00:00
+**Last Updated:** 2026-06-15T05:38:08+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -101,6 +101,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
      File carries metadata front matter (`module`, `sprint`, `story`, `status`, `created-by`, `last-updated`, `dependencies`).
   
   **Te …
+  [DEPLOY] Deploy trigger failed. Will be caught by full sprint deploy.
 
 **Tester Status:** approved
 **Tester Notes:**
