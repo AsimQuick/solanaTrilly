@@ -1,8 +1,8 @@
 # Sprint 4
 
 **Phase:** planning
-**Progress:** 2/5 stories | 9/18 ACs
-**Last Updated:** 2026-06-15T12:35:26+00:00
+**Progress:** 2/5 stories | 10/18 ACs
+**Last Updated:** 2026-06-15T12:42:08+00:00
 
 ## Sprint Goal
 Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only remaining P0 blocker — the VPS deploy whose smoke-test has failed with curl exit code 7 on all 13 Sprint-3 deploy runs. Per retrospective C1, DIAGNOSE port-8002 ON the VPS (agents have root SSH per CLAUDE.md — the 'human escalation required' claim in the Sprint-3 review contradicts CLAUDE.md): ssh root@140.82.43.36, run 'curl -v localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the port publish/bind in docker-compose.staging.yml, and check ufw/iptables — to distinguish an operator-style firewall fix (which agents CAN apply as root: 'ufw allow 8002/tcp') from a code-level port-publish/bind bug (e.g. the container binding 127.0.0.1 or the host port not published). Apply whatever the on-box diagnosis finds, make the CD smoke-test retry with backoff AT RUNTIME (C3 — the Sprint-3 run showed the curl failing immediately with no retry) and upgrade its structural test to verify runtime retry behavior, not just file text, then run the deploy GREEN on main and confirm HTTP 200 on 8002 with solanaBilly untouched on 8001 — closing US-8 AC-8.3/8.4/8.5, US-6, and retroactively US-1's deploy-gated DoD, and finally EXITING P0 (US-12). Enforce status integrity PROGRAMMATICALLY with a CI guard on sprintN.json that forbids status:done while tester_status is failed/blocked and flags stale phase/dev_status (US-13; retrospective C4, logged unactioned in sprint-1/2/3). THEN deliver P2 detection (PRD §6.1, §8, §16): the 'tokens' model (US-14); a Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam + injected clock (US-2 / Principle #7) that creates tokens rows from the ACTIVE config's detection filter (US-11 resolver), dedupes within dedupe_window_s, and pre-stages near-graduation mints by prestage_progress_pct — offline-gated by replaying a captured/synthetic MEME stream through ReplaySource -> expected token rows (US-15); and detection resilience — the Helius 'migrate' reconciler backstop (D4) + a periodic Birdeye REST graduation sweep (third belt) + a dedicated 'listener' container in docker-compose.yml and docker-compose.staging.yml (US-16). Build order: US-12 FIRST (P0 closeout, the gating milestone — retrospective C2/B5; it is independent of the P2 chain and MAY run in parallel) and US-13 (process guard, independent); then the P2 chain US-14 -> US-15 -> US-16 (US-15 needs the tokens model + resolver + DataSource seam; US-16 needs the consumer).
@@ -246,7 +246,8 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 #### Acceptance Criteria
 - [x] **AC-14.1:** A Token Django model (table 'tokens', PRD §8) holds one row per graduated token with columns: mint (PK, CharField), pool_address, graduated_at (TIMESTAMPTZ — t0), graduated_block_time (INT — the rel-anchor), dex_source, raw_graduation (JSONField, declared with encoder=JsonSafeEncoder so the H3/US-5 guard test stays green), and status. 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a token row and reads every column back.
   - Dev: done
-- [ ] **AC-14.2:** status uses a constrained vocabulary on a width-bounded column (the §8 VARCHAR-width discipline — new status vocabulary is constrained, not free text), with t0 anchored to graduated_at and graduated_block_time carried as the integer rel-anchor used by the tape recorder later (P3). The status choices and their max length must be defined in the model's choices parameter (not checked at the DB level alone). Verified by a pytest test asserting the status choices list is non-empty, each choice fits within the declared max_length, and that a row's t0 fields round-trip.
+- [x] **AC-14.2:** status uses a constrained vocabulary on a width-bounded column (the §8 VARCHAR-width discipline — new status vocabulary is constrained, not free text), with t0 anchored to graduated_at and graduated_block_time carried as the integer rel-anchor used by the tape recorder later (P3). The status choices and their max length must be defined in the model's choices parameter (not checked at the DB level alone). Verified by a pytest test asserting the status choices list is non-empty, each choice fits within the declared max_length, and that a row's t0 fields round-trip.
+  - Dev: done
 - [ ] **AC-14.3:** Token is registered in the Django admin (changelist + detail). Verified by pytest tests that request the admin changelist and a change-detail page for Token as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
 
 **Dependencies:** US-1, US-5
@@ -266,6 +267,23 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
   - `core/migrations/0005_token.py` *(new)* — Auto-generated migration creating the `tokens` table. Applies cleanly against real Postgres via `docker compose run --rm web python manage.py migrate`. Metadata front matter included.
   
   - `core/tests/test_token_model_ac141.py` *(new)* — 10 pytest tests with metadata front matter. Covers: db_table name, mint is PK, raw_graduation uses JsonSafeEncoder, graduated_block_time is IntegerField, graduated_at is DateTimeField, status has choices, status default is DETECTED, full every- …
+  AC-14.2 done: Done and pushed to `feature/US-14-AC-14.2`.
+  
+  ---
+  
+  **Implementation Summary for AC-14.2**
+  
+  **Files changed (2):**
+  
+  - `core/models.py` *(modified)* — Header `story:` line updated to include `US-14 AC-14.2`. No logic changes; the model was already fully compliant (STATUS_CHOICES, max_length=20, choices= parameter, graduated_at/graduated_block_time fields) from AC-14.1.
+  
+  - `core/tests/test_token_model_ac142.py` *(new)* — 4 focused tests with metadata front matter:
+    1. `test_status_choices_non_empty` — asserts `len(Token.STATUS_CHOICES) > 0`
+    2. `test_each_status_choice_fits_within_max_length` — iterates every `(db_value, label)` pair and asserts `len(db_value) <= field.max_length`, enforcing the VARCHAR-width discipline in Python (not DB alone)
+    3. `test_status_choices_defined_in_field_choices_parameter` — asserts `field.choices == Token.STATUS_CHOICES`, confirming choices are declared in Django's `choices=` parameter
+    4. `test_t0_fields_round_trip` (`@pytest.mark.django_db`) — creates a Token row with specific `graduated_at` UTC datetime and `graduated_block_time=335_123_456`, reads back from Postgres, asserts byte-identical values and that `graduated_block_time` is an `int`
+  
+  **Te …
 
 **Tester Status:** approved
 **Tester Notes:**
