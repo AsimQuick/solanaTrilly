@@ -7,8 +7,8 @@ last-updated: 2026-06-15
 
 # solanaTrilly — Scrum Master Board
 
-## Current Sprint: sprint-4 — Exit P0 (for real), Open P2 (Detection)
-- **Phase:** planning
+## Current Sprint: sprint-4 — Exit P0 (for real), Open P2 (Detection) — CLOSED (review complete)
+- **Phase:** review (closed)
 - **Sprint plan (source of truth):** [`sprint4.json`](sprint4.json)
 - **PRD:** [`PRD.md`](PRD.md) — finally exits **PRD §16 P0** (the GREEN VPS deploy) and delivers **P2 (detection, §6.1)**
 - **Previous sprint:** [`sprint3.json`](sprint3.json) — **closed** (review complete; P1 config core delivered in code, US-8 deploy failed; see Sprint-3 Review below + [`retrospective.md`](retrospective.md))
@@ -30,19 +30,26 @@ expected token rows** (US-15); and detection resilience — the Helius `migrate`
 a Birdeye REST sweep + a dedicated `listener` container (US-16).
 
 ## Stories (sprint-4 — committed scope)
-| ID | Title | Priority | Deps | ACs | Status |
-|----|-------|----------|------|-----|--------|
-| US-12 | P0 closeout (4th attempt) — diagnose+fix VPS port-8002 on the box, GREEN smoke-test, exit P0 (closes US-8 8.3/8.4/8.5 + US-6 + US-1 DoD) | high | US-8 | 5 | ready |
-| US-13 | Process guard — programmatic status-integrity check on `sprintN.json` in CI (C4/A5/B4) | high | US-1 | 3 | ready |
-| US-14 | P2 — the `tokens` model: graduated-token persistence target (§8) | high | US-1, US-5 | 3 | ready |
-| US-15 | P2 — Birdeye `SUBSCRIBE_MEME` detection consumer behind the `DataSource` seam → `tokens` rows (offline gate) | high | US-14, US-11, US-2 | 4 | ready |
-| US-16 | P2 — detection resilience: Helius `migrate` reconciler + Birdeye REST sweep + dedicated `listener` container | high | US-14, US-15 | 3 | ready |
+| ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
+|----|-------|----------|------|-----|--------|-----|--------|
+| US-12 | P0 closeout (4th attempt) — diagnose+fix VPS port-8002 on the box, GREEN smoke-test, exit P0 (closes US-8 8.3/8.4/8.5 + US-6 + US-1 DoD) | high | US-8 | 5 | done | done | **approved** |
+| US-13 | Process guard — programmatic status-integrity check on `sprintN.json` in CI (C4/A5/B4) | high | US-1 | 3 | done | done | **approved** |
+| US-14 | P2 — the `tokens` model: graduated-token persistence target (§8) | high | US-1, US-5 | 3 | done | done | **approved** |
+| US-15 | P2 — Birdeye `SUBSCRIBE_MEME` detection consumer behind the `DataSource` seam → `tokens` rows (offline gate) | high | US-14, US-11, US-2 | 4 | done | done | **approved** |
+| US-16 | P2 — detection resilience: Helius `migrate` reconciler + Birdeye REST sweep + dedicated `listener` container | high | US-14, US-15 | 3 | done | done | **approved** |
 
 > **Scope:** sprint-4 commits **5 stories / 18 ACs** — the P0 deploy closeout (US-12) + a process guard
-> (US-13) + the P2 detection core (US-14…US-16). Source of truth: [`sprint4.json`](sprint4.json). After
-> US-12 deploys green and is VPS-verified, **P0 is finally exited** and US-1's deploy-gated DoD closes
-> retroactively; after US-14…US-16, **P2 (detection) is delivered** and the project advances to **P3 (tape
-> recorder)**.
+> (US-13) + the P2 detection core (US-14…US-16). Source of truth: [`sprint4.json`](sprint4.json). **Review
+> outcome: all 5 stories Tester-approved (18/18 ACs); P0 is EXITED** — the staging stack answers 200 on 8002,
+> solanaBilly untouched on 8001 — and US-1's deploy-gated DoD closes retroactively; **P2 (detection) is
+> delivered** and the project advances to **P3 (tape recorder)**. See the Sprint-4 Review below +
+> [`retrospective.md`](retrospective.md) (action items D1–D5).
+
+> **Status integrity note (the recurring A5/B4/C4 artifact):** `sprint4.json` still records story-level
+> `dev_status: not-started` on all five completed stories while every AC is `dev_status: done` +
+> `tester_status: approved`. US-13's CI guard exempts accepted stories (`--skip-complete` / story-done
+> carve-out) so this no longer fails CI, but the field should be **promoted to `done` at closeout**, not
+> exempted — carried as **D3**. The board above reflects the normalized (`done`/`approved`) state.
 
 **Build order:** **US-12 first** — the gating P0 closeout (retro C2/B5); it is independent of the P2 chain
 and may run in parallel. **US-13** (process guard) is independent. The P2 chain is sequential: **US-14**
@@ -131,6 +138,54 @@ A story is Done only when ALL of the following hold:
 - Hard isolation from live solanaBilly preserved (every docker command scoped with `-p solanatrilly`; solanaBilly on port 8001 untouched)
 - **Status integrity enforced (retrospective B4):** no story/AC reads `status: done` while its `tester_status` is `failed`/`blocked`; stale `phase`/`dev_status` fields are normalized at review.
 - `retrospective.md` updated for sprint-3 — **named owner: Tester / scrum facilitator** (retrospective A3)
+
+## Sprint-4 Review — Summary (2026-06-15)
+**Phase:** review | **Committed scope:** US-12 + US-13 + US-14/US-15/US-16 (5 stories, 18 ACs) | **Goal:** **fully met — P0 EXITED, P2 delivered**
+**Full retrospective + action items (D1–D5):** [`retrospective.md`](retrospective.md)
+
+**Outcome:** **All 5 stories are fully Tester-approved — 18/18 ACs green across 18 merged PRs.** After three sprints of P0-deploy drag,
+**P0 IS EXITED**: the isolated staging stack answers **HTTP 200 on port 8002** with solanaBilly untouched on **8001**, confirmed by the Tester
+from an actual green deploy run (run 27555701056). **US-1's deploy-gated DoD (retro A1, open since sprint-1), US-6, and US-8 AC-8.3/8.4/8.5
+all close retroactively.** **P2 (detection) is delivered** and the project advances to **P3 (tape recorder)**.
+
+**US-12 — P0 closeout, the on-box diagnosis cracked it (C1/C2/C3).** SSH'ing to the VPS (root, per CLAUDE.md) **falsified the three-sprint
+"firewall" story**: no ufw, iptables INPUT ACCEPT-all, `0.0.0.0:8002->8000/tcp` correctly published, HTTP 200 both locally and externally. The
+real root cause was a **smoke-test timing race** — the curl fired immediately after `docker compose up -d`, hitting the container mid-startup
+(migrations before daphne binds). The fix is runtime retry-with-backoff (AC-12.3, `SMOKE_MAX_ATTEMPTS`/`SMOKE_RETRY_DELAY`), with the structural
+test upgraded to assert *runtime* loop/sleep/max-attempts behavior in the parsed YAML — closing the sprint-2/3 B3 "green test ≠ live runtime" gap.
+The "human escalation required / agents lack firewall access" claim that gated three sprints was simply **wrong**.
+
+**US-13 — the status-integrity guard proved itself live (C4).** `tools/sprint_integrity_check.py` runs in CI on every PR over all `sprint*.json`,
+forbidding `done`+`failed/blocked` and flagging stale `dev_status`/`phase`. It **immediately caught a real violation**: the orchestrator's
+sprint-end re-deploys (runs 27555736146, 27555822147) failed at the integrity step because `sprint4.json` still read `phase:'planning'` while
+every story was done. The "done ≠ failed/blocked" class logged-and-unactioned in A5/B4/C4 is now a permanent, self-enforcing gate.
+
+**US-14/15/16 — P2 detection, behind the live/replay seam, budget preserved.** US-14 ships the `tokens` model (PK `mint`, `graduated_at` t0,
+`graduated_block_time` integer rel-anchor for the P3 recorder, constrained status vocabulary, `JsonSafeEncoder` raw lake, admin surface). US-15's
+consumer reads MEME events from a `DataSource` + injected clock (US-2 static-analysis guard still green), writes `tokens` rows from the
+`get_active_config()` detection filter (Principle #1 — no constant/`os.getenv`), dedupes within `dedupe_window_s`, and pre-stages near-graduation
+mints — with a **deterministic offline replay gate** on a synthetic MEME stream (run twice → identical rows). US-16 adds three-belt resilience:
+the Helius `migrate` reconciler (recovers a mint a dropped MEME event missed, exactly once via `get_or_create`), a registered Birdeye REST
+graduation sweep (Celery-beat, H2 manifest-guarded), and a dedicated `listener` container in both compose files, up on the VPS (#289 lesson).
+**No firehose activation was spent** — the offline gate is synthetic, so 10 Birdeye + 10 Helius remain banked.
+
+**Defects:** only 3 trivial lint slips (ruff E741 AC-12.5 ambiguous `l`; F541 AC-15.2 empty f-string; E501 AC-15.4 long header) — each caught by
+Tester diagnosis and fixed same-day in one iteration. None reached pytest or production. Coverage ≥80% enforced throughout.
+
+**Process note (the recurring artifact, now caught by the guard).** Story-level `dev_status` still reads `not-started` on all five done stories;
+US-13's `--skip-complete`/story-done carve-out exempts accepted stories from CI rather than normalizing the field — promote to `done` at closeout
+(D3). The sprint-end deploy failures were a *process* slip (orchestrator didn't update `phase` before triggering) that the new guard correctly
+caught — fix at the source (D2). Normalized in this review pass (`phase` → `review`).
+
+**Carry into sprint-5 (priority order):** **D1** open **P3 (tape recorder)** — the `graduated_block_time` rel-anchor is in place · **D2** update
+`phase`/`dev_status` *before* sprint-end deploys so the US-13 guard isn't tripped by our own staleness · **D3** normalize story-level `dev_status`
+at closeout instead of exempting it · **D4** wire a live Birdeye/Helius source to the `listener` and bank a firehose fixture (prove detection live,
+not just offline) · **D5** bank the "verify on the box before escalating to human-required" rule. See `retrospective.md` D1–D5.
+
+**Metrics:** 5 stories committed · **5 fully DoD-done** · **18/18 ACs Tester-approved** · 18 PRs merged, all CI-green · post-merge deploy **GREEN**
+(run 27555701056) — **first verified-live VPS presence** (200 on 8002, isolation on 8001) · two later sprint-end re-deploys failed at the US-13
+integrity step on stale `phase` (process slip, not a code regression) · 3 trivial lint defects caught and fixed same-day · **0 firehose activations
+spent** (10 Birdeye + 10 Helius banked) · ~430+ tests passing · coverage ≥80%. Token/cost spend: see `../project-state.json` (Project Lead).
 
 ## Sprint-3 Review — Summary (2026-06-15)
 **Phase:** review | **Committed scope:** US-8 + US-9/US-10/US-11 (4 stories, 16 ACs) | **Goal:** half met — P1 opened, P0 not closed
@@ -259,7 +314,7 @@ topology-only stories, and give `retrospective.md` a named owner each sprint. Se
 - **PR prefixes (PRD §1):** `detection:` / `tape:` / `features:` / `scoring:` / `trading:` / `dashboard:` / `ops:`
 
 ## Ownership boundaries
-- **Product Owner:** owns the active sprint plan (`sprint3.json`), this board, user stories, change control. Does NOT write code.
+- **Product Owner:** owns the active sprint plan (`sprint4.json`), this board, user stories, change control. Does NOT write code.
 - **Dev Team:** implements ACs in Docker on `feature/US-X-AC-Y` branches; updates only `dev_status`/`dev_notes`.
 - **Tester:** flips `checked`/`tester_status`, enforces DoD, interprets CI, owns `retrospective.md` each sprint. Does NOT execute tests or edit source.
 - **Project Lead:** external script; sole owner of `project-state.json`.
@@ -267,10 +322,12 @@ topology-only stories, and give `retrospective.md` a named owner each sprint. Se
 ## Open items / human dependencies
 See [`po-requests.md`](po-requests.md) — **all four sprint-1/P0 operator blockers remain RESOLVED (2026-06-14):**
 the GitHub remote (`AsimQuick/solanaTrilly`), the default branch, and the CD secrets (`VPS_SSH_KEY` / `VPS_HOST` /
-`VPS_USER`; GHCR via the built-in `GITHUB_TOKEN`) are all provisioned. **No open human dependencies for sprint-3.**
-US-8's deploy fix (`mkdir -p` + `workflow_dispatch`) is an agent task — the VPS shell access and secrets are
-already in place, so no operator action is required to land it. The three operator-only Cutover levers
-(trading-wallet secret, start firehose, enable real-capital trading) remain out of scope until Cutover.
+`VPS_USER`; GHCR via the built-in `GITHUB_TOKEN`) are all provisioned. **No open human dependencies for sprint-4.**
+The sprint-3 "operator firewall" suspicion was **falsified** by US-12's on-box diagnosis (C1): port 8002 was always
+reachable; the deploy failure was a code-side smoke-test timing race that agents fixed (no operator action). The
+three operator-only Cutover levers (trading-wallet secret, start firehose, enable real-capital trading) remain out
+of scope until Cutover — though **D4** (wire a live source to the `listener` + bank a firehose fixture) will spend
+the first of the 10 Birdeye / 10 Helius activations, logged in `ops/firehose_activation_log.md` per §15.7.
 
 ---
 *After editing any `/scrum-master/` doc, re-index with `mcp__devrag__reindex_document` (project convention).*
