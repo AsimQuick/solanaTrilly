@@ -304,7 +304,7 @@ def test_deploy_yml_front_matter_includes_ac125() -> None:
         if in_front_matter:
             front_matter_lines.append(stripped)
 
-    story_line = next((l for l in front_matter_lines if l.startswith("story:")), None)
+    story_line = next((line for line in front_matter_lines if line.startswith("story:")), None)
     assert story_line is not None, (
         "AC-12.5: deploy.yml must have a 'story:' field in its front matter.\n"
         "CLAUDE.md requires metadata front matter on all code files. The story "
