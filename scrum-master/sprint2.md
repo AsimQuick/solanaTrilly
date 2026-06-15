@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 2/6 stories | 8/22 ACs
-**Last Updated:** 2026-06-15T05:38:08+00:00
+**Progress:** 2/6 stories | 9/22 ACs
+**Last Updated:** 2026-06-15T06:20:54+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -110,16 +110,37 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-4: H2 — Celery task-manifest registration test
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-4.1:** A committed task manifest (e.g. core/task_manifest.json) enumerates every expected registered Celery task; Django app autodiscovery (celery_app.autodiscover_tasks) registers tasks from installed apps (PRD §12 S6/H2).
+- [x] **AC-4.1:** A committed task manifest (e.g. core/task_manifest.json) enumerates every expected registered Celery task; Django app autodiscovery (celery_app.autodiscover_tasks) registers tasks from installed apps (PRD §12 S6/H2).
+  - Dev: done
 - [ ] **AC-4.2:** A pytest test asserts the live registered-task set (celery_app.tasks, excluding celery built-ins) EQUALS the committed manifest: it FAILS when a task is removed/renamed (even if that task's own test was also deleted — the #404 failure mode) AND FAILS when a task is added without updating the manifest.
 - [ ] **AC-4.3:** The manifest test runs inside the CI merge gate; the dev workflow guard is documented in CONTRIBUTING.md (or a dedicated section of the project README) — listing the steps: 'git show --stat HEAD' before push, and never 'git stash' between add and commit (S6 scars). New files carry metadata front matter.
 
 **Dependencies:** US-1
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-4.1 done: Branch is up to date with remote. The implementation is complete and pushed.
+  
+  ---
+  
+  ## Implementation Summary
+  
+  **Files changed:**
+  
+  1. **`core/task_manifest.json`** (new) — Committed JSON manifest enumerating the two expected Celery tasks (`core.tasks.add`, `core.tasks.ping`) with `version` and `description` fields. This is the single source of truth for what tasks the app is expected to register.
+  
+  2. **`core/tests/test_task_manifest_ac41.py`** (new) — 4 unit tests validating AC-4.1:
+     - `test_manifest_file_exists_at_committed_path` — asserts the manifest exists at `core/task_manifest.json`
+     - `test_manifest_is_valid_json_with_required_structure` — asserts valid JSON with `"version"` and non-empty `"tasks"` keys
+     - `test_all_manifest_tasks_are_registered_via_autodiscovery` — imports `core.tasks`, loads the manifest, and asserts every manifest entry is present in `celery_app.tasks`
+     - `test_celery_app_calls_autodiscover_tasks` — static analysis of `config/celery.py` confirming `autodiscover_tasks` is called
+  
+  **Test count:** 4 new tests (no broker/Redis required — registry-only inspection).
+  
+  **Coverage:** No new production code branches added; new tests exercise the manifest fil …
 
 **Tester Status:** approved
 **Tester Notes:**
