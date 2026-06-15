@@ -153,7 +153,7 @@
     {
       "id": "US-20",
       "title": "P3 \u2014 recorder resilience: seek_by_time gap reconciliation (one code path) + idle-kill TTL re-attach, config-driven (\u00a76.2 D4, Principle #1)",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-18",
@@ -163,8 +163,8 @@
         {
           "id": "20.1",
           "text": "A seek_by_time reconciliation path (behind the DataSource seam) merges any swaps missed during a WS gap into the tape, idempotently. Verified by a pytest test: a live swap stream missing N swaps, followed by a seek_by_time reconcile over the gap window, yields the complete swap set with NO duplicate rows for swaps already recorded (idempotent on (mint, signature)).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -183,7 +183,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-20.1 done: Pushed to `feature/US-20-AC-20.1`. Here is the implementation summary for the orchestrator:\n\n---\n\n**AC-20.1 Implementation Summary**\n\n**Files changed (2 new files):**\n\n1. **`core/tape/gap_reconciler.py`** \u2014 `GapReconciler` class. Accepts a `DataSource` (the seek_by_time source, behind the seam \u2014 no concrete imports), a `Clock`, a `token_store`, and a `SwapWriter`. Internally constructs a `TapeRecorder` with `swap_source=\"birdeye_backfill\"` and delegates all normalization to it. `run()` calls the inner recorder and returns the sorted `NormalizedSwaps`. Idempotency on `(mint, signature)` is provided by `SwapWriter.update_or_create`. This also lays the structural groundwork for AC-20.3 (one code path / backfill parity): a live-gap reconcile and a standalone backfill are literally the same `TapeRecorder` call path, differing only in the injected `DataSource`.\n\n2. **`core/tests/test_gap_reconciler_ac201.py`** \u2014 5 pytest tests:\n   - `test_live_stream_records_partial_set` \u2014 TapeRecorder over live events (S1, S3, S5) writes exactly 3 rows.\n   - `test_reconcile_fills_gap` \u2014 GapReconciler over all 5 swaps adds the 2 missing rows \u2192 5 total.\n   - `test_reconcile_no_duplicates_for_existing_swap \u2026",
       "tester_status": "approved",
       "tester_notes": "All 3 ACs testable. Virtual-clock design in AC-20.2 ensures timing assertions are deterministic in CI. Byte-identical parity in AC-20.3 is a clear pass/fail gate."
     },
@@ -264,7 +264,7 @@
       "tester_notes": "All 3 ACs testable. AC-22.3 amended directly to specify the two durable evidence items (VPS psql count >= 1 + committed fixture path) so the live-proof gate has an unambiguous pass/fail criterion; no PO judgment needed."
     }
   ],
-  "last_updated": "2026-06-15T20:27:41+00:00",
+  "last_updated": "2026-06-15T20:42:36+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-5 in planning.",
   "tester_sprint_status": "not-started",
   "tester_sprint_notes": "Requirements validation complete 2026-06-15. All 6 stories / 20 ACs approved. One minor wording fix applied directly to AC-22.3 (added two durable VPS evidence items so the live-proof gate has a binary pass/fail; no scope change). Sprint ready for development to begin in build order: US-17 \u2192 US-18 \u2192 US-19/US-20 (sequential) \u2192 US-21 \u2192 US-22."
