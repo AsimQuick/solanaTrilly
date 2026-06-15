@@ -1,8 +1,8 @@
 # Sprint 4
 
 **Phase:** planning
-**Progress:** 4/5 stories | 17/18 ACs
-**Last Updated:** 2026-06-15T14:49:12+00:00
+**Progress:** 5/5 stories | 18/18 ACs
+**Last Updated:** 2026-06-15T15:05:00+00:00
 
 ## Sprint Goal
 Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only remaining P0 blocker — the VPS deploy whose smoke-test has failed with curl exit code 7 on all 13 Sprint-3 deploy runs. Per retrospective C1, DIAGNOSE port-8002 ON the VPS (agents have root SSH per CLAUDE.md — the 'human escalation required' claim in the Sprint-3 review contradicts CLAUDE.md): ssh root@140.82.43.36, run 'curl -v localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the port publish/bind in docker-compose.staging.yml, and check ufw/iptables — to distinguish an operator-style firewall fix (which agents CAN apply as root: 'ufw allow 8002/tcp') from a code-level port-publish/bind bug (e.g. the container binding 127.0.0.1 or the host port not published). Apply whatever the on-box diagnosis finds, make the CD smoke-test retry with backoff AT RUNTIME (C3 — the Sprint-3 run showed the curl failing immediately with no retry) and upgrade its structural test to verify runtime retry behavior, not just file text, then run the deploy GREEN on main and confirm HTTP 200 on 8002 with solanaBilly untouched on 8001 — closing US-8 AC-8.3/8.4/8.5, US-6, and retroactively US-1's deploy-gated DoD, and finally EXITING P0 (US-12). Enforce status integrity PROGRAMMATICALLY with a CI guard on sprintN.json that forbids status:done while tester_status is failed/blocked and flags stale phase/dev_status (US-13; retrospective C4, logged unactioned in sprint-1/2/3). THEN deliver P2 detection (PRD §6.1, §8, §16): the 'tokens' model (US-14); a Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam + injected clock (US-2 / Principle #7) that creates tokens rows from the ACTIVE config's detection filter (US-11 resolver), dedupes within dedupe_window_s, and pre-stages near-graduation mints by prestage_progress_pct — offline-gated by replaying a captured/synthetic MEME stream through ReplaySource -> expected token rows (US-15); and detection resilience — the Helius 'migrate' reconciler backstop (D4) + a periodic Birdeye REST graduation sweep (third belt) + a dedicated 'listener' container in docker-compose.yml and docker-compose.staging.yml (US-16). Build order: US-12 FIRST (P0 closeout, the gating milestone — retrospective C2/B5; it is independent of the P2 chain and MAY run in parallel) and US-13 (process guard, independent); then the P2 chain US-14 -> US-15 -> US-16 (US-15 needs the tokens model + resolver + DataSource seam; US-16 needs the consumer).
@@ -389,14 +389,15 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 ---
 
 ### US-16: P2 — detection resilience: Helius 'migrate' reconciler backstop + Birdeye REST sweep + dedicated 'listener' container (§6.1 D4, §15.1)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-16.1:** Gap-recovery reconciler (D4): a Helius 'migrate' detection backstop (a transactionSubscribe on the pump program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P filtered to the 'migrate' instruction, with maxSupportedTransactionVersion:0 per §3.3), behind the SAME DataSource seam, recovers a token that a dropped Birdeye MEME event missed. Verified by a replay test where the MEME stream OMITS a mint that the Helius migrate stream carries -> the token is still created exactly once, and where both streams carry the mint -> still exactly one row (no duplicate).
   - Dev: done
 - [x] **AC-16.2:** Third belt: a periodic Birdeye REST sweep of recent graduations runs as a Celery-beat task that reconciles any missed graduations into tokens rows, and is REGISTERED in the committed task manifest (H2/US-4) so its removal fails CI. Verified by (a) a pytest test that the sweep reconciles a missed graduation (idempotently, no duplicate) and (b) the task appearing in the registered-task manifest test.
   - Dev: done
-- [ ] **AC-16.3:** A dedicated 'listener' container (the #289 lesson — detection/recorder/reconciler never share the web/gunicorn process) is added to BOTH docker-compose.yml and docker-compose.staging.yml, scoped under -p solanatrilly with isolation preserved (distinct name/network; NO unscoped or destructive docker command; solanaBilly on 8001 untouched). Verified by a compose-topology pytest test asserting the listener service exists with the correct command/scope in both compose files, AND the staging deploy bringing the listener up on the VPS (the running stack shows the solanatrilly listener container up). New files carry metadata front matter.
+- [x] **AC-16.3:** A dedicated 'listener' container (the #289 lesson — detection/recorder/reconciler never share the web/gunicorn process) is added to BOTH docker-compose.yml and docker-compose.staging.yml, scoped under -p solanatrilly with isolation preserved (distinct name/network; NO unscoped or destructive docker command; solanaBilly on 8001 untouched). Verified by a compose-topology pytest test asserting the listener service exists with the correct command/scope in both compose files, AND the staging deploy bringing the listener up on the VPS (the running stack shows the solanatrilly listener container up). New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-14, US-15
 
@@ -431,6 +432,23 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
   - `core/task_manifest.json` *(modified)* — Added `"core.tasks.birdeye_graduation_sweep"` to the tasks array. The existing AC-4.2 bidirectional equality test (`test_task_manifest_ac42.py`) now enforces that removing this entry fails CI.
   
   - `config/settings.py` *(modified)* — Added `CELERY …
+  AC-16.3 done: Pushed successfully. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-16.3 Implementation Summary**
+  
+  **Files changed (7):**
+  
+  - `core/management/__init__.py` *(new)* — empty package marker with metadata front matter; makes `core.management` importable as a Django management package.
+  
+  - `core/management/commands/__init__.py` *(new)* — empty package marker with metadata front matter for the commands sub-package.
+  
+  - `core/management/commands/run_listener.py` *(new, 75 lines)* — Django management command `python manage.py run_listener`. Entry point for the dedicated listener container (#289 lesson). Starts an async event loop (`asyncio.run`), registers SIGINT/SIGTERM handlers, and blocks until a stop signal is received. Logs that it's ready to accept live DataSource configuration. Does NOT start gunicorn/daphne. Metadata front matter included.
+  
+  - `docker-compose.yml` *(modified)* — Added `listener` service with `command: python manage.py run_listener`, build from source, same environment block as celery services (DATABASE_URL, SECRET_KEY, REDIS_URL, BIRDEYE_API_KEY, HELIUS_API_KEY), and `depends_on: db + redis`. Header updated to include `US-16 AC-16.3`.
+  
+  - `docker-co …
 
 **Tester Status:** approved
 **Tester Notes:**
