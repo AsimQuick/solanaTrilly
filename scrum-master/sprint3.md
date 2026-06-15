@@ -1,8 +1,8 @@
 # Sprint 3
 
 **Phase:** planning
-**Progress:** 2/4 stories | 11/16 ACs
-**Last Updated:** 2026-06-15T09:47:12+00:00
+**Progress:** 2/4 stories | 12/16 ACs
+**Last Updated:** 2026-06-15T09:51:42+00:00
 
 ## Sprint Goal
 Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD deploy that never reached the VPS — add 'ssh … mkdir -p /root/solanatrilly' before the SCP (the /root/solanatrilly/ directory does not exist on the box, so the SCP errors 'No such file or directory') and add a 'workflow_dispatch' trigger (fixes the orchestrator's HTTP 422), then run the deploy green on main and verify the isolated staging stack answers HTTP 200 on port 8002 with solanaBilly untouched on 8001 — retroactively closing US-1's deploy-gated DoD (retrospective B1/B2/B3/B5). THEN deliver the P1 config core (PRD §5, §16): the versioned, audited, admin-editable PipelineConfig model + pipeline_state singleton (US-9); a typed Pydantic v2 schema that REJECTS an invalid config at save time, enforcing every §5.2 invariant — leak guard (window_s closes before score_at_elapsed_s), idle_kill_ttl_s >= outcome.window_s, capture_buffer_s >= 3, gate is adaptive_topk, feature_contract subset of feature_set.columns and live_servable (US-10); and the single cached get_active_config() resolver with atomic activation + instant rollback and no silent firehose/trading auto-start (US-11). Build order: US-8 FIRST (top-priority P0 closeout, retro B5) -> P1 chain US-9 -> US-10 -> US-11 (US-8 is independent of the P1 chain and may run in parallel, but P0 exit is the gating milestone for the sprint).
@@ -237,7 +237,8 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
   - Dev: done
 - [x] **AC-10.2:** The §5.2 numeric/enum save-time invariants are ENFORCED and an invalid config is REJECTED (the P1 offline gate: 'an invalid config is rejected in tests'). Each is verified by a pytest test that constructs the violating config and asserts a Pydantic validation error: (a) scoring.window_s closes before scoring.score_at_elapsed_s (leak guard); (b) tape.idle_kill_ttl_s >= outcome.window_s (never truncate a label, D4); (c) scoring.capture_buffer_s >= 3 (tape tail lands before scoring); (d) trading.gate == 'adaptive_topk' — a fixed score threshold is rejected (the id22 lesson, §9).
   - Dev: done
-- [ ] **AC-10.3:** The feature-contract subset invariant (D2, §5.2) is wired: the schema enforces model.feature_contract is a subset of feature_set.columns AND of the live_servable set — failing at save (in the UI), never live with 'REFUSING TO SCORE'. Because the FeatureSet/ModelRegistry tables land in P5/P7, the check is unit-tested against representative in-memory column/live_servable sets (passing trivially when no contract/feature_set is referenced) and is wired to become a live save-time gate when those FKs arrive — the same 'guard now, regression-gate later' pattern as US-2. Verified by a pytest test: a contract with a column outside columns-and-live_servable is rejected; a valid subset passes.
+- [x] **AC-10.3:** The feature-contract subset invariant (D2, §5.2) is wired: the schema enforces model.feature_contract is a subset of feature_set.columns AND of the live_servable set — failing at save (in the UI), never live with 'REFUSING TO SCORE'. Because the FeatureSet/ModelRegistry tables land in P5/P7, the check is unit-tested against representative in-memory column/live_servable sets (passing trivially when no contract/feature_set is referenced) and is wired to become a live save-time gate when those FKs arrive — the same 'guard now, regression-gate later' pattern as US-2. Verified by a pytest test: a contract with a column outside columns-and-live_servable is rejected; a valid subset passes.
+  - Dev: done
 - [ ] **AC-10.4:** Validation runs on the model WRITE path, not just in the UI: PipelineConfig.save()/clean() routes its sections through the Pydantic schema so an invalid config CANNOT be persisted. Verified by a pytest test asserting that saving a PipelineConfig whose sections violate an invariant raises (ValidationError/ValidationError-wrapped) and writes no row. New files carry metadata front matter.
 
 **Dependencies:** US-9
@@ -278,6 +279,21 @@ Exit P0 and open P1. FIRST close the single remaining P0 blocker: fix the CD dep
      - **(d) id22 gate guard** (4 tests): `trading.gate` set to `"fixed_threshold"`, `"0.65"`, or `"top_percent"` all raise `ValidationError`; `"adaptive_topk"` is the only accepted value.
   
   **Test count:** 12 new tests. **Full suite:** 262 passed. **Ruff lint:** clean. **Coverage th …
+  AC-10.3 done: Pushed successfully.
+  
+  ---
+  
+  ## Implementation Summary — US-10 AC-10.3
+  
+  **Files changed (1):**
+  
+  1. **`core/tests/test_pipeline_config_schema_ac103.py`** *(new)* — 15 tests verifying the feature-contract subset invariant (D2, §5.2). The schema logic was already implemented in `core/schemas.py` (from AC-10.1) via `_check_feature_contract_subset()` and the `check_cross_section_invariants` model validator. This AC adds the full test coverage:
+  
+     - **(a) Trivial passes** (3 tests): `feature_contract=None` skips the check; all three optional fields absent passes; empty contract `[]` is always valid.
+     - **(b) Valid-subset passes** (3 tests): proper subset of both columns and live_servable passes; contract equal to live_servable passes (equality is valid); single-column valid subset passes.
+     - **(c) Rejection — outside feature_set.columns** (2 tests): one unknown column mixed in is rejected (matches `"D2"`); contract made entirely of non-existent columns is rejected.
+     - **(d) Rejection — outside live_servable** (3 tests): training-only feature (in columns but not live_servable) is rejected; single training-only column is rejected; column absent from both is rejected.
+     - **(e) Partia …
 
 **Tester Status:** approved
 **Tester Notes:**
