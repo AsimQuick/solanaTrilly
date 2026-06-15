@@ -1,11 +1,13 @@
 # ---
 # module: core.tape.recorder
 # sprint: sprint-5
-# story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3, US-18 AC-18.4, US-19 AC-19.1
+# story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3, US-18 AC-18.4,
+#        US-19 AC-19.1, US-19 AC-19.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
-# dependencies: core.datasource, core.clock, core.normalized_swap, core.tape.lake_writer, datetime, typing
+# dependencies: core.datasource, core.clock, core.normalized_swap,
+#               core.tape.lake_writer, core.tape.swap_writer, datetime, typing
 # ---
 """TapeRecorder — reads swap events from a DataSource seam with an injected clock.
 
@@ -29,6 +31,7 @@ AC-18.4 / S8 / #405 — degenerate-swap guard:
     0-value row and never raise ZeroDivisionError.  Skipped swaps are tracked in
     TapeRecorder.skipped_degenerate for audit.
 """
+import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +41,7 @@ from core.normalized_swap import NormalizedSwap
 
 if TYPE_CHECKING:
     from core.tape.lake_writer import LakeWriter
+    from core.tape.swap_writer import SwapWriter
 
 # ---------------------------------------------------------------------------
 # Degenerate-swap guard (S8 / #405 / AC-18.4)
@@ -100,6 +104,10 @@ class TapeRecorder:
     AC-18.2: Emits one NormalizedSwap per landed swap; drops failed swaps (§6.2).
     AC-19.1: Optional LakeWriter — when provided, run() persists normalized_swaps
              to the daily-partitioned jsonl.gz lake after all events are consumed.
+    AC-19.2: Optional SwapWriter — when provided, run() mirrors normalized_swaps
+             to the 'swaps' DB table (idempotent on (mint, signature)) after all
+             events are consumed.  (mint, NormalizedSwap) pairs are tracked
+             internally so the SwapWriter has the base-token mint for the upsert.
 
     Args:
         source:      Any DataSource implementation (live or replay).
@@ -112,6 +120,9 @@ class TapeRecorder:
         lake_writer: Optional LakeWriter (AC-19.1).  When provided, all normalized
                      swaps are written to the lake after run() finishes.
                      Defaults to None — existing callers are unaffected.
+        swap_writer: Optional SwapWriter (AC-19.2).  When provided, all normalized
+                     swaps are mirrored to the 'swaps' DB table after run() finishes.
+                     Defaults to None — existing callers are unaffected.
     """
 
     def __init__(
@@ -123,6 +134,7 @@ class TapeRecorder:
         swap_source: str = "birdeye_live",
         swap_phase: str = "pre",
         lake_writer: "LakeWriter | None" = None,
+        swap_writer: "SwapWriter | None" = None,
     ) -> None:
         self._source: DataSource = source
         self._clock: Clock = clock
@@ -130,8 +142,10 @@ class TapeRecorder:
         self._swap_source: str = swap_source
         self._swap_phase: str = swap_phase
         self._lake_writer: "LakeWriter | None" = lake_writer
+        self._swap_writer: "SwapWriter | None" = swap_writer
         self._processed: list[tuple[dict[str, Any], datetime]] = []
-        self._normalized_swaps: list[NormalizedSwap] = []
+        # AC-19.2: track (mint, NormalizedSwap) pairs so SwapWriter has the base-token mint.
+        self._normalized_swaps_with_mints: list[tuple[str, NormalizedSwap]] = []
         self._skipped_degenerate: list[dict[str, Any]] = []
 
     @property
@@ -157,7 +171,7 @@ class TapeRecorder:
         triple is identical preserve their original insertion order (AC-18.3, §8, #403).
         """
         return sorted(
-            self._normalized_swaps,
+            [ns for _, ns in self._normalized_swaps_with_mints],
             key=lambda s: (s.block_time, s.slot, s.signature),
         )
 
@@ -172,6 +186,8 @@ class TapeRecorder:
 
         AC-19.1: After all events are consumed, if a lake_writer was injected and
         there are normalized swaps, they are persisted to the daily-partitioned lake.
+        AC-19.2: If a swap_writer was injected, normalized swaps are also mirrored
+        to the 'swaps' DB table (idempotent on (mint, signature)).
         """
         async for event, timestamp in stamp_events(self._source, self._clock):
             self._processed.append((event, timestamp))
@@ -195,8 +211,17 @@ class TapeRecorder:
                     source=self._swap_source,
                     phase=self._swap_phase,
                 )
-                self._normalized_swaps.append(normalized)
+                # AC-19.2: track (mint, NormalizedSwap) so SwapWriter can upsert by mint.
+                self._normalized_swaps_with_mints.append((mint, normalized))
 
         # AC-19.1: persist to lake after all events consumed
-        if self._lake_writer is not None and self._normalized_swaps:
+        if self._lake_writer is not None and self._normalized_swaps_with_mints:
             self._lake_writer.write(self.normalized_swaps)
+
+        # AC-19.2: mirror to 'swaps' DB table after all events consumed.
+        # asyncio.to_thread() runs the sync Django ORM write in a thread-pool
+        # executor so it doesn't block the event loop or trip Django's async guard.
+        if self._swap_writer is not None and self._normalized_swaps_with_mints:
+            await asyncio.to_thread(
+                self._swap_writer.write, self._normalized_swaps_with_mints
+            )
