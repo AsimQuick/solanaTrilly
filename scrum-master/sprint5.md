@@ -1,8 +1,9 @@
 # Sprint 5
 
 **Phase:** planning
-**Progress:** 2/6 stories | 10/20 ACs
-**Last Updated:** 2026-06-15T19:57:23+00:00
+**Progress:** 3/6 stories | 13/20 ACs
+**Last Updated:** 2026-06-16T00:00:00+00:00
+**last-updated-by:** dev-team
 
 ## Sprint Goal
 Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and prove detection live (retrospective D4). P0/P1/P2 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, and P2 detection lands graduated tokens in the 'tokens' table with graduated_block_time carried as the integer rel-anchor the recorder needs. Sprint-5 builds the PumpSwap swap-tape recorder that captures every swap from t0 and turns it into the project's primary dataset. Deliver, IN ORDER: (1) the persistence target — the 'swaps' table (§8) + the one NormalizedSwap schema (§7.1) with rel ANCHORED to the DB Token.graduated_block_time/graduated_at (never the first swap's time) and the source/phase/side constrained vocabularies (US-17); (2) the recorder CORE behind the DataSource seam + injected clock (US-2 / Principle #7) — port tape_recorder.py's queue/writer/window/coverage scaffolding source-agnostically, emit one NormalizedSwap per LANDED swap with owner=the tx signer and all three units (vol_sol/vol_usd/sol_usd, D1), drop failed swaps, enforce the canonical STABLE sort on (block_time, slot, signature) (never block_time alone — #403), and keep the zero/degenerate-swap guard (#405 ZeroDivisionError) (US-18); (3) the lake + queryable mirror — append-only daily-partitioned jsonl.gz at lake/tapes/dt=YYYY-MM-DD/part-*.jsonl.gz (raw=immutable truth, §6.4.1) + the 'swaps' table writer (idempotent on (mint, signature)) + a truncated-tail-tolerant reader (port _iter_tape_rows — recovered 161k rows) (US-19); (4) recorder resilience — seek_by_time reconciliation that closes WS gaps using the IDENTICAL call/path the offline backfill uses (one code path → backfill parity by construction) + idle-kill TTL deactivate-but-RE-ATTACH on the next swap, with idle_kill_ttl_s read from get_active_config() (Principle #1, the §5.2 TTL≥outcome.window_s invariant already enforced in P1) (US-20); (5) the P3 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye swap stream through ReplaySource + virtual clock → EXACTLY the expected NormalizedSwaps/swaps rows, deterministically (run twice → byte-identical), plus live↔backfill byte-parity on golden token(s) and the ordering/truncated-tail/zero-guard regression suite green in CI (US-21). FINALLY (retrospective D4): wire a concrete Birdeye SUBSCRIBE_TXS source into run_listener on the VPS listener container (behind the existing seam — core path untouched, US-2 guard still green), spend the FIRST of the 10 Birdeye firehose activations — deliberate, time-boxed ≤30 min, logged in ops/firehose_activation_log.md (§15.7) — confirm a real graduated token's PumpSwap swaps flow end-to-end to swaps rows + jsonl.gz on the box, and BANK the durable capture as the golden-token fixture US-21's parity/replay test runs against offline forever (US-22). Build order: US-17 FIRST (the persistence target everything writes to); then US-18 (core) → US-19 (lake) → US-20 (resilience) are sequential on the core; US-21 (offline gate) needs US-18/19/20; US-22 (live D4) is LAST and depends on the listener (US-16) + the built recorder — the offline P3 gate (US-21) does NOT depend on the live activation, so a failed/abbreviated firehose window never blocks P3 exit. Process carries: update phase + story dev_status to their real values BEFORE any sprint-end deploy so the US-13 integrity guard isn't tripped by our own staleness (D2); promote story-level dev_status to 'done' at closeout instead of relying on US-13's --skip-complete carve-out (D3); and the standing rule — before declaring any blocker 'human/operator required', run the on-box check the root SSH we already have allows (D5).
@@ -217,14 +218,49 @@ Open P3 — the tape recorder (PRD §6.2, the heart of the pipeline) — and pro
   - Dev: done
 - [x] **AC-19.2:** Recorded swaps are also written to the queryable 'swaps' table (US-17) as a mirror of the jsonl.gz lake, idempotently on (mint, signature) — re-recording the same swap does NOT create a duplicate row. Verified by a pytest test asserting each recorded NormalizedSwap appears as a swaps row with matching fields, and that re-recording the same swaps yields the same row count (no duplicates).
   - Dev: done
-- [ ] **AC-19.3:** A truncated-tail-tolerant lake reader (port _iter_tape_rows — the recovered-161k-rows scaffolding) yields all complete rows and silently tolerates a truncated/partial final line, never raising. Verified by a pytest test that reads a part file whose last line is deliberately truncated mid-record and asserts every complete row is returned with no exception. New files carry metadata front matter.
+- [x] **AC-19.3:** A truncated-tail-tolerant lake reader (port _iter_tape_rows — the recovered-161k-rows scaffolding) yields all complete rows and silently tolerates a truncated/partial final line, never raising. Verified by a pytest test that reads a part file whose last line is deliberately truncated mid-record and asserts every complete row is returned with no exception. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-18
 
-**Dev Team Status:** not-started
+**Dev Team Status:** done
 **Dev Team Notes:**
   AC-19.1 fixed: **Fix:** Restored `push: branches: [main]` alongside `workflow_dispatch` in `.github/workflows/deploy.yml`. The ER commit `c0db4c2` had stripped the push trigger entirely (with a now-removed comment block explaining the rationale), which broke the AC-6.1 and AC-8.2 guard tests. No US-19 code was touched — all 6 AC-19.1 tests were already passing.
   AC-19.2 done: Pushed to `feature/US-19-AC-19.2`.
+  AC-19.3 done: Implemented on `feature/US-19-AC-19.3`.
+
+  ---
+
+  ## AC-19.3 Implementation Summary
+
+  **Files changed (2 new files):**
+
+  1. **`core/tape/lake_reader.py`** (new) — `LakeReader` class. Direct port of `_iter_tape_rows` from
+     solanabilly/app/services/paper_tape_settle.py (recovered-161k-rows scaffolding). `__init__` takes
+     `base_dir: str | Path = "lake/tapes"`. `iter_rows(*, date_str=None)` yields all decoded JSON dicts
+     from `dt=YYYY-MM-DD/part-*.jsonl.gz` files. When `date_str` is given, reads only that partition;
+     when `None`, discovers all `dt=` partitions via glob and reads them in ascending date order.
+     Tolerances: (a) cannot open a file → WARNING logged, file skipped; (b) EOFError/OSError/BadGzipFile
+     during readline → WARNING logged, rest of that file skipped, iteration continues; (c) JSONDecodeError
+     on a line → silently skipped (partial trailing lines are expected on the open part). Module-level
+     `_logger` used for warnings. All metadata front matter carried.
+
+  2. **`core/tests/test_lake_reader_ac193.py`** (new) — 7 pytest tests:
+     - `test_reads_complete_rows_from_valid_part` — valid gzip jsonl with 3 rows returns all 3 dicts.
+     - `test_truncated_tail_returns_complete_rows_no_exception` — **KEY TEST**: gzip file with 3 complete
+       JSON lines + deliberately truncated 4th line (`{"rel": 60.0, "sig` — no closing brace). Asserts:
+       no exception raised, exactly 3 complete dicts returned, truncated partial NOT in results.
+     - `test_truncated_gzip_eof_tolerates_silently` — truly truncated gzip bytes (first half only);
+       EOFError/BadGzipFile caught silently; no exception propagates.
+     - `test_empty_part_returns_no_rows` — empty gzip yields zero rows.
+     - `test_reads_multiple_part_files` — two part files in same partition; all rows from both yielded.
+     - `test_nonexistent_date_returns_no_rows` — nonexistent date_str yields nothing, no error.
+     - `test_iter_rows_no_date_reads_all_partitions` — date_str=None reads all partitions in ascending
+       date order.
+
+  **Test results:** 7/7 new tests pass; 555/555 total pass; 0 regressions.
+  **Coverage:** threshold met (>= 80%).
+  - blocker-type: none
   
   ---
   
