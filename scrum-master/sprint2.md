@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 5/6 stories | 19/22 ACs
-**Last Updated:** 2026-06-15T07:30:10+00:00
+**Last Updated:** 2026-06-15T07:30:21+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -358,6 +358,7 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   1. **`.github/workflows/deploy.yml`** (modified) — Added `Verify solanaBilly isolation (AC-6.5)` step as the final step in the `deploy` job, positioned after the smoke-test step (AC-6.4). The step injects `VPS_SSH_KEY`, `VPS_USER`, `VPS_HOST` from repo secrets, SSHes to the VPS, and runs two checks: (1) `docker compose -p solanabilly ps` — asserts solanaBilly containers are in running/up state; exits 1 if not; (2) `curl --max-time 10 http://${VPS_HOST}:8001/` — asserts port 8001 responds (HTTP status not 000); exits 1 if not. Updated story header to include AC-6.5. The `docker compose -p solanabilly ps` command is read-only (no state modification), scoped to the solanabilly project only.
   
   2. **`core/tests/test_deploy_workflow_ac63.py`** (modified) — Updated two tests to allow the scoped read-only isolation check: (a) `test_all_deploy_docker_compose_commands_project_scoped` — changed from requiring `-p solanatrilly` specifically to requiring any `-p <project>` scope via regex, so `docker compose -p solanabilly ps` passes; (b) `test_no_solanabilly_reference_in_deploy_ …
+  [DEPLOY] Deploy trigger failed. Will be caught by full sprint deploy.
 
 **Tester Status:** approved
 **Tester Notes:**
