@@ -38,7 +38,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: 0
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36,localhost,127.0.0.1}
       REDIS_URL: redis://redis:6379/0
     depends_on:
       db:

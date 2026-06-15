@@ -87,7 +87,7 @@ jobs:
         run: |
           echo "Smoke-testing solanatrilly staging stack at http://${VPS_HOST}:8002/health/"
           for i in $(seq 1 12); do
-            status=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_HOST}:8002/health/")
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_HOST}:8002/health/" || true)
             if [ "$status" = "200" ]; then
               echo "Smoke test PASSED: GET /health/ returned HTTP 200"
               exit 0
@@ -118,7 +118,7 @@ jobs:
             exit 1
           fi
           echo "solanaBilly containers still running — isolation preserved"
-          status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${VPS_HOST}:8001/")
+          status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${VPS_HOST}:8001/" || true)
           echo "Port 8001 HTTP status: $status"
           if [ -z "$status" ] || [ "$status" = "000" ]; then
             echo "ISOLATION FAILURE: port 8001 did not respond after solanatrilly deployment"
