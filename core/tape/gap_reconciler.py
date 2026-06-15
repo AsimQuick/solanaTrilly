@@ -1,7 +1,7 @@
 # ---
 # module: core.tape.gap_reconciler
 # sprint: sprint-5
-# story: US-20 AC-20.1
+# story: US-20 AC-20.1, US-20 AC-20.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-16
