@@ -1,7 +1,7 @@
 # ---
 # module: core.models
-# sprint: sprint-3
-# story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4
+# sprint: sprint-4
+# story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4, US-14 AC-14.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
@@ -145,3 +145,45 @@ class PipelineState(models.Model):
         """Return the singleton row, creating it with safe defaults if absent."""
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class Token(models.Model):
+    """One row per graduated pump.fun token (PRD §8, US-14).
+
+    Created by the detection consumer when a MEME_DATA event signals graduation.
+    mint is the primary key (Solana mint address — globally unique).
+    graduated_at / graduated_block_time together anchor t0 for the tape recorder.
+    raw_graduation stores the verbatim event JSONB; encoder=JsonSafeEncoder keeps
+    the H3/US-5 guard test green.
+    """
+
+    # --- status vocabulary (VARCHAR-width discipline, PRD §8) ---
+    STATUS_DETECTED = "DETECTED"
+    STATUS_RECORDING = "RECORDING"
+    STATUS_SCORED = "SCORED"
+    STATUS_TRADED = "TRADED"
+    STATUS_SKIPPED = "SKIPPED"
+    STATUS_CHOICES = [
+        (STATUS_DETECTED, "Detected"),
+        (STATUS_RECORDING, "Recording"),
+        (STATUS_SCORED, "Scored"),
+        (STATUS_TRADED, "Traded"),
+        (STATUS_SKIPPED, "Skipped"),
+    ]
+    _STATUS_MAX_LENGTH = 20
+
+    mint = models.CharField(max_length=64, primary_key=True)
+    pool_address = models.CharField(max_length=64)
+    graduated_at = models.DateTimeField()
+    graduated_block_time = models.IntegerField()
+    dex_source = models.CharField(max_length=64)
+    raw_graduation = models.JSONField(encoder=JsonSafeEncoder)
+    status = models.CharField(
+        max_length=_STATUS_MAX_LENGTH,
+        choices=STATUS_CHOICES,
+        default=STATUS_DETECTED,
+    )
+
+    class Meta:
+        app_label = "core"
+        db_table = "tokens"
