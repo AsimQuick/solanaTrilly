@@ -1,7 +1,7 @@
 # ---
 # module: core.detection.consumer
 # sprint: sprint-4
-# story: US-15 AC-15.1, US-15 AC-15.2
+# story: US-15 AC-15.1, US-15 AC-15.2, US-15 AC-15.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
@@ -62,11 +62,20 @@ class DetectionConsumer:
         self._clock: Clock = clock
         self._config_fn: Callable[[], PipelineConfigSchema | None] | None = config_fn
         self._processed: list[tuple[dict[str, Any], datetime]] = []
+        # AC-15.3: dedupe tracking — first graduation timestamp per mint (within dedupe_window_s)
+        self._graduation_seen: dict[str, datetime] = {}
+        # AC-15.3: warm-path pre-staging — mints near graduation (not yet graduated)
+        self._prestaged: set[str] = set()
 
     @property
     def processed(self) -> list[tuple[dict[str, Any], datetime]]:
         """Return a copy of all (event, timestamp) pairs processed so far."""
         return list(self._processed)
+
+    @property
+    def prestaged(self) -> set[str]:
+        """Return the set of mints currently on the pre-stage warm path (AC-15.3)."""
+        return set(self._prestaged)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -86,6 +95,39 @@ class DetectionConsumer:
             and event.get("graduated") == filt.graduated
             and event.get("source") == filt.source
         )
+
+    def _is_prestage_event(self, event: dict[str, Any], config: PipelineConfigSchema) -> bool:
+        """Return True for near-graduation events that should enter the warm path (AC-15.3).
+
+        Criteria:
+          - event type is MEME_DATA
+          - event source matches the active filter source
+          - event is NOT yet graduated (graduated=False)
+          - progress_percent >= config.detection.prestage_progress_pct
+        """
+        filt = config.detection.filter
+        return (
+            event.get("type") == "MEME_DATA"
+            and not event.get("graduated", False)
+            and event.get("source") == filt.source
+            and event.get("progress_percent", 0.0) >= config.detection.prestage_progress_pct
+        )
+
+    def _is_within_dedupe_window(
+        self,
+        mint: str,
+        timestamp: datetime,
+        dedupe_window_s: int,
+    ) -> bool:
+        """Return True if mint was already graduated within dedupe_window_s seconds (AC-15.3).
+
+        Used to suppress duplicate graduation events without hitting the database again.
+        Time comparison uses the injected clock's timestamp — never wall time.
+        """
+        if mint not in self._graduation_seen:
+            return False
+        first_seen = self._graduation_seen[mint]
+        return (timestamp - first_seen).total_seconds() <= dedupe_window_s
 
     def _persist_graduation_sync(
         self,
@@ -160,5 +202,13 @@ class DetectionConsumer:
 
             if _config_fn_async is not None:
                 config = await _config_fn_async()
-                if config is not None and self._is_graduation_event(event, config):
-                    await _persist_async(event, timestamp)
+                if config is not None:
+                    mint = event.get("address", "")
+                    if self._is_graduation_event(event, config):
+                        dedupe_window_s = config.detection.dedupe_window_s
+                        if not self._is_within_dedupe_window(mint, timestamp, dedupe_window_s):
+                            await _persist_async(event, timestamp)
+                            if mint not in self._graduation_seen:
+                                self._graduation_seen[mint] = timestamp
+                    elif self._is_prestage_event(event, config):
+                        self._prestaged.add(mint)

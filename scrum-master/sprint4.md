@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 3/5 stories | 13/18 ACs
-**Last Updated:** 2026-06-15T13:11:43+00:00
+**Last Updated:** 2026-06-15T14:00:00+00:00
 
 ## Sprint Goal
 Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only remaining P0 blocker — the VPS deploy whose smoke-test has failed with curl exit code 7 on all 13 Sprint-3 deploy runs. Per retrospective C1, DIAGNOSE port-8002 ON the VPS (agents have root SSH per CLAUDE.md — the 'human escalation required' claim in the Sprint-3 review contradicts CLAUDE.md): ssh root@140.82.43.36, run 'curl -v localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the port publish/bind in docker-compose.staging.yml, and check ufw/iptables — to distinguish an operator-style firewall fix (which agents CAN apply as root: 'ufw allow 8002/tcp') from a code-level port-publish/bind bug (e.g. the container binding 127.0.0.1 or the host port not published). Apply whatever the on-box diagnosis finds, make the CD smoke-test retry with backoff AT RUNTIME (C3 — the Sprint-3 run showed the curl failing immediately with no retry) and upgrade its structural test to verify runtime retry behavior, not just file text, then run the deploy GREEN on main and confirm HTTP 200 on 8002 with solanaBilly untouched on 8001 — closing US-8 AC-8.3/8.4/8.5, US-6, and retroactively US-1's deploy-gated DoD, and finally EXITING P0 (US-12). Enforce status integrity PROGRAMMATICALLY with a CI guard on sprintN.json that forbids status:done while tester_status is failed/blocked and flags stale phase/dev_status (US-13; retrospective C4, logged unactioned in sprint-1/2/3). THEN deliver P2 detection (PRD §6.1, §8, §16): the 'tokens' model (US-14); a Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam + injected clock (US-2 / Principle #7) that creates tokens rows from the ACTIVE config's detection filter (US-11 resolver), dedupes within dedupe_window_s, and pre-stages near-graduation mints by prestage_progress_pct — offline-gated by replaying a captured/synthetic MEME stream through ReplaySource -> expected token rows (US-15); and detection resilience — the Helius 'migrate' reconciler backstop (D4) + a periodic Birdeye REST graduation sweep (third belt) + a dedicated 'listener' container in docker-compose.yml and docker-compose.staging.yml (US-16). Build order: US-12 FIRST (P0 closeout, the gating milestone — retrospective C2/B5; it is independent of the P2 chain and MAY run in parallel) and US-13 (process guard, independent); then the P2 chain US-14 -> US-15 -> US-16 (US-15 needs the tokens model + resolver + DataSource seam; US-16 needs the consumer).
@@ -321,8 +321,24 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 
 **Dependencies:** US-14, US-11, US-2
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
 **Dev Team Notes:**
+  AC-15.3 done: Implemented dedupe window + pre-stage warm path in DetectionConsumer. Committed and pushed to `feature/US-15-AC-15.3`.
+
+  **Files changed (2):**
+
+  - `core/detection/consumer.py` *(modified)* — Header updated to include AC-15.3. Added two new instance variables in `__init__`: `_graduation_seen: dict[str, datetime]` (dedupe tracking) and `_prestaged: set[str]` (warm-path tracking). Added `prestaged` property exposing the pre-staged mint set. Added `_is_prestage_event()` method (checks MEME_DATA, not graduated, source match, progress_percent >= prestage_progress_pct). Added `_is_within_dedupe_window()` method (checks if mint was already seen within dedupe_window_s using injected clock timestamps — never wall time). Updated `run()` to route each matched event through the dedupe gate (suppress duplicates within window, record first-seen timestamp) or pre-stage the mint on the warm path.
+
+  - `core/tests/test_detection_consumer_ac153.py` *(new, 6 tests)* — Covers all AC-15.3 verification criteria:
+    1. `test_within_window_duplicate_creates_exactly_one_row` — two graduation events for the same mint at t0 (delta=0 <= 60s) produce exactly one Token row.
+    2. `test_prestage_event_does_not_create_graduated_token_row` — pre-stage event (graduated=False, progress_percent=97.0 >= 95.0) produces no Token row.
+    3. `test_prestage_event_tracked_on_warm_path` — pre-stage event is tracked in consumer.prestaged, no Token row.
+    4. `test_prestage_then_graduation_creates_exactly_one_token_row` — pre-stage then graduation creates exactly one Token row with pool_address from the graduation event.
+    5. `test_event_below_prestage_threshold_not_prestaged` — event with progress_percent=80.0 < 95.0 is not pre-staged and creates no Token row.
+    6. `test_dedupe_is_per_mint_different_mints_both_persisted` — two graduation events for different mints both produce Token rows (dedupe is per-mint).
+
+  - blocker-type: none
+
   AC-15.1 done: All done. The implementation is committed and pushed to `feature/US-15-AC-15.1`.
   
   ---
