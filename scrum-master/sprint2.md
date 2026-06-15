@@ -1,8 +1,8 @@
 # Sprint 2
 
 **Phase:** planning
-**Progress:** 5/6 stories | 21/22 ACs
-**Last Updated:** 2026-06-15T07:39:34+00:00
+**Progress:** 6/6 stories | 22/22 ACs
+**Last Updated:** 2026-06-15T07:44:26+00:00
 
 ## Sprint Goal
 Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7): the DataSource/virtual-clock testing seam, hardened CI (H1 pinned actions, H2 task-manifest test, H3 json_safe encoder), an automated CD pipeline that deploys a hello-world solanaTrilly to the isolated VPS staging stack (-p solanatrilly, port 8002) — proving the local → GitHub → GHCR → VPS path end-to-end and retroactively closing US-1's deploy-gated DoD — with the firehose activation ledger seeded. Exit P0 with a tested, deployed, drift-resistant base ready for P1 (config core). Build order: (US-2, US-3, US-4, US-5 in parallel) → US-6 (needs US-1 + US-3) → US-7 any time.
@@ -367,14 +367,15 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
 ---
 
 ### US-7: Firehose activation ledger seeded
-**Status:** in-progress | **Priority:** medium
+**Status:** done | **Priority:** medium
 
 #### Acceptance Criteria
 - [x] **AC-7.1:** ops/firehose_activation_log.md is created and seeded with the project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10 / 10). API keys are already in .env (per po-requests.md item 3) — the ledger references them, never commits them (PRD §15.7).
   - Dev: done
 - [x] **AC-7.2:** The ledger documents the per-activation protocol — deliberate, time-boxed (<=30 min default; adjustable by explicit PO decision), PR-reviewed — with a table schema of columns: date, role/agent, which WS (Birdeye/Helius), purpose, duration, count-remaining, fixtures banked.
   - Dev: done
-- [ ] **AC-7.3:** The ledger states the HARD RULE that every activation MUST bank durable fixtures (a tape/detection sample or golden vectors) into the lake / golden set so the spend compounds into the replay corpus; the doc is re-indexed via mcp__devrag__reindex_document (project convention). New files carry metadata front matter.
+- [x] **AC-7.3:** The ledger states the HARD RULE that every activation MUST bank durable fixtures (a tape/detection sample or golden vectors) into the lake / golden set so the spend compounds into the replay corpus; the doc is re-indexed via mcp__devrag__reindex_document (project convention). New files carry metadata front matter.
+  - Dev: done
 
 **Dev Team Status:** not-started
 **Dev Team Notes:**
@@ -407,6 +408,22 @@ Complete the P0 foundation by landing the six remaining P0 stories (US-2…US-7)
   2. **`core/tests/test_firehose_ledger_ac72.py`** (new) — 12 unit tests validating all AC-7.2 invariants: protocol section existence, "deliberate" keyword, 30-min time-box, PO-adjustable qualifier, PR-reviewed requirement, and all 7 required table schema columns (date, role/agent, ws, purpose, duration, count-remaining, fixtures banked). Metadata front matter included.
   
   **Test count:** 12 new tests (172 total, was 160). **Coverage:** ≥80% gate passes.
+  AC-7.3 done: Done. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-7.3 Implementation Summary**
+  
+  **Files changed (2):**
+  
+  1. **`ops/firehose_activation_log.md`** (modified) — Updated `story` front matter field from `US-7 AC-7.1 AC-7.2` to `US-7 AC-7.1 AC-7.2 AC-7.3`. The HARD RULE section (`## HARD RULE — Every Activation MUST Bank Durable Fixtures`) was already present from AC-7.1/7.2 work and fully satisfies AC-7.3: it uses `MUST bank` (non-optional language), names "durable fixtures", specifies fixture types (tape sample, detection sample, golden vectors), names the destination (lake / golden set), mentions the replay corpus, and states that violations are flagged by the Tester and blocked from merge.
+  
+  2. **`core/tests/test_firehose_ledger_ac73.py`** (new) — 8 unit tests with metadata front matter asserting all AC-7.3 invariants:
+     - `test_hard_rule_section_exists` — dedicated `## HARD RULE` heading exists
+     - `test_hard_rule_uses_must_language` — `MUST` (uppercase) appears in the section
+     - `test_hard_rule_mentions_durable_fixtures` — phrase "durable fixtures" is present
+     - `test_hard_rule_specifies_fixture_types` — names tape/detection sample/golden vectors
+     - `t …
 
 **Tester Status:** approved
 **Tester Notes:**
