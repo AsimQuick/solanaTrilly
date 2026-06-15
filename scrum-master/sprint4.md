@@ -1,8 +1,8 @@
 # Sprint 4
 
 **Phase:** planning
-**Progress:** 3/5 stories | 14/18 ACs
-**Last Updated:** 2026-06-15T13:22:24+00:00
+**Progress:** 4/5 stories | 15/18 ACs
+**Last Updated:** 2026-06-15T14:23:16+00:00
 
 ## Sprint Goal
 Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only remaining P0 blocker — the VPS deploy whose smoke-test has failed with curl exit code 7 on all 13 Sprint-3 deploy runs. Per retrospective C1, DIAGNOSE port-8002 ON the VPS (agents have root SSH per CLAUDE.md — the 'human escalation required' claim in the Sprint-3 review contradicts CLAUDE.md): ssh root@140.82.43.36, run 'curl -v localhost:8002/health/', 'docker compose -p solanatrilly -f docker-compose.staging.yml ps', inspect the port publish/bind in docker-compose.staging.yml, and check ufw/iptables — to distinguish an operator-style firewall fix (which agents CAN apply as root: 'ufw allow 8002/tcp') from a code-level port-publish/bind bug (e.g. the container binding 127.0.0.1 or the host port not published). Apply whatever the on-box diagnosis finds, make the CD smoke-test retry with backoff AT RUNTIME (C3 — the Sprint-3 run showed the curl failing immediately with no retry) and upgrade its structural test to verify runtime retry behavior, not just file text, then run the deploy GREEN on main and confirm HTTP 200 on 8002 with solanaBilly untouched on 8001 — closing US-8 AC-8.3/8.4/8.5, US-6, and retroactively US-1's deploy-gated DoD, and finally EXITING P0 (US-12). Enforce status integrity PROGRAMMATICALLY with a CI guard on sprintN.json that forbids status:done while tester_status is failed/blocked and flags stale phase/dev_status (US-13; retrospective C4, logged unactioned in sprint-1/2/3). THEN deliver P2 detection (PRD §6.1, §8, §16): the 'tokens' model (US-14); a Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam + injected clock (US-2 / Principle #7) that creates tokens rows from the ACTIVE config's detection filter (US-11 resolver), dedupes within dedupe_window_s, and pre-stages near-graduation mints by prestage_progress_pct — offline-gated by replaying a captured/synthetic MEME stream through ReplaySource -> expected token rows (US-15); and detection resilience — the Helius 'migrate' reconciler backstop (D4) + a periodic Birdeye REST graduation sweep (third belt) + a dedicated 'listener' container in docker-compose.yml and docker-compose.staging.yml (US-16). Build order: US-12 FIRST (P0 closeout, the gating milestone — retrospective C2/B5; it is independent of the P2 chain and MAY run in parallel) and US-13 (process guard, independent); then the P2 chain US-14 -> US-15 -> US-16 (US-15 needs the tokens model + resolver + DataSource seam; US-16 needs the consumer).
@@ -309,7 +309,7 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
 ---
 
 ### US-15: P2 — Birdeye SUBSCRIBE_MEME detection consumer behind the DataSource seam -> tokens rows (§6.1, Principle #7)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-15.1:** A detection consumer reads MEME events from a DataSource (NOT a concrete Birdeye client) and reads time from an injected clock — the live/replay seam from US-2 / Principle #7. Verified by (a) a pytest test driving the consumer from an in-memory/Replay source, and (b) the US-2-style static-analysis guard holding: no concrete-source import and no time.time()/datetime.now() on the core detection path.
@@ -318,7 +318,8 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
   - Dev: done
 - [x] **AC-15.3:** Dedupe + pre-stage: a duplicate graduation event for the same mint within dedupe_window_s does NOT create a second tokens row (idempotent on mint); and near-graduation mints (progress_percent >= prestage_progress_pct, not yet graduated) are pre-staged on a warm path WITHOUT being written as graduated tokens prematurely. Verified by pytest tests for (a) a within-window duplicate creating exactly one row and (b) a pre-stage event not producing a graduated token row until graduation arrives.
   - Dev: done
-- [ ] **AC-15.4:** P2 OFFLINE GATE (PRD §16): replaying a captured-or-synthetic MEME stream through a ReplaySource + virtual clock yields EXACTLY the expected set of tokens rows, deterministically (run twice -> identical rows). The fixture is a schema-faithful MEME stream (§3.2); if a live Birdeye activation is spent to bank a real capture, it is logged in ops/firehose_activation_log.md per §15.7 and banks the durable fixture. Verified by the replay test asserting the expected token rows and determinism. New files carry metadata front matter.
+- [x] **AC-15.4:** P2 OFFLINE GATE (PRD §16): replaying a captured-or-synthetic MEME stream through a ReplaySource + virtual clock yields EXACTLY the expected set of tokens rows, deterministically (run twice -> identical rows). The fixture is a schema-faithful MEME stream (§3.2); if a live Birdeye activation is spent to bank a real capture, it is logged in ops/firehose_activation_log.md per §15.7 and banks the durable fixture. Verified by the replay test asserting the expected token rows and determinism. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-14, US-11, US-2
 
@@ -352,43 +353,37 @@ Exit P0 for real (fourth attempt) and open P2 (detection). FIRST close the only 
   
   - `core/tests/test_detection_consumer_ac153.py` *(new, 6 tests)* — All 6 tests are `@pytest.mark.django_db(transaction=True)`:
     1. `test_within_window_duplicate_creates_exa …
+  AC-15.4 fixed: Split the `# dependencies:` line in `core/tests/test_detection_consumer_ac154.py:8` across two lines to bring it from 131 to under 120 characters, resolving the ruff E501 violation. No logic changes — commit pushed to `feature/US-15-AC-15.4`.
 
 **Tester Status:** approved
 **Tester Notes:**
-  AC-15.2 diagnosis: I have the complete picture.
+  AC-15.4 diagnosis: Diagnosis confirmed.
   
   ---
   
-  ## Diagnosis: AC-15.2 CI Failure
+  ## Diagnosis: AC-15.4 CI Failure
   
-  **Classification: Code bug — trivial lint violation**
+  **Classification: Code bug — trivial lint violation (ruff E501)**
   
-  **File:** `core/tests/test_detection_consumer_ac152.py:342`
+  **File:** `core/tests/test_detection_consumer_ac154.py:8`
   
-  **Error:** ruff F541 — f-string without any placeholders
-  
-  ```python
-  # Line 341-343 — failing:
-  assert token.graduated_block_time == int(clock_t0.timestamp()), (
-      f"graduated_block_time should be int(clock_t0.timestamp()) when blockTime absent"
-  )
-  ```
-  
-  The assertion message on line 342 has an `f"..."` prefix but contains no `{...}` interpolation — ruff flags this as F541. Ruff suggests removing the extraneous `f` prefix.
-  
-  **Severity:** Low. Single-character fix, no logic change, no requirements ambiguity.
-  
-  **Root cause:** Not a requirements issue. AC-15.2 is clear and correctly implemented; the test was committed with a stray `f` prefix on a plain string literal.
-  
-  **Recommended fix (for Dev agent):** In `core/tests/test_detection_consumer_ac152.py` line 342, remove the `f` prefix:
+  **Error:** ruff E501 — line too long (131 > 120 characters)
   
   ```python
-  assert token.graduated_block_time == int(clock_t0.timestamp()), (
-      "graduated_block_time should be int(clock_t0.timestamp()) when blockTime absent"
-  )
+  # Line 8 — failing:
+  # dependencies: core.detection.consumer, core.models, core.resolver, core.clock, core.replay_source, asyncio, json, pathlib, pytest
   ```
   
-  No other files need changes. This is the only ruff err …
+  The `# dependencies:` entry in the metadata front matter is 131 characters, exceeding the project's 120-character line-length limit.
+  
+  **Severity:** Low. This is a one-line header comment that needs to be split; no logic change required.
+  
+  **Root cause:** Not a requirements issue. AC-15.4 is correctly specified and the implementation is otherwise complete. The test file was committed with an oversized metadata header comment — the same class of lint slip as AC-12.5 (ambiguous variable name) and AC-15.2 (empty f-string).
+  
+  **Recommended fix (for Dev agent):** In `core/tests/test_detection_consumer_ac154.py` line 8, split the `# dependencies:` line to stay within 120 characters, for example:
+  
+  ```python
+  # dependencies: core.detection.consumer, core.models, core.resolver, core.cloc …
 
 ---
 
