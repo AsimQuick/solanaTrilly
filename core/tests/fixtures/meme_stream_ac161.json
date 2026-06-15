@@ -1,0 +1,26 @@
+{
+  "_meta": {
+    "description": "Synthetic Birdeye MEME stream for AC-16.1 (omits MINT_A to simulate dropped event)",
+    "source_schema": "PRD §3.2 — Birdeye SUBSCRIBE_MEME / MEME_DATA payload",
+    "created": "2026-06-15",
+    "sprint": "sprint-4",
+    "story": "US-16 AC-16.1",
+    "activation": "synthetic — no live Birdeye activation spent",
+    "note": "MINT_A is deliberately absent — it is only carried by the Helius migrate stream"
+  },
+  "events": [
+    {
+      "type": "MEME_DATA",
+      "address": "AC161MINTbeta222222222222222222222222222222",
+      "source": "pump_dot_fun",
+      "graduated": true,
+      "progress_percent": 100.0,
+      "poolAddress": "AC161POOLbeta222222222222222222222222222222",
+      "blockTime": 1740787210,
+      "graduated_time": 1740787210,
+      "price": 0.000002345,
+      "liquidity": 85000.0,
+      "marketcap": 2345678.0
+    }
+  ]
+}
