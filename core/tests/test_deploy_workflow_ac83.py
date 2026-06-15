@@ -192,7 +192,6 @@ def test_complete_three_job_pipeline_dependency_chain() -> None:
     Both dependency links must be explicit 'needs:' declarations in deploy.yml.
     """
     data = _load_deploy()
-    jobs = data.get("jobs") or {}
 
     # 1. build-and-push must need some CI job
     bap_job = _get_build_and_push_job(data)
