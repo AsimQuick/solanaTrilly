@@ -1,11 +1,11 @@
 # ---
 # module: core.tape.recorder
 # sprint: sprint-5
-# story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3, US-18 AC-18.4
+# story: US-18 AC-18.1, US-18 AC-18.2, US-18 AC-18.3, US-18 AC-18.4, US-19 AC-19.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-15
-# dependencies: core.datasource, core.clock, core.normalized_swap, datetime, typing
+# dependencies: core.datasource, core.clock, core.normalized_swap, core.tape.lake_writer, datetime, typing
 # ---
 """TapeRecorder — reads swap events from a DataSource seam with an injected clock.
 
@@ -30,11 +30,14 @@ AC-18.4 / S8 / #405 — degenerate-swap guard:
     TapeRecorder.skipped_degenerate for audit.
 """
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.clock import Clock, stamp_events
 from core.datasource import DataSource
 from core.normalized_swap import NormalizedSwap
+
+if TYPE_CHECKING:
+    from core.tape.lake_writer import LakeWriter
 
 # ---------------------------------------------------------------------------
 # Degenerate-swap guard (S8 / #405 / AC-18.4)
@@ -95,6 +98,8 @@ class TapeRecorder:
 
     AC-18.1: DataSource/Clock seam — live/replay parity (Principle #7).
     AC-18.2: Emits one NormalizedSwap per landed swap; drops failed swaps (§6.2).
+    AC-19.1: Optional LakeWriter — when provided, run() persists normalized_swaps
+             to the daily-partitioned jsonl.gz lake after all events are consumed.
 
     Args:
         source:      Any DataSource implementation (live or replay).
@@ -104,6 +109,9 @@ class TapeRecorder:
                      Defaults to {} — no normalization when empty.
         swap_source: NormalizedSwap source vocabulary value. Defaults to "birdeye_live".
         swap_phase:  NormalizedSwap phase vocabulary value. Defaults to "pre".
+        lake_writer: Optional LakeWriter (AC-19.1).  When provided, all normalized
+                     swaps are written to the lake after run() finishes.
+                     Defaults to None — existing callers are unaffected.
     """
 
     def __init__(
@@ -114,12 +122,14 @@ class TapeRecorder:
         *,
         swap_source: str = "birdeye_live",
         swap_phase: str = "pre",
+        lake_writer: "LakeWriter | None" = None,
     ) -> None:
         self._source: DataSource = source
         self._clock: Clock = clock
         self._token_store: dict[str, Any] = token_store if token_store is not None else {}
         self._swap_source: str = swap_source
         self._swap_phase: str = swap_phase
+        self._lake_writer: "LakeWriter | None" = lake_writer
         self._processed: list[tuple[dict[str, Any], datetime]] = []
         self._normalized_swaps: list[NormalizedSwap] = []
         self._skipped_degenerate: list[dict[str, Any]] = []
@@ -159,6 +169,9 @@ class TapeRecorder:
           2. If failed=True the event is DROPPED — no NormalizedSwap emitted (§6.2).
           3. For landed swaps whose mint is in token_store, exactly one NormalizedSwap
              is emitted with owner=signer, rel anchored to graduated_block_time.
+
+        AC-19.1: After all events are consumed, if a lake_writer was injected and
+        there are normalized swaps, they are persisted to the daily-partitioned lake.
         """
         async for event, timestamp in stamp_events(self._source, self._clock):
             self._processed.append((event, timestamp))
@@ -183,3 +196,7 @@ class TapeRecorder:
                     phase=self._swap_phase,
                 )
                 self._normalized_swaps.append(normalized)
+
+        # AC-19.1: persist to lake after all events consumed
+        if self._lake_writer is not None and self._normalized_swaps:
+            self._lake_writer.write(self.normalized_swaps)
