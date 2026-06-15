@@ -61,4 +61,52 @@ The stated sprint goal (PRD §16 / P0) was the *full* foundation: containerized 
 - **Stories:** 1 committed / 1 ACs-complete / **0 fully DoD-Done** (US-1 blocked) | **0 deployed to VPS**
 
 ---
+
+## Sprint-2 — Complete the P0 Foundation
+
+**Reviewed:** 2026-06-15 | **Phase at review:** review
+**Committed scope (source of truth `sprint2.json`):** 6 stories — US-2…US-7 (22 ACs)
+**Outcome:** 5 of 6 stories fully Tester-**approved** and AC-complete (US-2, US-3, US-4, US-5, US-7); **US-6 FAILED** (deploy ACs 6.3–6.5). **19/22 ACs approved**; all merged PRs CI-green. Sprint goal **substantially met** but **P0 not exited** — the CD deploy never completes, so nothing is live on the VPS. Sprint DoD **deploy clause not met** (gated at the sprint boundary per A2).
+
+### Sprint goal vs. delivered
+The goal was to finish the P0 foundation: the `DataSource`/virtual-clock seam (US-2), CI hardening H1/H2/H3 (US-3/4/5), the CD pipeline + hello-world live on the **isolated** VPS staging stack (US-6 — which also retroactively closes US-1's deploy-gated DoD), and the firehose ledger (US-7) — exiting P0 with a *tested, deployed, drift-resistant* base.
+
+**Delivered:** everything except the deploy. US-2/3/4/5/7 are done, CI-green, and Tester-approved. US-6's artifacts exist and are structurally correct (deploy.yml SHA-pinned, GHCR push; `docker-compose.staging.yml` with `-p solanatrilly` / port 8002 / distinct volumes + network; smoke-test + isolation steps), but the workflow **fails at the SCP step** because `/root/solanatrilly/` does not exist on the VPS — so the image is never pulled, the stack never starts, and the smoke-test (8002) and isolation check (8001) never run. The end-to-end path is unverified; **"VPS presence from P0" remains unmet for a second consecutive sprint.**
+
+### Tester feedback (verbatim source — `sprint2.json` `tester_sprint_summary`, 2026-06-15)
+> Final quality review 2026-06-15. CI gate: all 6 stories pass (test=pass on all 27 merged PRs). DoD status: US-2 APPROVED (lint fixes applied pre-merge, all 4 ACs green), US-3 APPROVED (H1 invariants self-tested), US-4 APPROVED (bidirectional manifest equality verified), US-5 APPROVED (JsonSafeEncoder with guard test), US-7 APPROVED (firehose ledger seeded). US-6 FAILED: deploy workflow fails from AC-6.3 onward — /root/solanatrilly/ directory missing on VPS causes SCP to error; smoke test (AC-6.4) and solanaBilly isolation check (AC-6.5) never execute. Sprint DoD deploy clause not met. Open items: (1) create /root/solanatrilly/ on VPS and re-trigger deploy, or add mkdir -p to deploy script; (2) update retrospective.md for sprint-2 (DoD item, named owner: Tester).
+
+### What went well 👍
+- **6× the throughput of sprint-1, all behind a green gate.** 22 ACs across 6 stories, every merged PR CI-green on the hardened `test` job — vs. 1 story in sprint-1. The AC-as-PR cadence held at scale.
+- **The P0 hardening trio (H1/H2/H3) is done and self-policing.** CI is SHA-pinned, runner-frozen (`ubuntu-24.04`), and single-workflow, with a self-test (US-3 AC-3.4) that fails on any future unpinned `uses:` or `*-latest` runner; the task-manifest test (US-4) catches both the #404 removed/renamed-task mode and the silent-add mode; the `JsonSafeEncoder` guard (US-5) blocks any JSONField that bypasses the encoder. The S5 / S6-#404 / #331-#332-#388 scars are now permanent regression gates.
+- **The live/replay seam exists from P0 (Principle #7).** US-2 ships `DataSource` + injectable clock with static-analysis guards: no consumer imports a concrete source, no `time.time()`/`datetime.now()` on the core path, and the core import graph is framework/network-free. The expensive late-retrofit the PRD warns against was avoided.
+- **The defect loop worked again.** Two lint failures (US-2 AC-2.2 I001/F401; US-5 AC-5.2 I001) were caught by CI, diagnosed LOW-severity by the Tester, and `ruff --fix`'d before merge. Style-only, never reached pytest, fixed in one iteration.
+- **Retrospective actions A2 and A3 landed.** A3: `retrospective.md` now has a named owner (Tester / scrum facilitator) and is produced as a deliverable. A2: the DoD deploy clause is decoupled from per-story DoD and gated at the sprint boundary, so US-2/3/4/5/7 were not structurally blocked by US-6 — the un-completability that sank US-1 is gone at the per-story level.
+- **Firehose ledger seeded (US-7).** 10 Birdeye + 10 Helius / 0 used, per-activation protocol, HARD-RULE fixture-banking mandate, no API keys committed.
+
+### What didn't go well 👎
+- **Still nothing on the VPS — two sprints running.** Sprint-1 had no pipeline; sprint-2 *built* the pipeline but a trivial precondition (the `/root/solanatrilly/` directory doesn't exist) breaks the deploy at the first SCP. The CLAUDE.md "hello-world deployed day one" mandate is now far past day one, and US-1's DoD (retro A1) is still open.
+- **The blocker was environmental and avoidable.** The deploy SCPs to a directory it never creates; a one-line `ssh … mkdir -p /root/solanatrilly` before the SCP (or creating the dir once on the box) would have closed it. No agent had VPS-shell verification in the loop to catch the missing precondition before the run.
+- **The deploy trigger itself is broken.** deploy.yml has only `push: branches: [main]` — no `workflow_dispatch` — so the orchestrator's full-sprint deploy 422'd ("Workflow does not have 'workflow_dispatch' trigger"). Per-story `[DEPLOY]` steps logged "Deploy trigger failed. Will be caught by full sprint deploy," but the full sprint deploy could not be triggered. The pipeline was never exercised by a successful trigger + run on `main` with the directory present.
+- **Green structural tests masked an un-deployed stack.** US-6's pytest suite (deploy.yml parsing, port/scope/secret assertions) is all green, which can read as "deploy works." It does not — the tests validate the *file*, not a *running stack*. Passing CI ≠ a deployed, smoke-tested service.
+- **A5 was not enforced; the same status inconsistencies recurred.** `sprint2.json` still reads `phase: planning` at review; several stories carry `dev_status: not-started`/`in-progress` while `status: done` and all ACs are dev-done; and **US-6 reads `status: done` while `tester_status: failed`** — the exact "done ≠ blocked/failed" class A5 told us to forbid after sprint-1.
+
+### Action items → sprint-3
+| # | Action | Owner | Rationale |
+|---|--------|-------|-----------|
+| B1 | Fix the deploy precondition: add `ssh … mkdir -p /root/solanatrilly` (or create the dir once on the VPS) **before** the first SCP in `deploy.yml`; re-run the deploy on `main` and confirm the 8002 smoke-test returns **200** and the solanaBilly 8001 isolation check passes. | Dev | Closes US-6 AC-6.3/6.4/6.5 **and** retroactively US-1's DoD (A1, still open) — the keystone P0 deliverable. |
+| B2 | Add `workflow_dispatch:` to `deploy.yml` so a deploy can be triggered on demand (fixes the HTTP 422). | Dev | The orchestrator's full-sprint deploy could not fire; an on-demand trigger is needed to verify the path. |
+| B3 | Put VPS verification **in the loop** and make it gate "done": after deploy, confirm the stack answers on 8002 and solanaBilly is untouched on 8001. A green structural pytest is **not** a deployed stack. | Tester / Dev | Sprint-2 nearly shipped "deploy works" on the strength of file-parsing tests alone. |
+| B4 | Enforce A5 for real: forbid `status: done` while `tester_status` is `failed`/`blocked`; normalize stale `phase`/`dev_status` fields at review. US-6 should read `in-review`/`blocked`, not `done`; `sprint2.json.phase` should be `review`. | PO / Project Lead | A5 was logged in sprint-1 and not actioned; the same inconsistencies recurred — now with `done` + `failed` coexisting. |
+| B5 | Carry US-6's failed ACs (6.3–6.5) into sprint-3 as the **top-priority closeout before any P1 work**. P0 is not exited until the VPS stack is live and smoke-tested. | PO | "Tested, **deployed**, drift-resistant base ready for P1" is the P0 exit bar; deploy is the only piece left. |
+
+### Metrics
+- **Stories:** 6 committed / 5 fully DoD-done / **1 failed (US-6)** | **0 deployed to VPS**
+- **ACs:** 22 committed / **19 approved** / 3 failed (US-6 AC-6.3/6.4/6.5)
+- **PRs merged:** all CI-green (`test` job pass); Tester records **27 merged PRs** across the 6 stories
+- **CI failures:** 2 lint defects (US-2 AC-2.2 I001/F401; US-5 AC-5.2 I001), both caught by CI and fixed pre-merge in 1 iteration
+- **Token spend / cost:** see `../project-state.json` (owned by Project Lead — not reproduced here)
+- **Retrospective carry-over:** A1 (VPS deploy) **still open** → re-issued as B1; A2 / A3 **actioned**; A5 **not actioned** → re-issued as B4
+
+---
 *After editing any `/scrum-master/` doc, re-index with `mcp__devrag__reindex_document` (project convention).*
