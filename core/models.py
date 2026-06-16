@@ -1,11 +1,12 @@
 # ---
 # module: core.models
-# sprint: sprint-5
+# sprint: sprint-6
 # story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4,
-#        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2
+#        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2,
+#        US-23 AC-23.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-16
 # dependencies: django, core.encoders, simple_history, core.schemas, pydantic
 # ---
 # Domain models live here. Run `docker compose run --rm web python manage.py
@@ -229,3 +230,23 @@ class Swap(models.Model):
                 name="swap_mint_block_slot_sig_idx",
             ),
         ]
+
+
+class Snapshot(models.Model):
+    """One row per token's score-time read (PRD §8, US-23).
+
+    Holds the verbatim holders/authority/liquidity payload captured at score
+    time.  mint is indexed against the 'tokens' table (FK-or-index per
+    AC-23.1); the at-most-one-row-per-token discipline (AC-23.2) is enforced
+    via a unique constraint on mint.  raw uses JsonSafeEncoder so the H3/US-5
+    guard stays green.
+    """
+
+    mint = models.CharField(max_length=64, db_index=True, unique=True)
+    taken_at = models.DateTimeField()
+    elapsed_s = models.IntegerField()
+    raw = models.JSONField(encoder=JsonSafeEncoder)
+
+    class Meta:
+        app_label = "core"
+        db_table = "snapshots"
