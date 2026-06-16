@@ -1,8 +1,8 @@
 # Sprint 6
 
 **Phase:** planning
-**Progress:** 2/5 stories | 9/17 ACs
-**Last Updated:** 2026-06-16T06:06:28+00:00
+**Progress:** 2/5 stories | 10/17 ACs
+**Last Updated:** 2026-06-16T06:14:55+00:00
 
 ## Sprint Goal
 Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retrospective E4). P0–P3 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', and P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity. Sprint-6 adds the ONLY non-tape live read in the whole pipeline (Principle #3): a single on-demand Birdeye REST snapshot per token at score time, for the things the tape cannot give — holder distribution, mint/freeze authority, the LP-burned flag, and a liquidity/TVL/depth read (a first-class field per §1.1, never an assumption) — and locks the three-unit (vol_sol/vol_usd/sol_usd) parity backbone (D1). Deliver, IN ORDER: (1) the persistence target — the 'snapshots' table (§8: mint, taken_at, elapsed_s, raw JSONB) with the AT-MOST-ONE-ROW-PER-TOKEN discipline (§6.3) + a typed score-time snapshot schema, raw written via JsonSafeEncoder so the H3/US-5 guard stays green (US-23); (2) the score-time snapshot FETCHER behind the DataSource seam + injected clock (US-2 / Principle #7) — AT MOST ONE on-demand Birdeye REST read per token (the scheduled per-token poll regime is RETIRED — that cost cut funds retiring solanaBilly), capturing holders/authority/LP-burned/liquidity raw, with the #380 future-window clamp (any to=/window clamped to the injected now — Birdeye 400s on future windows) and the Redis token-bucket limiter KEPT while the scheduler is DROPPED (US-24); (3) score-time ORCHESTRATION — on graduation, schedule EXACTLY ONE snapshot at scoring.score_at_elapsed_s read from get_active_config() (US-11 resolver; Principle #1 — never a constant/os.getenv), honoring capture_buffer_s so the tape tail has landed, idempotent (at-most-once even on retry/restart), behind the seam + virtual clock so it is replay-testable, with NO scheduled-polling task registered (H2 manifest) (US-25); (4) UNITS LOCKED (D1) — every recorded swap carries all three units with the relationship locked (vol_usd ≈ vol_sol·sol_usd; sol_usd = the per-block reference) and unit-invariant features (shares/ratios/counts) are byte-identical regardless of unit basis (the parity backbone), wired into the canonical ci.yml so it cannot silently vanish (US-26); (5) the P4 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye score-time snapshot through ReplaySource + virtual clock → EXACTLY the expected raw 'snapshots' row, deterministically (run twice → byte-identical raw JSONB), raw=immutable-truth re-derivability, and the #380-clamp / at-most-once / unit-parity regression suite green in CI (US-27). The P4 gate is OFFLINE and synthetic — the score-time read is a single on-demand REST snapshot (NOT a firehose WS activation), so NO Birdeye/Helius firehose activation is required this sprint (8 Birdeye / 10 Helius remain banked); per E3, if a real Birdeye REST snapshot can be banked cheaply it is used as the gate fixture, but the gate never depends on a live read. Build order: US-23 FIRST (the persistence target everything writes to); then US-24 (fetcher) → US-25 (orchestration) are sequential; US-26 (units lock) is independent of the snapshot chain and may run in parallel; US-27 (offline gate) needs US-23/24/25/26. Process carries: E1 — promote the sprint 'phase' (and story dev_status) to their real values BEFORE any sprint-end deploy so the US-13 integrity guard is not tripped by our own staleness (this has now caught a stale-phase deploy two sprints running); E2 — run 'ruff check --fix' inside the web container as a pre-push checklist item to kill the recurring I001/E501 churn before CI; E3 — exercise the live adapter against a banked real capture EARLY rather than discovering a missing live layer at story-end; E5 — the first sprint-6 deploy at true HEAD (phase now 'review'-corrected on sprint-5) is a clean green run, closing the US-22 condition-B (clean-final-deploy) carry and confirming 200-on-8002 + listener Up + solanaBilly untouched on 8001.
@@ -192,7 +192,8 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
 #### Acceptance Criteria
 - [x] **AC-25.1:** On a token's graduation the orchestration schedules EXACTLY ONE score-time snapshot at scoring.score_at_elapsed_s seconds after the token's graduated_at, with the elapsed time read from get_active_config() (US-11 resolver), NOT a hardcoded constant or os.getenv (Principle #1). Verified by a pytest test (virtual clock): a token graduated at t0 triggers one snapshot at t0+score_at_elapsed_s, and changing the active config's scoring.score_at_elapsed_s changes the trigger time accordingly. The snapshot honors the resolved scoring.capture_buffer_s so the tape tail has landed before score time (§7; the §5.2 capture_buffer_s >= 3 invariant is already enforced by the P1 Pydantic schema).
   - Dev: done
-- [ ] **AC-25.2:** At-most-once / idempotent: a token never receives a second score-time snapshot even on task retry, listener restart, or duplicate graduation event — the one-row-per-token discipline (US-23.2) holds end-to-end. Verified by a pytest test that re-running the orchestration for an already-snapshotted mint is a no-op (still exactly one 'snapshots' row, no second REST read attempted).
+- [x] **AC-25.2:** At-most-once / idempotent: a token never receives a second score-time snapshot even on task retry, listener restart, or duplicate graduation event — the one-row-per-token discipline (US-23.2) holds end-to-end. Verified by a pytest test that re-running the orchestration for an already-snapshotted mint is a no-op (still exactly one 'snapshots' row, no second REST read attempted).
+  - Dev: done
 - [ ] **AC-25.3:** The orchestration drives the fetcher behind the DataSource seam + injected clock so it is replay-testable (Principle #7), and NO scheduled-polling task is registered (the snapshot is on-demand, scheduled-once-per-token; the H2 task-manifest test guards against a re-introduced periodic poll). Verified by a pytest test running the orchestration from a ReplaySource + virtual clock to the expected single snapshot, plus the H2 manifest assertion that no per-token polling task exists. New files carry metadata front matter.
 
 **Dependencies:** US-24, US-11, US-15
@@ -213,6 +214,20 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
     - `test_snapshot_fires_at_t0_plus_score_at_elapsed_s` (DB) — clock at T0+120 → one row, `elapsed_s=120`, `taken_at` correct.
     - `test_snapshot_does_not_fire_before_score_time` (DB) — clock at T0+119 → `None`, no row.
     - `test_changing_score_at_elapsed_s_changes_trigger_time` (DB) — clock at T0+60: config with `score_at_elapsed_s=60` fires …
+  AC-25.2 done: Pushed to `feature/US-25-AC-25.2`.
+  
+  ---
+  
+  **Implementation summary for the orchestrator:**
+  
+  **Files changed: 2**
+  
+  - **`core/snapshot_fetcher.py`** *(modified)* — Added a DB-level at-most-once guard at the top of `fetch_and_persist()`: `if Snapshot.objects.filter(mint=mint).exists(): return None`. This is the critical addition for AC-25.2 — the existing in-memory `_fetched` set only protects within a single process lifetime; on listener restart a fresh `SnapshotFetcher` has an empty `_fetched` set and would otherwise call the DataSource again. The DB check ensures no second REST read is attempted even after a restart. The existing `update_or_create` already protected row-count idempotency; the new check adds DataSource-call idempotency. Front matter updated to include AC-25.2.
+  
+  - **`core/tests/test_score_orchestration_ac252.py`** *(new)* — 7 `@pytest.mark.django_db` tests covering all AC-25.2 scenarios:
+    1. `test_same_instance_retry_second_call_returns_none` — same fetcher, second call returns None, DataSource called once
+    2. `test_same_instance_retry_row_count_stays_one` — same fetcher, still 1 row after retry
+    3. `test_fresh_instance_restart_no_second_datasource_call` — **key te …
 
 **Tester Status:** approved
 **Tester Notes:**
