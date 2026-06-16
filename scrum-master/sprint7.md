@@ -1,8 +1,8 @@
 # Sprint 7
 
 **Phase:** planning
-**Progress:** 3/6 stories | 11/18 ACs
-**Last Updated:** 2026-06-16T21:43:14+00:00
+**Progress:** 4/6 stories | 12/18 ACs
+**Last Updated:** 2026-06-16T21:52:51+00:00
 
 ## Sprint Goal
 Open P5 — the lake + extraction contract + vendored feature math + the Feature Builder + the T0/G1/G2 golden-parity merge gate (PRD §6.4 / §7.2 / §7.6 / §16; retrospective F1). P0–P4 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity, and P4 takes exactly one on-demand score-time snapshot per token with the three-unit (vol_sol/vol_usd/sol_usd) lock. P5 is THE integrity core (§6.4): it makes a model's live score EQUAL its offline score by construction — one vendored feature library, one deterministic extractor serving live + offline + replay, and a golden-parity gate that fails any PR that breaks byte-identity. This is the fix for the evidenced solanaBilly disaster where the t2 go-live got 23% live precision vs 78% offline purely from feature-assembly drift (#358/#359/#367). Deliver, IN ORDER: (1) VENDOR THE FEATURE MATH (§7.2) — copy solanabilly3/src/tape_microstructure.py VERBATIM into the repo (the ONE sanctioned edit is rels.ptp() → np.ptp(rels) for numpy 2.x), preserving compute_features(swaps, window_s=120, bucket_s=15) -> dict|None and the full tape_* family; never hand-edit (re-vendor to update) — and prove it with the G1 function-parity gate (§7.6): the frozen ≈15-token golden fixture (solanabilly3/data/microstructure/golden_fixture_t0t2_15s.json) runs through the vendored math and every feature matches within 1e-9 (US-28); (2) the EXTRACTION CONTRACT — the 'feature_sets' table (§8, §6.4.5): a FeatureSet is a hashed config (ordered columns + vendored-math version) with the live_servable vs training_only split (D2/D3) so same raw + same FeatureSet → byte-identical output (US-29); (3) the SHARED DETERMINISTIC EXTRACTOR (§6.4.4/§6.4.5) — read raw normalized swaps from the lake/'swaps' mirror, feed the §7.1 subset {rel, price, side, vol, owner} to the vendored compute_features, ONE code path for live + offline + replay (Principle #2), leak-free by the causal cutoff (hard-reject any swap with rel ≥ window_s; labels start strictly after), deterministic and versioned (US-30); (4) the FEATURE BUILDER (§6.5) — a one-click Celery export: pick a FeatureSet + cohort + label def → run the SAME vendored extractor over the lake → CSV/parquet + a manifest (FeatureSet version+hash, source(s), date range, mint cohort, row count, content hash, label def) that reproduces the export exactly; runs off the dedicated celery container, NEVER web/gunicorn (#289) (US-31); (5) the T0/G2 SOURCE-PARITY GATE (§7.6, §16) — the #1 merge gate (§6.4.3): Birdeye live↔backfill byte-identical normalized swaps + features (the seam that actually serves; offline, no firehose) PLUS a Helius raw-truth cross-check that confirms Birdeye coverage/side/amount — wired as a hard merge gate in the single canonical ci.yml 'test' job via the ImportError trap (US-32). FIREHOSE: P5's offline gates (G1, G2(a) live↔backfill) require NO activation — G2(a) uses the banked sprint-5 captures (E6ifp2…pump / H9L9…pump) + an on-demand Birdeye seek_by_time REST backfill (a REST read within the professional allowance, NOT a firehose WS activation); G2(b) raw-truth is the project's ONE budgeted G2 activation (CLAUDE.md — 'G2 needs one activation'): a single deliberate, time-boxed, ledgered Helius activation banks the durable raw-truth fixture (Helius 10→9 at most), after which the CI cross-check runs OFFLINE against the banked fixture forever and the P5 gate never depends on a live read (8 Birdeye remain untouched). PROCESS HARDENING (US-33) — the carries that a checklist has demonstrably failed to fix: F2 MECHANIZE phase-promotion (the stale-'phase' deploy failure has tripped the US-13 integrity guard THREE consecutive sprints D2→E1→F2 — make it a mechanical pre-deploy step / CI pre-check, not a step a human remembers); F4 MECHANIZE the ruff gate (a real pre-commit hook or container-entrypoint/Makefile ruff step — the I001/E501/F401 churn has recurred FIVE sprints); F3 close the carried sprint-6 DoD VPS clause — the first sprint-7 deploy at true HEAD is a clean green run, Tester-confirmed 200-on-8002 + listener Up + solanaBilly untouched on 8001 (re-issue of E5 / US-22 condition B). DEFERRED: F5 (build the live Birdeye REST SnapshotDataSource adapter) is consciously deferred to sprint-8, scheduled near where the scorer (P7) consumes it — it is a single on-demand REST read within the Birdeye allowance (NOT a firehose activation) and is off the P5 critical path; keeping sprint-7 focused on the integrity core avoids the over-commitment the retrospectives repeatedly warn against. Build order: US-28 FIRST (the vendored math everything downstream eats) — US-29 (FeatureSet table) and US-33 (process) are independent and may run in parallel; then US-30 (extractor) needs US-28 + US-29 (+ the US-19 lake reader); then US-31 (Feature Builder) needs US-30 and US-32 (T0/G2 parity) needs US-28 + US-30.
@@ -269,14 +269,15 @@ Open P5 — the lake + extraction contract + vendored feature math + the Feature
 ---
 
 ### US-31: P5 — the Feature Builder: one-click CSV/parquet + manifest over the lake, off the celery container (§6.5)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-31.1:** A Celery task (the Feature Builder) takes a FeatureSet + a mint cohort + a label def and runs the SHARED vendored extractor (US-30) over the lake to produce a CSV/parquet export. The task is registered (the H2 task-manifest test confirms it) and runs off the dedicated 'celery' container (NEVER web/gunicorn — the #289 lesson), defined in BOTH docker-compose.yml and docker-compose.staging.yml. Verified by a pytest test that runs the task over a small lake fixture and asserts the CSV/parquet contents.
   - Dev: done
 - [x] **AC-31.2:** Every export carries a manifest (§6.4.5): FeatureSet version+hash, source(s), date range, mint cohort, row count, content hash, and label def. Re-running the build over the same raw + same FeatureSet reproduces the export AND the manifest content-hash EXACTLY (deterministic). Verified by a pytest test asserting the manifest fields are populated and that a run-twice produces a byte-identical content hash.
   - Dev: done
-- [ ] **AC-31.3:** Leak-free labels (§6.4.4): the label is computed strictly after window_s (the outcome window, §17) and never overlaps the feature window; a build whose label def would draw from within [0, window_s] is rejected at task submission time with a clear error. The export is the labs' input only (nothing about modeling runs on the VPS). Verified by a pytest test that a label def drawing from within the feature window is rejected. New files carry metadata front matter.
+- [x] **AC-31.3:** Leak-free labels (§6.4.4): the label is computed strictly after window_s (the outcome window, §17) and never overlaps the feature window; a build whose label def would draw from within [0, window_s] is rejected at task submission time with a clear error. The export is the labs' input only (nothing about modeling runs on the VPS). Verified by a pytest test that a label def drawing from within the feature window is rejected. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-30
 
@@ -314,10 +315,44 @@ Open P5 — the lake + extraction contract + vendored feature math + the Feature
      - `test_manifest_content_hash_matches_csv_sha256` — independently verify hash = SHA-256(csv)
      - `test_manifest_run_twice_byte_identical_content_hash` — **the determinism test**: two runs → identical `content_hash`
      - `test_manifest_feat …
+  AC-31.3 fixed: **Fix:** Wrapped the 124-character module docstring on `core/tests/test_feature_builder_ac313.py:10` onto two lines, bringing both under the 120-char `ruff` limit. No logic changes — purely cosmetic formatting to satisfy E501.
 
 **Tester Status:** approved
 **Tester Notes:**
-  Requirements approved — all 3 ACs are testable. AC-31.1: H2 task-manifest test (US-4 pattern) gates registration; lake fixture + content assertion gates output correctness; docker-compose presence in both files is inspectable. AC-31.2: seven manifest fields are enumerated — all verifiable by assertion; run-twice content-hash identity is concrete. AC-31.3 wording tightened (added 'at task submission time with a clear error' to pin when/how the rejection fires — minor fix applied directly). The #289 constraint (never web/gunicorn) is explicit and verifiable via the H2 manifest test.
+  AC-31.3 diagnosis: Found it. Line 10 is 124 characters long (the docstring), exceeding the 120-char limit.
+  
+  ---
+  
+  **Diagnosis: Code Bug — E501 Line Too Long**
+  
+  **Type:** Code bug (not a requirements issue)
+  
+  **Severity:** Low — single auto-fixable line, no logic changes needed
+  
+  **File:** `core/tests/test_feature_builder_ac313.py:10`
+  
+  **Error:**
+  ```
+  E501 Line too long (124 > 120)
+    --> core/tests/test_feature_builder_ac313.py:10:121
+  ```
+  
+  **Root cause:** The module-level docstring on line 10 is 124 characters, 4 over the ruff `max-line-length = 120` limit. This is the same recurring E501/I001/F401 lint churn that process-hardening story US-33 AC-33.2 exists to prevent.
+  
+  **Recommended fix:** Wrap the docstring at 120 chars. For example:
+  
+  ```python
+  """AC-31.3 — Leak-free label validation: label_def drawing from within [0, window_s)
+  is rejected at task submission time."""
+  ```
+  
+  or shorten inline:
+  
+  ```python
+  """AC-31.3 — Reject label_def.label_start_s within [0, window_s) at task submission."""
+  ```
+  
+  No requirements changes, no test logic changes, no fixture changes needed. One line in the test file is the entire fix.
 
 ---
 
