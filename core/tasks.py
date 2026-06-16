@@ -1,11 +1,11 @@
 # ---
 # module: core.tasks
-# sprint: sprint-4
-# story: US-1 AC-1.5, US-16 AC-16.2
+# sprint: sprint-7
+# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
-# dependencies: celery, core.detection.birdeye_sweep
+# last-updated: 2026-06-17
+# dependencies: celery, core.detection.birdeye_sweep, core.feature_builder, core.models
 # ---
 """Core Celery tasks — autodiscovered by the Celery worker on startup."""
 from celery import shared_task
@@ -41,3 +41,41 @@ def birdeye_graduation_sweep():
 
     events = fetch_birdeye_recent_graduations()
     return reconcile_graduation_events(events)
+
+
+@shared_task(name="core.tasks.build_features")
+def build_features(
+    feature_set_id, mint_cohort, label_def, lake_base_dir=None, output_path=None
+):
+    """Feature Builder: extract features for a mint cohort from the lake (AC-31.1, PRD §6.5).
+
+    Runs the SHARED vendored extractor (US-30 FeatureExtractor) over the lake for each
+    mint in the cohort, producing a CSV export.  This task MUST run on the dedicated
+    celery-worker container — never on web/gunicorn (#289 lesson).
+
+    Args:
+        feature_set_id: PK of the FeatureSet to use.
+        mint_cohort: List of mint address strings.
+        label_def: Label definition dict (for AC-31.2/31.3; passed through here).
+        lake_base_dir: Root of the lake tree (defaults to 'lake/tapes').
+        output_path: Destination CSV path (defaults to /tmp/features_<id>.csv).
+
+    Returns:
+        {"path": str, "row_count": int}
+    """
+    from core.feature_builder import build_features_core
+    from core.models import FeatureSet
+
+    if lake_base_dir is None:
+        lake_base_dir = "lake/tapes"
+    if output_path is None:
+        output_path = f"/tmp/features_{feature_set_id}.csv"
+
+    fs = FeatureSet.objects.get(pk=feature_set_id)
+    return build_features_core(
+        feature_set=fs,
+        mint_cohort=mint_cohort,
+        label_def=label_def,
+        lake_base_dir=lake_base_dir,
+        output_path=output_path,
+    )

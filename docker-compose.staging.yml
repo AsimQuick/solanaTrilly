@@ -1,6 +1,6 @@
 # ---
 # file: docker-compose.staging.yml
-# stack: django+channels+listener
+# stack: django+channels+listener+celery
 # purpose: VPS staging compose — the ONLY compose file run on the VPS (PRD §15.4).
 #   Compose project: -p solanatrilly (enforced via top-level name: field AND CLI flag).
 #   Isolation: distinct Postgres DB (solanatrilly), distinct volume (solanatrilly_pgdata),
@@ -8,11 +8,13 @@
 #   web on host port 8002 (solanaBilly owns 8001 — never touch it).
 #   listener: dedicated detection/reconciler container — never shares the web/gunicorn
 #     process (#289 lesson); runs python manage.py run_listener inside the GHCR image.
+#   celery-worker: dedicated Feature Builder container — NEVER web/gunicorn (#289 lesson).
+#   celery-beat: dedicated periodic scheduler container.
 #   VPS is never hand-edited: deploy.yml pulls the GHCR image and brings up this file.
 # created-by: dev-team
-# sprint: sprint-2
-# story: US-6 AC-6.2, US-16 AC-16.3
-# last-updated: 2026-06-15
+# sprint: sprint-7
+# story: US-6 AC-6.2, US-16 AC-16.3, US-31 AC-31.1
+# last-updated: 2026-06-17
 # ---
 #
 # Hard isolation rules:
@@ -105,3 +107,51 @@ services:
     networks:
       - solanatrilly_net
     restart: unless-stopped
+
+  celery-worker:
+    image: ghcr.io/asimquick/solanatrilly:latest
+    command: celery -A config worker -l info
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: 0
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - solanatrilly_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping 2>&1 | grep -q 'pong' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  celery-beat:
+    image: ghcr.io/asimquick/solanatrilly:latest
+    command: celery -A config beat -l info --pidfile=/tmp/celery-beat.pid
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: 0
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - solanatrilly_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celery-beat.pid && kill -0 $(cat /tmp/celery-beat.pid) 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
