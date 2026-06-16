@@ -1,11 +1,11 @@
 # ---
 # module: core.snapshot_fetcher
 # sprint: sprint-6
-# story: US-24 AC-24.1, US-24 AC-24.2
+# story: US-24 AC-24.1, US-24 AC-24.2, US-24 AC-24.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-16
-# dependencies: core.clock, core.snapshot_source, core.models
+# dependencies: core.clock, core.snapshot_source, core.models, datetime
 # ---
 """SnapshotFetcher — at-most-one on-demand score-time snapshot per token.
 
@@ -22,7 +22,14 @@ fetch_and_persist() extends fetch() to store the raw payload verbatim in the
 'snapshots' row (§8, §6.4.1) via Snapshot.objects.update_or_create, using
 JsonSafeEncoder (via the JSONField on Snapshot.raw) so the H3/US-5 guard
 stays green.
+
+#380 future-window clamp: fetch() accepts an optional as_of parameter.  If
+provided and it exceeds clock.now(), it is silently clamped to clock.now()
+before being forwarded to the DataSource.  Birdeye returns HTTP 400 on any
+request whose to= / window= is in the future; this clamp ensures no future
+window ever leaves the fetcher regardless of what the caller supplies.
 """
+from datetime import datetime
 from typing import Optional
 
 from core.clock import Clock
@@ -42,21 +49,24 @@ class SnapshotFetcher:
         self._clock = clock
         self._fetched: set[str] = set()
 
-    def fetch(self, mint: str) -> Optional[dict]:
+    def fetch(self, mint: str, as_of: Optional[datetime] = None) -> Optional[dict]:
         """Fetch a score-time snapshot for mint.  At-most-once per token.
 
         Returns the raw snapshot dict from the DataSource on the first call for
         a given mint, or None if a snapshot for this mint was already taken
         (at-most-one discipline — §6.3).
 
-        The as_of time passed to the DataSource is always clock.now() — the
-        injected Clock provides 'now', not the system clock.  This enables
-        deterministic replay and proves the fetcher never bypasses the seam.
+        as_of is the requested window endpoint forwarded to the DataSource.
+        If omitted (None), clock.now() is used.  If provided but beyond
+        clock.now(), it is clamped to clock.now() (#380 future-window clamp):
+        no future timestamp is ever sent to Birdeye (Birdeye HTTP 400).
         """
         if mint in self._fetched:
             return None
         now = self._clock.now()
-        raw = self._source.get_snapshot(mint, as_of=now)
+        # #380 clamp: never forward a future window to the DataSource
+        effective_as_of = min(as_of, now) if as_of is not None else now
+        raw = self._source.get_snapshot(mint, as_of=effective_as_of)
         self._fetched.add(mint)
         return raw
 
