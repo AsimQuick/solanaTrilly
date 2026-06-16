@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_resolver_ac111
-# sprint: sprint-3
-# story: US-11 AC-11.1
-# status: implemented
+# sprint: sprint-3, sprint-6
+# story: US-11 AC-11.1, US-24 AC-24.4
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-16
 # dependencies: core.resolver, core.models, core.schemas, django.test.utils
 # ---
 """AC-11.1 — Single cached get_active_config() resolver + static-analysis guard.
@@ -68,8 +68,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 
 
+# Infrastructure modules that legitimately read os.environ for connection URLs
+# (not pipeline tunables — not subject to the get_active_config() discipline).
+# core/rate_limiter.py reads REDIS_URL to construct the Redis connection only.
+_OS_ENV_ALLOWED_FILES: set[str] = {"rate_limiter.py"}
+
+
 def _find_pipeline_service_files():
-    """Return Python files in core/ and services/ excluding tests and migrations."""
+    """Return Python files in core/ and services/ excluding tests and migrations.
+
+    Infrastructure files allowlisted in _OS_ENV_ALLOWED_FILES are excluded —
+    they read connection URLs (not pipeline tunables) and are exempt from the
+    get_active_config() discipline (AC-11.1 / AC-24.4).
+    """
     excluded_parts = {".git", "__pycache__", "migrations", ".venv", "node_modules", "tests"}
     scan_dirs = ["core"]  # expands to include "services" when that directory exists
     result = []
@@ -79,7 +90,8 @@ def _find_pipeline_service_files():
             continue
         for f in p.rglob("*.py"):
             if not excluded_parts.intersection(set(f.parts)):
-                result.append(f)
+                if f.name not in _OS_ENV_ALLOWED_FILES:
+                    result.append(f)
     return result
 
 
