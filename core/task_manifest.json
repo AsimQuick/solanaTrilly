@@ -4,6 +4,7 @@
   "tasks": [
     "core.tasks.add",
     "core.tasks.ping",
-    "core.tasks.birdeye_graduation_sweep"
+    "core.tasks.birdeye_graduation_sweep",
+    "core.tasks.build_features"
   ]
 }
