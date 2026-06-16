@@ -23,7 +23,6 @@ from django.db import models as dj_models
 from core.encoders import JsonSafeEncoder
 from core.models import Snapshot
 
-
 # ---------------------------------------------------------------------------
 # Field introspection — schema invariants
 # ---------------------------------------------------------------------------
