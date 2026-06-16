@@ -1,17 +1,30 @@
 # ---
 # module: core.feature_builder
 # sprint: sprint-7
-# story: US-31 AC-31.1
+# story: US-31 AC-31.1, AC-31.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
-# dependencies: core.feature_extractor, core.tape.lake_reader, csv, pathlib
+# dependencies: core.feature_extractor, core.tape.lake_reader, csv, hashlib, json, pathlib
 # ---
-"""Feature Builder core logic — shared extractor over lake → CSV export (PRD §6.5, US-31)."""
+"""Feature Builder core logic — shared extractor over lake → CSV + manifest export (PRD §6.5, US-31)."""
 from __future__ import annotations
 
 import csv
+import datetime
+import hashlib
+import json
 from pathlib import Path
+
+
+def _sha256_file(path: str) -> str:
+    """Return the SHA-256 hex digest of the file at *path*."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _block_time_to_date(ts: int) -> str:
+    """Convert a Unix timestamp to a UTC date string (YYYY-MM-DD)."""
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def build_features_core(
@@ -24,30 +37,45 @@ def build_features_core(
     window_s: int = 120,
     bucket_s: int = 15,
 ) -> dict:
-    """Extract features for each mint via the shared extractor, write CSV.
+    """Extract features for each mint via the shared extractor, write CSV + manifest.
 
     Uses FeatureExtractor.extract_from_lake (the shared US-30 extractor) — the
     same code path as live scoring and replay.  Output columns are ordered:
     'mint', then the tape_* features in sorted order, then internal stamp keys.
 
+    Every export also produces a JSON manifest (AC-31.2, PRD §6.4.5) containing:
+    FeatureSet version+hash, source(s), date range (UTC) from cohort block_times,
+    mint cohort, row count, SHA-256 content hash of the CSV, and label def.
+    The manifest path is <output_path>.manifest.json (same directory).
+
+    The content hash is deterministic: same raw + same FeatureSet → byte-identical
+    CSV → byte-identical content_hash.
+
     Args:
         feature_set: A FeatureSet model instance.
         mint_cohort: List of mint address strings to process.
-        label_def: Label definition dict (passed through for AC-31.2/31.3 use;
-                   not consumed in AC-31.1).
+        label_def: Label definition dict (for AC-31.2/31.3 labelling contract).
         lake_base_dir: Root of the jsonl.gz lake tree.
         output_path: File path where the CSV will be written.
         window_s: Feature extraction window in seconds (default 120).
         bucket_s: Bucket size for tape_close_b* (default 15).
 
     Returns:
-        {"path": str, "row_count": int}
+        {"path": str, "row_count": int, "manifest": dict, "manifest_path": str}
     """
     from core.feature_extractor import FeatureExtractor
     from core.tape.lake_reader import LakeReader
 
     extractor = FeatureExtractor(feature_set=feature_set)
     lake_rows = list(LakeReader(base_dir=lake_base_dir).iter_rows())
+
+    # Compute date range from block_times of all cohort rows in the lake.
+    mint_set = set(mint_cohort)
+    cohort_block_times = [
+        int(r["block_time"])
+        for r in lake_rows
+        if r.get("mint") in mint_set and "block_time" in r
+    ]
 
     results = []
     for mint in mint_cohort:
@@ -57,20 +85,48 @@ def build_features_core(
         if features is not None:
             results.append({"mint": mint, **features})
 
-    if not results:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_text("mint\n", encoding="utf-8")
-        return {"path": str(output_path), "row_count": 0}
-
-    # Deterministic column order: mint, sorted tape_* keys, sorted stamp keys.
-    tape_keys = sorted(k for k in results[0] if k.startswith("tape_"))
-    stamp_keys = sorted(k for k in results[0] if k.startswith("_"))
-    fieldnames = ["mint"] + tape_keys + stamp_keys
-
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(results)
 
-    return {"path": str(output_path), "row_count": len(results)}
+    if not results:
+        Path(output_path).write_text("mint\n", encoding="utf-8")
+    else:
+        # Deterministic column order: mint, sorted tape_* keys, sorted stamp keys.
+        tape_keys = sorted(k for k in results[0] if k.startswith("tape_"))
+        stamp_keys = sorted(k for k in results[0] if k.startswith("_"))
+        fieldnames = ["mint"] + tape_keys + stamp_keys
+
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(results)
+
+    # Build and write manifest (AC-31.2).
+    if cohort_block_times:
+        date_range = {
+            "start": _block_time_to_date(min(cohort_block_times)),
+            "end": _block_time_to_date(max(cohort_block_times)),
+        }
+    else:
+        date_range = {"start": None, "end": None}
+
+    manifest = {
+        "content_hash": _sha256_file(output_path),
+        "date_range": date_range,
+        "feature_set_hash": feature_set.hash,
+        "feature_set_version": feature_set.version,
+        "label_def": label_def,
+        "mint_cohort": list(mint_cohort),
+        "row_count": len(results),
+        "sources": [f"lake://{lake_base_dir}"],
+    }
+
+    manifest_path = str(Path(output_path).with_suffix(".manifest.json"))
+    with open(manifest_path, "w", encoding="utf-8") as mf:
+        json.dump(manifest, mf, indent=2, sort_keys=True)
+
+    return {
+        "manifest": manifest,
+        "manifest_path": manifest_path,
+        "path": str(output_path),
+        "row_count": len(results),
+    }
