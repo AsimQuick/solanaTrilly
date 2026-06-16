@@ -26,6 +26,7 @@ celery>=5.4,<6                   # distributed task queue
 redis>=5.0,<6                    # Python redis client (Celery broker/backend)
 
 # Utilities
+numpy>=1.24,<3                   # vendored tape_microstructure feature math (US-28)
 pyyaml>=6.0,<7                   # YAML parsing (used in topology tests)
 django-simple-history>=3.7,<4    # audit trail for PipelineConfig (US-9 AC-9.2)
 
