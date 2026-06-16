@@ -1,7 +1,7 @@
 # ---
 # module: core.feature_extractor
 # sprint: sprint-7
-# story: US-30 AC-30.1
+# story: US-30 AC-30.1, AC-30.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -161,11 +161,22 @@ class FeatureExtractor:
     def _compute(swaps: list[dict], *, window_s: int, bucket_s: int) -> dict | None:
         """The single compute path — DB and lake paths both end here.
 
-        Feeds the sorted §7.1 swap list into the vendored compute_features.
-        The causal cutoff (rel >= window_s rejection) is enforced inside
-        compute_features itself (§6.4.4 / tape_microstructure.py build_grid).
+        AC-30.2 causal cutoff (§6.4.4): hard-rejects any swap with
+        rel >= window_s BEFORE calling compute_features.  This makes the
+        extractor-layer cutoff explicit and auditable — compute_features also
+        enforces it internally, but the extractor is the authoritative boundary.
+
+        The returned feature dict is stamped with ``_window_s`` so every result
+        is traceable to its [0, window_s) extraction window.
 
         Returns:
-            Feature dict or None (no usable swaps within the window).
+            Feature dict (with ``_window_s`` stamp) or None (no usable swaps
+            within the causal window).
         """
-        return compute_features(swaps, window_s=window_s, bucket_s=bucket_s)
+        # Hard-reject swaps at or beyond the causal cutoff (§6.4.4 / AC-30.2).
+        windowed = [s for s in swaps if s["rel"] < window_s]
+        features = compute_features(windowed, window_s=window_s, bucket_s=bucket_s)
+        if features is None:
+            return None
+        # Stamp every feature result with the window that produced it.
+        return {**features, "_window_s": window_s}
