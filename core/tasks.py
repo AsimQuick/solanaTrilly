@@ -1,7 +1,7 @@
 # ---
 # module: core.tasks
 # sprint: sprint-7
-# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2
+# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2, AC-31.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -45,7 +45,13 @@ def birdeye_graduation_sweep():
 
 @shared_task(name="core.tasks.build_features")
 def build_features(
-    feature_set_id, mint_cohort, label_def, lake_base_dir=None, output_path=None
+    feature_set_id,
+    mint_cohort,
+    label_def,
+    lake_base_dir=None,
+    output_path=None,
+    *,
+    window_s: int = 120,
 ):
     """Feature Builder: extract features for a mint cohort from the lake (AC-31.1, PRD §6.5).
 
@@ -53,17 +59,26 @@ def build_features(
     mint in the cohort, producing a CSV export.  This task MUST run on the dedicated
     celery-worker container — never on web/gunicorn (#289 lesson).
 
+    Label leak-free constraint (AC-31.3): if label_def contains ``label_start_s`` it must
+    be >= window_s; otherwise a ``ValueError`` is raised BEFORE any DB lookup.
+
     Args:
         feature_set_id: PK of the FeatureSet to use.
         mint_cohort: List of mint address strings.
         label_def: Label definition dict (for AC-31.2/31.3; passed through here).
         lake_base_dir: Root of the lake tree (defaults to 'lake/tapes').
         output_path: Destination CSV path (defaults to /tmp/features_<id>.csv).
+        window_s: Feature extraction window in seconds (default 120); used for leak-free
+            label validation.
 
     Returns:
         {"path": str, "row_count": int}
     """
-    from core.feature_builder import build_features_core
+    from core.feature_builder import build_features_core, validate_label_def
+
+    # AC-31.3: validate BEFORE any DB lookup so the rejection fires at submission time.
+    validate_label_def(label_def, window_s)
+
     from core.models import FeatureSet
 
     if lake_base_dir is None:
@@ -78,4 +93,5 @@ def build_features(
         label_def=label_def,
         lake_base_dir=lake_base_dir,
         output_path=output_path,
+        window_s=window_s,
     )

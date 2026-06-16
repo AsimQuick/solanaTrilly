@@ -1,7 +1,7 @@
 # ---
 # module: core.feature_builder
 # sprint: sprint-7
-# story: US-31 AC-31.1, AC-31.2
+# story: US-31 AC-31.1, AC-31.2, AC-31.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -15,6 +15,27 @@ import datetime
 import hashlib
 import json
 from pathlib import Path
+
+
+def validate_label_def(label_def: dict, window_s: int) -> None:
+    """Enforce leak-free label constraint (AC-31.3, PRD §6.4.4).
+
+    If *label_def* contains a ``label_start_s`` key its value must be >= *window_s*
+    (i.e. the label observation window must not overlap the feature window [0, window_s)).
+    Raises ``ValueError`` with a clear message when the constraint is violated.
+    If ``label_start_s`` is absent the call is a no-op (backward compatible).
+
+    Args:
+        label_def: Label definition dict (may contain optional ``label_start_s`` key).
+        window_s: Feature extraction window in seconds.
+    """
+    label_start_s = label_def.get("label_start_s")
+    if label_start_s is not None and label_start_s < window_s:
+        raise ValueError(
+            f"Leak-free label violation: label_def 'label_start_s'={label_start_s!r} "
+            f"draws from within the feature window [0, {window_s}). "
+            f"Labels must start at or after window_s={window_s}."
+        )
 
 
 def _sha256_file(path: str) -> str:
@@ -63,6 +84,8 @@ def build_features_core(
     Returns:
         {"path": str, "row_count": int, "manifest": dict, "manifest_path": str}
     """
+    validate_label_def(label_def, window_s)
+
     from core.feature_extractor import FeatureExtractor
     from core.tape.lake_reader import LakeReader
 
