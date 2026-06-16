@@ -210,18 +210,27 @@ def test_zero_base_reserve_swap_skipped_no_exception() -> None:
     )
 
 
-def test_none_base_reserve_swap_skipped_no_exception() -> None:
-    """base_reserve=None (None reserves) → no exception raised; swap skipped."""
-    swap = _make_degenerate({"base_reserve": None})
+def test_none_base_reserve_swap_emitted() -> None:
+    """base_reserve=None is VALID (Birdeye carries no reserves, §3.3/§7.1) → emitted.
+
+    Updated for US-22 AC-22.3: the original AC-18.4 wording treated None reserves
+    as degenerate, but that was written against synthetic fixtures that always
+    had reserves.  Real Birdeye swaps legitimately have None reserves (price =
+    tokenPrice, not reserve-derived), so a None-reserve swap must NORMALIZE, not
+    skip — otherwise every live Birdeye swap is dropped.
+    """
+    swap = dict(_VALID_SWAP)
+    swap["base_reserve"] = None
 
     processed, normalized, skipped = _run_recorder([swap])
 
-    assert normalized == [], (
-        f"base_reserve=None swap must be skipped (None reserves per AC-18.4), got {normalized}"
+    assert len(normalized) == 1, (
+        f"base_reserve=None swap must be emitted (valid for Birdeye), got {normalized}"
     )
-    assert len(skipped) == 1, (
-        f"base_reserve=None swap must appear in skipped_degenerate, got {skipped}"
+    assert skipped == [], (
+        f"base_reserve=None swap must NOT be skipped, got {skipped}"
     )
+    assert normalized[0].base_reserve is None
 
 
 def test_zero_quote_reserve_swap_skipped_no_exception() -> None:
@@ -238,18 +247,23 @@ def test_zero_quote_reserve_swap_skipped_no_exception() -> None:
     )
 
 
-def test_none_quote_reserve_swap_skipped_no_exception() -> None:
-    """quote_reserve=None (None reserves) → no exception raised; swap skipped."""
-    swap = _make_degenerate({"quote_reserve": None})
+def test_none_quote_reserve_swap_emitted() -> None:
+    """quote_reserve=None is VALID (Birdeye carries no reserves, §3.3/§7.1) → emitted.
+
+    Updated for US-22 AC-22.3 — see test_none_base_reserve_swap_emitted.
+    """
+    swap = dict(_VALID_SWAP)
+    swap["quote_reserve"] = None
 
     processed, normalized, skipped = _run_recorder([swap])
 
-    assert normalized == [], (
-        f"quote_reserve=None swap must be skipped (None reserves per AC-18.4), got {normalized}"
+    assert len(normalized) == 1, (
+        f"quote_reserve=None swap must be emitted (valid for Birdeye), got {normalized}"
     )
-    assert len(skipped) == 1, (
-        f"quote_reserve=None swap must appear in skipped_degenerate, got {skipped}"
+    assert skipped == [], (
+        f"quote_reserve=None swap must NOT be skipped, got {skipped}"
     )
+    assert normalized[0].quote_reserve is None
 
 
 def test_degenerate_swap_still_in_processed() -> None:
@@ -293,15 +307,16 @@ def test_good_swap_alongside_degenerate_only_good_emitted() -> None:
 
 def test_multiple_degenerate_conditions_all_skipped() -> None:
     """Each degenerate condition produces 0 NormalizedSwaps and 1 skipped_degenerate entry."""
+    # NOTE (US-22 AC-22.3): None reserves are NOT degenerate — Birdeye carries no
+    # reserves (§3.3/§7.1).  Only price/vol degeneracy and PRESENT-but-zero
+    # reserves are degenerate.
     conditions = [
         {"price": 0},
         {"price": None},
         {"vol_sol": 0},
         {"vol_sol": None},
         {"base_reserve": 0},
-        {"base_reserve": None},
         {"quote_reserve": 0},
-        {"quote_reserve": None},
     ]
 
     for overrides in conditions:

@@ -107,13 +107,21 @@ def test_build_swap_recorder_returns_tape_recorder() -> None:
 
 
 def test_build_swap_recorder_uses_birdeye_swap_source() -> None:
-    """The recorder's _source must be a BirdeyeSwapSource instance."""
+    """The recorder's source chain must ultimately wrap a BirdeyeSwapSource.
+
+    AC-22.3: the source is now BoundedSource(MappedSwapSource(BirdeyeSwapSource))
+    so raw Birdeye events are mapped to the internal §7.1 shape and the live
+    stream is time-boxed.  Unwrap the ._inner chain to find the concrete source.
+    """
     from core.management.commands.run_listener import build_swap_recorder
     from core.tape.birdeye_swap_source import BirdeyeSwapSource
 
     recorder = build_swap_recorder(api_key="dummy_key", mint="DUMMY_MINT")
-    assert isinstance(recorder._source, BirdeyeSwapSource), (
-        f"Expected _source to be BirdeyeSwapSource, got {type(recorder._source).__name__}"
+    inner = recorder._source
+    while hasattr(inner, "_inner"):
+        inner = inner._inner
+    assert isinstance(inner, BirdeyeSwapSource), (
+        f"Expected source chain to wrap BirdeyeSwapSource, got {type(inner).__name__}"
     )
 
 

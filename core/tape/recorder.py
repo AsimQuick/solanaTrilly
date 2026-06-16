@@ -59,13 +59,18 @@ def _is_degenerate_swap(event: dict) -> bool:
     """Return True if *event* is degenerate and must be skipped (S8 / #405).
 
     Degenerate conditions (AC-18.4):
-    - price is None or zero       → ZeroDivisionError / degenerate price field
-    - vol_sol is None or zero     → zero/missing volume
-    - base_reserve is None or 0   → zero/None reserves
-    - quote_reserve is None or 0  → zero/None reserves
+    - price is None or zero          → ZeroDivisionError / degenerate price field
+    - vol_sol is None or zero        → zero/missing volume
+    - base_reserve present but == 0  → reserve-derived price ZeroDivisionError (#405)
+    - quote_reserve present but == 0 → reserve-derived price ZeroDivisionError (#405)
 
-    All of these would produce either a ZeroDivisionError in downstream feature
-    math (tape_microstructure) or an undetectable silent 0-value row in the lake.
+    NOTE (US-22 AC-22.3, PRD §3.3/§7.1): a *None* reserve is NOT degenerate.  The
+    Birdeye live path carries no reserves (price = Birdeye tokenPrice, not
+    reserve-derived) — reserves are the helius_verify path only.  Treating
+    None reserves as degenerate (the original AC-18.4 wording, written against
+    synthetic fixtures that always had reserves) would skip every real Birdeye
+    swap.  Only a *present* zero reserve — which would divide-by-zero on the
+    reserve-derived price path — is degenerate.
     """
     price = event.get("price")
     vol_sol = event.get("vol_sol")
@@ -90,10 +95,12 @@ def _is_degenerate_swap(event: dict) -> bool:
     except (TypeError, ValueError):
         return True
 
-    # Zero/None reserves (§18.4 literal: "zero/None reserves")
-    if base_reserve is None or base_reserve == 0:
+    # Reserves: present-but-zero is degenerate (#405 reserve-derived price would
+    # ZeroDivisionError).  None is VALID — the Birdeye live path carries no
+    # reserves (§3.3/§7.1); skipping None would drop every real Birdeye swap.
+    if base_reserve is not None and base_reserve == 0:
         return True
-    if quote_reserve is None or quote_reserve == 0:
+    if quote_reserve is not None and quote_reserve == 0:
         return True
 
     return False
