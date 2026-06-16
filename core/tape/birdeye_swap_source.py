@@ -35,6 +35,8 @@ from core.datasource import DataSource
 # ---------------------------------------------------------------------------
 
 BIRDEYE_WS_URL: str = "wss://public-api.birdeye.so/socket/solana"
+BIRDEYE_WS_ORIGIN: str = "ws://public-api.birdeye.so"
+BIRDEYE_WS_SUBPROTOCOL: str = "echo-protocol"
 PUMPSWAP_PROGRAM: str = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 
 
@@ -65,19 +67,39 @@ class BirdeyeSwapSource(DataSource):
         self._ws: Any = None
 
     async def connect(self) -> None:
-        """Open the Birdeye WebSocket and send the SUBSCRIBE_TXS message."""
+        """Open the Birdeye WebSocket and send the SUBSCRIBE_TXS message.
+
+        Uses the proven Birdeye handshake (matching the AC-22.2 capture tool):
+        the API key is a query param, the Origin header + 'echo-protocol'
+        subprotocol are required, and TLS uses certifi.  Subscribe payload uses
+        ``queryType: simple`` (the form Birdeye answers with TXS_DATA frames).
+        """
+        import ssl  # lazy — keeps import-time free of side effects
+
         import websockets  # lazy import — keeps import-time free of network side effects
 
+        try:
+            import certifi
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        except Exception:  # pragma: no cover - certifi always present in the image
+            ssl_ctx = ssl.create_default_context()
+
+        url = f"{BIRDEYE_WS_URL}?x-api-key={self._api_key}"
         self._ws = await websockets.connect(
-            BIRDEYE_WS_URL,
-            additional_headers={"X-API-KEY": self._api_key},
+            url,
+            extra_headers={"Origin": BIRDEYE_WS_ORIGIN},
+            subprotocols=[BIRDEYE_WS_SUBPROTOCOL],
+            ssl=ssl_ctx,
+            open_timeout=20,
+            ping_interval=20,
+            ping_timeout=10,
         )
         subscribe_msg = json.dumps(
             {
                 "type": "SUBSCRIBE_TXS",
                 "data": {
+                    "queryType": "simple",
                     "address": self._mint,
-                    "txType": "swap",
                 },
             }
         )
@@ -107,11 +129,10 @@ class BirdeyeSwapSource(DataSource):
             except (json.JSONDecodeError, TypeError):
                 continue
 
-            if not isinstance(parsed, dict):
+            # Only TXS_DATA frames carry a swap; WELCOME/ack frames are skipped.
+            if not isinstance(parsed, dict) or parsed.get("type") != "TXS_DATA":
                 continue
 
-            # Unwrap the Birdeye envelope: {"type":"TXS","data":{…actual swap…}}
-            event = parsed.get("data", parsed)
-
+            event = parsed.get("data")
             if isinstance(event, dict):
                 yield event
