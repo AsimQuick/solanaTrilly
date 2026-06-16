@@ -1,16 +1,16 @@
 # ---
 # module: core.admin
-# sprint: sprint-3, sprint-4, sprint-5
-# story: US-9 AC-9.4, US-14 AC-14.3, US-17 AC-17.4
+# sprint: sprint-3, sprint-4, sprint-5, sprint-6
+# story: US-9 AC-9.4, US-14 AC-14.3, US-17 AC-17.4, US-23 AC-23.4
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-16
 # dependencies: django, core.models, simple_history
 # ---
 from django.contrib import admin
 from simple_history.admin import SimpleHistoryAdmin
 
-from core.models import PipelineConfig, Swap, Token
+from core.models import PipelineConfig, Snapshot, Swap, Token
 
 
 @admin.register(PipelineConfig)
@@ -54,3 +54,12 @@ class SwapAdmin(admin.ModelAdmin):
         "rel",
     ]
     ordering = ["-block_time", "-slot"]
+
+
+@admin.register(Snapshot)
+class SnapshotAdmin(admin.ModelAdmin):
+    """Admin for Snapshot — score-time read, immutable raw fields read-only (US-23 AC-23.4)."""
+
+    list_display = ["mint", "taken_at", "elapsed_s"]
+    readonly_fields = ["mint", "taken_at", "elapsed_s", "raw"]
+    ordering = ["-taken_at"]
