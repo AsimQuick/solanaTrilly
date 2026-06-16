@@ -191,7 +191,7 @@
     {
       "id": "US-32",
       "title": "P5 \u2014 the T0/G2 source-parity gate (\u00a77.6, \u00a716): Birdeye live\u2194backfill byte-parity + Helius raw-truth cross-check, wired as a hard merge gate",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-28",
@@ -203,8 +203,8 @@
         {
           "id": "32.1",
           "text": "G2(a) live\u2194backfill parity (the seam that actually serves). For the banked sprint-5 golden token(s) (E6ifp2\u2026pump / H9L9\u2026pump), the Birdeye live-stream tape and a Birdeye seek_by_time REST backfill of the SAME token (the identical reconcile call path, US-20) produce byte-identical normalized swaps AND byte-identical compute_features output (via the US-30 extractor). The seek_by_time backfill is an on-demand REST read within the Birdeye professional allowance \u2014 NOT a firehose WS activation. Offline + deterministic. Verified by a pytest test asserting swap-level and feature-level byte-identity.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started",
           "tester_notes": ""
         },
@@ -226,7 +226,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-32.1 done: Done. Here is the implementation summary for the orchestrator:\n\n---\n\n**AC-32.1 Implementation Summary**\n\n**Files changed:**\n\n1. `core/tests/test_g2a_live_backfill_parity_ac321.py` *(new)* \u2014 8 pytest tests implementing the G2(a) live\u2194backfill parity gate. Fully offline and deterministic \u2014 uses the banked golden fixture committed at `lake/golden/birdeye_subscribe_txs/dt=2026-06-15/E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump_pumpswap_golden.jsonl.gz`.\n\n**Test inventory (8 tests):**\n- `test_g2a_banked_fixture_exists_and_has_swaps` \u2014 fixture is committed, contains real `pump_amm` swaps for the banked mint\n- `test_g2a_live_backfill_same_swap_count_e6ifp2` \u2014 both paths produce the same number of NormalizedSwaps\n- `test_g2a_swap_level_byte_identity_e6ifp2` \u2190 **MAIN GATE**: all non-source NormalizedSwap fields are byte-identical (JSON dict comparison)\n- `test_g2a_feature_level_byte_identity_e6ifp2` \u2190 **MAIN GATE**: `FeatureExtractor.extract_from_lake()` (US-30) produces identical feature dicts on both paths\n- `test_g2a_source_tags_correct_e6ifp2` \u2014 live=`birdeye_live`, backfill=`birdeye_backfill` (the one intentional difference)\n- `test_g2a_golden_features_are_not_none_e6ifp2` \u2014 features ar \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements approved \u2014 all 3 ACs are testable. AC-32.1: two named golden tokens anchor the offline test; swap-level and feature-level byte-identity are separate assertions, ensuring the seam holds end-to-end. AC-32.2: the carry clause (G2(b) carries if Helius window not spent; G1+G2(a) still gates) was implicit \u2014 wording tightened to say 'carries to the next sprint' for clarity (minor fix applied directly). The ops/firehose_activation_log.md ledger requirement is a DoD constraint verifiable by the Tester. AC-32.3: ImportError trap mirrors the AC-21.3 / AC-28.3 pattern; 'passing on the feature branch and at merge' is concrete CI evidence."
     },
@@ -270,7 +270,7 @@
       "tester_notes": "Requirements approved \u2014 all 3 ACs are testable. AC-33.1 wording tightened (added 'message' after 'remedy' for clarity \u2014 minor fix applied directly); the three CI run IDs are concrete regression anchors. AC-33.2: seeded-failure test is the standard pattern; the five-sprint recurrence history (AC-17.1/17.2/19.3/22.2, AC-23.3) grounds the urgency. AC-33.3: explicit three-condition Tester confirmation (200 on 8002, listener Up, solanaBilly untouched on 8001) with retry-with-backoff retention \u2014 fully verifiable from the actual deploy run. US-33 can begin in parallel with US-29 (both independent of US-28's vendored math)."
     }
   ],
-  "last_updated": "2026-06-16T21:52:51+00:00",
+  "last_updated": "2026-06-16T22:08:05+00:00",
   "deploy_summary": "",
   "tester_sprint_status": "approved",
   "tester_sprint_notes": "Sprint-7 requirements review COMPLETE \u2014 all 6 stories / 18 ACs approved for implementation. No requirements defects; 4 minor wording fixes applied directly to ACs (AC-28.1: added assertion detail to smoke test; AC-31.3: pinned rejection to 'task submission time with a clear error'; AC-32.2: made G2(b) carry clause explicit ('carries to the next sprint'); AC-33.1: added 'message' after 'remedy'). All ACs carry explicit pytest verification criteria with concrete assertions \u2014 no vague 'it works' clauses. The P5 integrity core (US-28\u219230\u219231\u219232) is properly sequenced: US-28 (vendored math) is the foundation; US-29 and US-33 are independent and may run in parallel with US-28; US-30 (extractor) needs US-28+US-29+US-19; US-31 (Feature Builder) needs US-30; US-32 (T0/G2 gate) needs US-28+US-30. The ImportError CI trap pattern (AC-21.3 / AC-28.3 / AC-30.3 / AC-32.3) is correctly carried through all gate stories. Firehose budget is sound: G1 + G2(a) need NO activation; G2(b) is the ONE budgeted Helius activation (Helius 10\u21929) with an explicit carry-to-next-sprint fallback that never blocks P5 exit. DEFERRED: F5 (live Birdeye REST SnapshotDataSource adapter) correctly deferred to sprint-8 near the scorer (P7). Ready for Dev Team kickoff."

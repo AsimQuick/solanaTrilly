@@ -1,8 +1,8 @@
 # Sprint 7
 
 **Phase:** planning
-**Progress:** 4/6 stories | 12/18 ACs
-**Last Updated:** 2026-06-16T21:52:51+00:00
+**Progress:** 4/6 stories | 13/18 ACs
+**Last Updated:** 2026-06-16T22:08:05+00:00
 
 ## Sprint Goal
 Open P5 — the lake + extraction contract + vendored feature math + the Feature Builder + the T0/G1/G2 golden-parity merge gate (PRD §6.4 / §7.2 / §7.6 / §16; retrospective F1). P0–P4 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity, and P4 takes exactly one on-demand score-time snapshot per token with the three-unit (vol_sol/vol_usd/sol_usd) lock. P5 is THE integrity core (§6.4): it makes a model's live score EQUAL its offline score by construction — one vendored feature library, one deterministic extractor serving live + offline + replay, and a golden-parity gate that fails any PR that breaks byte-identity. This is the fix for the evidenced solanaBilly disaster where the t2 go-live got 23% live precision vs 78% offline purely from feature-assembly drift (#358/#359/#367). Deliver, IN ORDER: (1) VENDOR THE FEATURE MATH (§7.2) — copy solanabilly3/src/tape_microstructure.py VERBATIM into the repo (the ONE sanctioned edit is rels.ptp() → np.ptp(rels) for numpy 2.x), preserving compute_features(swaps, window_s=120, bucket_s=15) -> dict|None and the full tape_* family; never hand-edit (re-vendor to update) — and prove it with the G1 function-parity gate (§7.6): the frozen ≈15-token golden fixture (solanabilly3/data/microstructure/golden_fixture_t0t2_15s.json) runs through the vendored math and every feature matches within 1e-9 (US-28); (2) the EXTRACTION CONTRACT — the 'feature_sets' table (§8, §6.4.5): a FeatureSet is a hashed config (ordered columns + vendored-math version) with the live_servable vs training_only split (D2/D3) so same raw + same FeatureSet → byte-identical output (US-29); (3) the SHARED DETERMINISTIC EXTRACTOR (§6.4.4/§6.4.5) — read raw normalized swaps from the lake/'swaps' mirror, feed the §7.1 subset {rel, price, side, vol, owner} to the vendored compute_features, ONE code path for live + offline + replay (Principle #2), leak-free by the causal cutoff (hard-reject any swap with rel ≥ window_s; labels start strictly after), deterministic and versioned (US-30); (4) the FEATURE BUILDER (§6.5) — a one-click Celery export: pick a FeatureSet + cohort + label def → run the SAME vendored extractor over the lake → CSV/parquet + a manifest (FeatureSet version+hash, source(s), date range, mint cohort, row count, content hash, label def) that reproduces the export exactly; runs off the dedicated celery container, NEVER web/gunicorn (#289) (US-31); (5) the T0/G2 SOURCE-PARITY GATE (§7.6, §16) — the #1 merge gate (§6.4.3): Birdeye live↔backfill byte-identical normalized swaps + features (the seam that actually serves; offline, no firehose) PLUS a Helius raw-truth cross-check that confirms Birdeye coverage/side/amount — wired as a hard merge gate in the single canonical ci.yml 'test' job via the ImportError trap (US-32). FIREHOSE: P5's offline gates (G1, G2(a) live↔backfill) require NO activation — G2(a) uses the banked sprint-5 captures (E6ifp2…pump / H9L9…pump) + an on-demand Birdeye seek_by_time REST backfill (a REST read within the professional allowance, NOT a firehose WS activation); G2(b) raw-truth is the project's ONE budgeted G2 activation (CLAUDE.md — 'G2 needs one activation'): a single deliberate, time-boxed, ledgered Helius activation banks the durable raw-truth fixture (Helius 10→9 at most), after which the CI cross-check runs OFFLINE against the banked fixture forever and the P5 gate never depends on a live read (8 Birdeye remain untouched). PROCESS HARDENING (US-33) — the carries that a checklist has demonstrably failed to fix: F2 MECHANIZE phase-promotion (the stale-'phase' deploy failure has tripped the US-13 integrity guard THREE consecutive sprints D2→E1→F2 — make it a mechanical pre-deploy step / CI pre-check, not a step a human remembers); F4 MECHANIZE the ruff gate (a real pre-commit hook or container-entrypoint/Makefile ruff step — the I001/E501/F401 churn has recurred FIVE sprints); F3 close the carried sprint-6 DoD VPS clause — the first sprint-7 deploy at true HEAD is a clean green run, Tester-confirmed 200-on-8002 + listener Up + solanaBilly untouched on 8001 (re-issue of E5 / US-22 condition B). DEFERRED: F5 (build the live Birdeye REST SnapshotDataSource adapter) is consciously deferred to sprint-8, scheduled near where the scorer (P7) consumes it — it is a single on-demand REST read within the Birdeye allowance (NOT a firehose activation) and is off the P5 critical path; keeping sprint-7 focused on the integrity core avoids the over-commitment the retrospectives repeatedly warn against. Build order: US-28 FIRST (the vendored math everything downstream eats) — US-29 (FeatureSet table) and US-33 (process) are independent and may run in parallel; then US-30 (extractor) needs US-28 + US-29 (+ the US-19 lake reader); then US-31 (Feature Builder) needs US-30 and US-32 (T0/G2 parity) needs US-28 + US-30.
@@ -357,16 +357,35 @@ Open P5 — the lake + extraction contract + vendored feature math + the Feature
 ---
 
 ### US-32: P5 — the T0/G2 source-parity gate (§7.6, §16): Birdeye live↔backfill byte-parity + Helius raw-truth cross-check, wired as a hard merge gate
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-32.1:** G2(a) live↔backfill parity (the seam that actually serves). For the banked sprint-5 golden token(s) (E6ifp2…pump / H9L9…pump), the Birdeye live-stream tape and a Birdeye seek_by_time REST backfill of the SAME token (the identical reconcile call path, US-20) produce byte-identical normalized swaps AND byte-identical compute_features output (via the US-30 extractor). The seek_by_time backfill is an on-demand REST read within the Birdeye professional allowance — NOT a firehose WS activation. Offline + deterministic. Verified by a pytest test asserting swap-level and feature-level byte-identity.
+- [x] **AC-32.1:** G2(a) live↔backfill parity (the seam that actually serves). For the banked sprint-5 golden token(s) (E6ifp2…pump / H9L9…pump), the Birdeye live-stream tape and a Birdeye seek_by_time REST backfill of the SAME token (the identical reconcile call path, US-20) produce byte-identical normalized swaps AND byte-identical compute_features output (via the US-30 extractor). The seek_by_time backfill is an on-demand REST read within the Birdeye professional allowance — NOT a firehose WS activation. Offline + deterministic. Verified by a pytest test asserting swap-level and feature-level byte-identity.
+  - Dev: done
 - [ ] **AC-32.2:** G2(b) raw-truth spot-check (§7.6): a Helius PumpSwap decode confirms the Birdeye tape's coverage/side/amount on the golden token(s) (verified 100% on 3 mints previously; widened here). This is the project's ONE budgeted G2 firehose activation (CLAUDE.md — 'G2 needs one activation'): a single deliberate, time-boxed, ledgered (ops/firehose_activation_log.md) Helius activation banks the durable raw-truth fixture (Helius 10→9); the CI cross-check then runs OFFLINE against the banked fixture forever and the P5 gate NEVER depends on a live read. Verified by the banked fixture + an offline parity test over it. (If the Helius window is not spent this sprint, the offline G1 + G2(a) gate still gates the merge and G2(b) carries to the next sprint — the gate is offline by construction, so an aborted/short window never blocks P5 exit.)
 - [ ] **AC-32.3:** Golden parity is a HARD MERGE GATE (§6.4.3 — 'the #1 gate'). The combined T0/G1/G2 parity suite (G1 from US-28; G2(a)/G2(b) here) passes in the single canonical ci.yml 'test' job (H1 — no second workflow) and is wired via a compile-time ImportError trap on the named functions (mirroring AC-21.3) so a deleted/renamed parity test fails pytest collection. Verified by the tests passing on the feature branch and at merge. New files carry metadata front matter.
 
 **Dependencies:** US-28, US-30, US-19, US-20
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-32.1 done: Done. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-32.1 Implementation Summary**
+  
+  **Files changed:**
+  
+  1. `core/tests/test_g2a_live_backfill_parity_ac321.py` *(new)* — 8 pytest tests implementing the G2(a) live↔backfill parity gate. Fully offline and deterministic — uses the banked golden fixture committed at `lake/golden/birdeye_subscribe_txs/dt=2026-06-15/E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump_pumpswap_golden.jsonl.gz`.
+  
+  **Test inventory (8 tests):**
+  - `test_g2a_banked_fixture_exists_and_has_swaps` — fixture is committed, contains real `pump_amm` swaps for the banked mint
+  - `test_g2a_live_backfill_same_swap_count_e6ifp2` — both paths produce the same number of NormalizedSwaps
+  - `test_g2a_swap_level_byte_identity_e6ifp2` ← **MAIN GATE**: all non-source NormalizedSwap fields are byte-identical (JSON dict comparison)
+  - `test_g2a_feature_level_byte_identity_e6ifp2` ← **MAIN GATE**: `FeatureExtractor.extract_from_lake()` (US-30) produces identical feature dicts on both paths
+  - `test_g2a_source_tags_correct_e6ifp2` — live=`birdeye_live`, backfill=`birdeye_backfill` (the one intentional difference)
+  - `test_g2a_golden_features_are_not_none_e6ifp2` — features ar …
 
 **Tester Status:** approved
 **Tester Notes:**
