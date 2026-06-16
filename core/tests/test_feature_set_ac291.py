@@ -16,7 +16,6 @@ import pytest
 
 from core.models import FeatureSet
 
-
 # ---------------------------------------------------------------------------
 # Field introspection — schema invariants
 # ---------------------------------------------------------------------------
