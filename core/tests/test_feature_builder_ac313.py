@@ -7,7 +7,8 @@
 # last-updated: 2026-06-17
 # dependencies: core.feature_builder, core.tasks, pytest
 # ---
-"""AC-31.3 — Leak-free label validation: label_def drawing from within [0, window_s) is rejected at task submission time."""
+"""AC-31.3 — Leak-free label validation: label_def drawing from within [0, window_s)
+is rejected at task submission time."""
 from __future__ import annotations
 
 import pytest
