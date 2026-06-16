@@ -111,7 +111,7 @@
     {
       "id": "US-30",
       "title": "P5 \u2014 the shared deterministic extractor: raw lake \u2192 vendored compute_features \u2192 feature values, ONE code path (Principle #2), leak-free causal cutoff (\u00a76.4.4/\u00a76.4.5)",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-28",
@@ -122,8 +122,8 @@
         {
           "id": "30.1",
           "text": "ONE extractor, all callers (Principle #2). A FeatureExtractor reads normalized swaps for a mint from the lake / 'swaps' mirror, orders them by the stable (block_time, slot, signature) key, and feeds the \u00a77.1 subset {rel, price, side, vol, owner} to the vendored compute_features for a given FeatureSet \u2192 feature values. The SAME extractor code path serves live and offline \u2014 no live-only or offline-only assembly. Verified by a pytest test that the extractor over DB 'swaps' rows and over the jsonl.gz lake for the SAME token yields byte-identical feature values (closing the assembly-drift class #358/#359/#367 by construction).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started",
           "tester_notes": ""
         },
@@ -145,7 +145,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-30.1 done: Pushed successfully. Here is the implementation summary for the orchestrator:\n\n---\n\n**AC-30.1 Implementation Summary**\n\n**Files changed:**\n\n1. `core/feature_extractor.py` *(new)* \u2014 `FeatureExtractor` class implementing the ONE shared deterministic extractor (Principle #2, PRD \u00a76.4.4/\u00a76.4.5). Two source adapters (`extract_from_db`, `extract_from_lake`) both normalize to the \u00a77.1 dict format (`{rel, price, side, vol, owner, block_time, slot, signature}`) and delegate to the single `_compute()` staticmethod which calls the vendored `compute_features`. `vol_sol` is used as the `vol` field on both paths (PumpSwap quote unit). Stable sort by `(block_time, slot, signature)` applied before compute; equal-rel tiebreaking is preserved by Python's stable sort inside `compute_features`. Mint filtering for the lake path requires `mint` key in lake rows.\n\n2. `core/tests/test_feature_extractor_ac301.py` *(new)* \u2014 8 pytest tests with metadata front matter:\n   - `test_feature_extractor_db_vs_lake_byte_identical` \u2014 **THE KEY TEST**: writes identical 6-swap dataset to DB and jsonl.gz lake, asserts `dict == dict` (byte-identical) for the same mint from both sources\n   - `test_feature_extractor_db_only \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements approved \u2014 all 3 ACs are testable. AC-30.1: byte-identity between DB swaps and jsonl.gz lake for the SAME token is a concrete and automatable assertion \u2014 this is the Principle #2 proof point that closes the solanaBilly drift class. The (block_time, slot, signature) ordering key is consistent with AC-18 (US-18, approved). AC-30.2: three explicit cutoff boundary cases (==window_s excluded, >window_s excluded, ==window_s\u2212epsilon included) with a value assertion \u2014 thorough boundary coverage. AC-30.3: run-twice byte-identity is concrete; ImportError trap mirrors the AC-21.3 / AC-28.3 pattern already in use."
     },
@@ -270,7 +270,7 @@
       "tester_notes": "Requirements approved \u2014 all 3 ACs are testable. AC-33.1 wording tightened (added 'message' after 'remedy' for clarity \u2014 minor fix applied directly); the three CI run IDs are concrete regression anchors. AC-33.2: seeded-failure test is the standard pattern; the five-sprint recurrence history (AC-17.1/17.2/19.3/22.2, AC-23.3) grounds the urgency. AC-33.3: explicit three-condition Tester confirmation (200 on 8002, listener Up, solanaBilly untouched on 8001) with retry-with-backoff retention \u2014 fully verifiable from the actual deploy run. US-33 can begin in parallel with US-29 (both independent of US-28's vendored math)."
     }
   ],
-  "last_updated": "2026-06-16T20:53:41+00:00",
+  "last_updated": "2026-06-16T21:05:08+00:00",
   "deploy_summary": "",
   "tester_sprint_status": "approved",
   "tester_sprint_notes": "Sprint-7 requirements review COMPLETE \u2014 all 6 stories / 18 ACs approved for implementation. No requirements defects; 4 minor wording fixes applied directly to ACs (AC-28.1: added assertion detail to smoke test; AC-31.3: pinned rejection to 'task submission time with a clear error'; AC-32.2: made G2(b) carry clause explicit ('carries to the next sprint'); AC-33.1: added 'message' after 'remedy'). All ACs carry explicit pytest verification criteria with concrete assertions \u2014 no vague 'it works' clauses. The P5 integrity core (US-28\u219230\u219231\u219232) is properly sequenced: US-28 (vendored math) is the foundation; US-29 and US-33 are independent and may run in parallel with US-28; US-30 (extractor) needs US-28+US-29+US-19; US-31 (Feature Builder) needs US-30; US-32 (T0/G2 gate) needs US-28+US-30. The ImportError CI trap pattern (AC-21.3 / AC-28.3 / AC-30.3 / AC-32.3) is correctly carried through all gate stories. Firehose budget is sound: G1 + G2(a) need NO activation; G2(b) is the ONE budgeted Helius activation (Helius 10\u21929) with an explicit carry-to-next-sprint fallback that never blocks P5 exit. DEFERRED: F5 (live Birdeye REST SnapshotDataSource adapter) correctly deferred to sprint-8 near the scorer (P7). Ready for Dev Team kickoff."
