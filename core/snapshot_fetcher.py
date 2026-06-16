@@ -1,11 +1,11 @@
 # ---
 # module: core.snapshot_fetcher
 # sprint: sprint-6
-# story: US-24 AC-24.1
+# story: US-24 AC-24.1, US-24 AC-24.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-16
-# dependencies: core.clock, core.snapshot_source
+# dependencies: core.clock, core.snapshot_source, core.models
 # ---
 """SnapshotFetcher — at-most-one on-demand score-time snapshot per token.
 
@@ -17,10 +17,16 @@ At-most-one-per-token (§6.3): once a mint has been fetched, subsequent calls
 to fetch() return None without calling the DataSource again.  The concrete
 Birdeye REST adapter (BirdeyeSnapshotSource) is injected at startup and is
 never imported here.
+
+fetch_and_persist() extends fetch() to store the raw payload verbatim in the
+'snapshots' row (§8, §6.4.1) via Snapshot.objects.update_or_create, using
+JsonSafeEncoder (via the JSONField on Snapshot.raw) so the H3/US-5 guard
+stays green.
 """
 from typing import Optional
 
 from core.clock import Clock
+from core.models import Snapshot
 from core.snapshot_source import SnapshotDataSource
 
 
@@ -57,3 +63,32 @@ class SnapshotFetcher:
     def already_fetched(self, mint: str) -> bool:
         """Return True if a snapshot for this mint has already been taken."""
         return mint in self._fetched
+
+    def fetch_and_persist(self, mint: str, elapsed_s: int) -> Optional[dict]:
+        """Fetch the snapshot and persist it as an immutable 'snapshots' row (§6.4.1).
+
+        Calls fetch() internally — inherits the at-most-one-per-token guard
+        (§6.3).  If the mint was already fetched, returns None without
+        touching the DB.
+
+        On the first call for a mint:
+          • Gets now from the injected Clock (the only source of time — Principle #7).
+          • Calls the DataSource to obtain the raw payload.
+          • Persists via Snapshot.objects.update_or_create so that a retry or
+            restart cannot create a duplicate row (US-23.2 idempotency).
+          • raw is stored verbatim; the JSONField's JsonSafeEncoder keeps the
+            H3/US-5 guard green (NaN/Inf → null, Decimal → float).
+
+        elapsed_s is seconds since the token's graduated_at — the caller
+        (orchestration) supplies this value (score_at_elapsed_s from
+        get_active_config(), US-25); the fetcher does not derive it.
+        """
+        taken_at = self._clock.now()
+        raw = self.fetch(mint)
+        if raw is None:
+            return None
+        Snapshot.objects.update_or_create(
+            mint=mint,
+            defaults={"taken_at": taken_at, "elapsed_s": elapsed_s, "raw": raw},
+        )
+        return raw
