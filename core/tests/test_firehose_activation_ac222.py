@@ -237,15 +237,15 @@ def test_banked_fixture_is_gzip_jsonl() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Committed ledger entry (AC-22.2 gate: count decremented to 9 Birdeye)
+# Committed ledger entry (AC-22.3 gate: count decremented to 8 Birdeye)
 # ---------------------------------------------------------------------------
 
 
-def test_ledger_budget_decremented_to_9_birdeye() -> None:
+def test_ledger_budget_decremented_to_8_birdeye() -> None:
     text = LEDGER_PATH.read_text(encoding="utf-8")
-    # budget table row: | Birdeye | 10 | 1 | 9 |
-    assert re.search(r"\|\s*Birdeye\s*\|\s*10\s*\|\s*1\s*\|\s*9\s*\|", text), (
-        "ledger budget table must show Birdeye used=1 remaining=9"
+    # budget table row: | Birdeye | 10 | 2 | 8 |
+    assert re.search(r"\|\s*Birdeye\s*\|\s*10\s*\|\s*2\s*\|\s*8\s*\|", text), (
+        "ledger budget table must show Birdeye used=2 remaining=8"
     )
 
 
