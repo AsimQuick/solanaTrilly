@@ -24,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
+      - name: Auto-promote stale sprint phases (US-33 AC-33.1)
+        run: python3 tools/promote_sprint_phase.py scrum-master/sprint*.json
+
       - name: Sprint integrity check (US-13 AC-13.3)
         run: python3 tools/sprint_integrity_check.py --skip-complete scrum-master/sprint*.json
 
