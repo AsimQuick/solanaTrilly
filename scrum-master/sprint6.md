@@ -1,8 +1,8 @@
 # Sprint 6
 
 **Phase:** planning
-**Progress:** 0/5 stories | 3/17 ACs
-**Last Updated:** 2026-06-16T05:06:10+00:00
+**Progress:** 1/5 stories | 4/17 ACs
+**Last Updated:** 2026-06-16T05:10:56+00:00
 
 ## Sprint Goal
 Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retrospective E4). P0–P3 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', and P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity. Sprint-6 adds the ONLY non-tape live read in the whole pipeline (Principle #3): a single on-demand Birdeye REST snapshot per token at score time, for the things the tape cannot give — holder distribution, mint/freeze authority, the LP-burned flag, and a liquidity/TVL/depth read (a first-class field per §1.1, never an assumption) — and locks the three-unit (vol_sol/vol_usd/sol_usd) parity backbone (D1). Deliver, IN ORDER: (1) the persistence target — the 'snapshots' table (§8: mint, taken_at, elapsed_s, raw JSONB) with the AT-MOST-ONE-ROW-PER-TOKEN discipline (§6.3) + a typed score-time snapshot schema, raw written via JsonSafeEncoder so the H3/US-5 guard stays green (US-23); (2) the score-time snapshot FETCHER behind the DataSource seam + injected clock (US-2 / Principle #7) — AT MOST ONE on-demand Birdeye REST read per token (the scheduled per-token poll regime is RETIRED — that cost cut funds retiring solanaBilly), capturing holders/authority/LP-burned/liquidity raw, with the #380 future-window clamp (any to=/window clamped to the injected now — Birdeye 400s on future windows) and the Redis token-bucket limiter KEPT while the scheduler is DROPPED (US-24); (3) score-time ORCHESTRATION — on graduation, schedule EXACTLY ONE snapshot at scoring.score_at_elapsed_s read from get_active_config() (US-11 resolver; Principle #1 — never a constant/os.getenv), honoring capture_buffer_s so the tape tail has landed, idempotent (at-most-once even on retry/restart), behind the seam + virtual clock so it is replay-testable, with NO scheduled-polling task registered (H2 manifest) (US-25); (4) UNITS LOCKED (D1) — every recorded swap carries all three units with the relationship locked (vol_usd ≈ vol_sol·sol_usd; sol_usd = the per-block reference) and unit-invariant features (shares/ratios/counts) are byte-identical regardless of unit basis (the parity backbone), wired into the canonical ci.yml so it cannot silently vanish (US-26); (5) the P4 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye score-time snapshot through ReplaySource + virtual clock → EXACTLY the expected raw 'snapshots' row, deterministically (run twice → byte-identical raw JSONB), raw=immutable-truth re-derivability, and the #380-clamp / at-most-once / unit-parity regression suite green in CI (US-27). The P4 gate is OFFLINE and synthetic — the score-time read is a single on-demand REST snapshot (NOT a firehose WS activation), so NO Birdeye/Helius firehose activation is required this sprint (8 Birdeye / 10 Helius remain banked); per E3, if a real Birdeye REST snapshot can be banked cheaply it is used as the gate fixture, but the gate never depends on a live read. Build order: US-23 FIRST (the persistence target everything writes to); then US-24 (fetcher) → US-25 (orchestration) are sequential; US-26 (units lock) is independent of the snapshot chain and may run in parallel; US-27 (offline gate) needs US-23/24/25/26. Process carries: E1 — promote the sprint 'phase' (and story dev_status) to their real values BEFORE any sprint-end deploy so the US-13 integrity guard is not tripped by our own staleness (this has now caught a stale-phase deploy two sprints running); E2 — run 'ruff check --fix' inside the web container as a pre-push checklist item to kill the recurring I001/E501 churn before CI; E3 — exercise the live adapter against a banked real capture EARLY rather than discovering a missing live layer at story-end; E5 — the first sprint-6 deploy at true HEAD (phase now 'review'-corrected on sprint-5) is a clean green run, closing the US-22 condition-B (clean-final-deploy) carry and confirming 200-on-8002 + listener Up + solanaBilly untouched on 8001.
@@ -34,7 +34,7 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
 ## User Stories
 
 ### US-23: P4 — the 'snapshots' table + the score-time snapshot schema: snapshot persistence target (§8, §6.3)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-23.1:** A Snapshot Django model (table 'snapshots', PRD §8) holds one row per token's score-time read with columns: mint (CharField, FK-or-index to tokens), taken_at (TIMESTAMPTZ — when the snapshot was captured), elapsed_s (INT — seconds since the token's graduated_at, i.e. the score_at_elapsed_s the snapshot was taken at), raw (JSONField, the verbatim holders/authority/liquidity payload). 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a snapshot row and reads every column back.
@@ -43,7 +43,8 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
   - Dev: done
 - [x] **AC-23.3:** A single typed score-time snapshot schema (a dataclass/TypedDict in core — the ONE shape the fetcher emits and the feature assembly will later eat) defines the captured fields {holder_distribution, mint_authority, freeze_authority, lp_burned (bool), liquidity, tvl, depth}, with the liquidity/TVL/depth read carried as a first-class field (§1.1, never assumed). Verified by a pytest test that builds the schema from a raw Birdeye snapshot payload and asserts every field maps, and that any JSON persisted alongside uses JsonSafeEncoder so the H3/US-5 guard stays green. New files carry metadata front matter.
   - Dev: done
-- [ ] **AC-23.4:** Snapshot is registered in the Django admin (changelist + detail), read-only on the immutable raw fields. Verified by pytest tests that request the admin changelist and a change-detail page for Snapshot as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
+- [x] **AC-23.4:** Snapshot is registered in the Django admin (changelist + detail), read-only on the immutable raw fields. Verified by pytest tests that request the admin changelist and a change-detail page for Snapshot as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-14, US-5
 
@@ -68,6 +69,22 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
   **Full suite:** 654 passed (was 645 before AC-23.1 fix + these 9)  
   **Coverage:** 88% ( …
   AC-23.3 fixed: **Fix:** Removed `import math` from line 26 of `core/tests/test_snapshot_schema_ac233.py`. The module was never referenced in the test body, causing ruff to raise F401 (unused import) and fail the Lint CI step. One line deleted, committed, and pushed — no logic changed.
+  AC-23.4 done: Pushed successfully.
+  
+  ---
+  
+  **Implementation summary for the orchestrator:**
+  
+  **Files changed: 2**
+  
+  - `core/admin.py` — Added `Snapshot` to the import and registered `SnapshotAdmin` with `list_display = ["mint", "taken_at", "elapsed_s"]` and all four columns (`mint`, `taken_at`, `elapsed_s`, `raw`) in `readonly_fields`; updated front matter sprints/stories/date.
+  
+  - `core/tests/test_snapshot_admin_ac234.py` *(new)* — Two pytest tests covering AC-23.4: `test_snapshot_admin_changelist_returns_200` (staff user hits changelist URL, asserts HTTP 200) and `test_snapshot_admin_change_detail_returns_200` (staff user creates a Snapshot row, hits change-detail URL, asserts HTTP 200). Both carry metadata front matter.
+  
+  **Test count:** 2 new tests (677 total, was 675)  
+  **Coverage:** 88% (threshold: 80%)  
+  **Ruff:** All checks passed  
+  **Branch:** feature/US-23-AC-23.4
 
 **Tester Status:** approved
 **Tester Notes:**
