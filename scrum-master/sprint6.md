@@ -1,8 +1,8 @@
 # Sprint 6
 
 **Phase:** planning
-**Progress:** 1/5 stories | 7/17 ACs
-**Last Updated:** 2026-06-16T05:38:50+00:00
+**Progress:** 1/5 stories | 8/17 ACs
+**Last Updated:** 2026-06-16T12:00:00+00:00
 
 ## Sprint Goal
 Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retrospective E4). P0–P3 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', and P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity. Sprint-6 adds the ONLY non-tape live read in the whole pipeline (Principle #3): a single on-demand Birdeye REST snapshot per token at score time, for the things the tape cannot give — holder distribution, mint/freeze authority, the LP-burned flag, and a liquidity/TVL/depth read (a first-class field per §1.1, never an assumption) — and locks the three-unit (vol_sol/vol_usd/sol_usd) parity backbone (D1). Deliver, IN ORDER: (1) the persistence target — the 'snapshots' table (§8: mint, taken_at, elapsed_s, raw JSONB) with the AT-MOST-ONE-ROW-PER-TOKEN discipline (§6.3) + a typed score-time snapshot schema, raw written via JsonSafeEncoder so the H3/US-5 guard stays green (US-23); (2) the score-time snapshot FETCHER behind the DataSource seam + injected clock (US-2 / Principle #7) — AT MOST ONE on-demand Birdeye REST read per token (the scheduled per-token poll regime is RETIRED — that cost cut funds retiring solanaBilly), capturing holders/authority/LP-burned/liquidity raw, with the #380 future-window clamp (any to=/window clamped to the injected now — Birdeye 400s on future windows) and the Redis token-bucket limiter KEPT while the scheduler is DROPPED (US-24); (3) score-time ORCHESTRATION — on graduation, schedule EXACTLY ONE snapshot at scoring.score_at_elapsed_s read from get_active_config() (US-11 resolver; Principle #1 — never a constant/os.getenv), honoring capture_buffer_s so the tape tail has landed, idempotent (at-most-once even on retry/restart), behind the seam + virtual clock so it is replay-testable, with NO scheduled-polling task registered (H2 manifest) (US-25); (4) UNITS LOCKED (D1) — every recorded swap carries all three units with the relationship locked (vol_usd ≈ vol_sol·sol_usd; sol_usd = the per-block reference) and unit-invariant features (shares/ratios/counts) are byte-identical regardless of unit basis (the parity backbone), wired into the canonical ci.yml so it cannot silently vanish (US-26); (5) the P4 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye score-time snapshot through ReplaySource + virtual clock → EXACTLY the expected raw 'snapshots' row, deterministically (run twice → byte-identical raw JSONB), raw=immutable-truth re-derivability, and the #380-clamp / at-most-once / unit-parity regression suite green in CI (US-27). The P4 gate is OFFLINE and synthetic — the score-time read is a single on-demand REST snapshot (NOT a firehose WS activation), so NO Birdeye/Helius firehose activation is required this sprint (8 Birdeye / 10 Helius remain banked); per E3, if a real Birdeye REST snapshot can be banked cheaply it is used as the gate fixture, but the gate never depends on a live read. Build order: US-23 FIRST (the persistence target everything writes to); then US-24 (fetcher) → US-25 (orchestration) are sequential; US-26 (units lock) is independent of the snapshot chain and may run in parallel; US-27 (offline gate) needs US-23/24/25/26. Process carries: E1 — promote the sprint 'phase' (and story dev_status) to their real values BEFORE any sprint-end deploy so the US-13 integrity guard is not tripped by our own staleness (this has now caught a stale-phase deploy two sprints running); E2 — run 'ruff check --fix' inside the web container as a pre-push checklist item to kill the recurring I001/E501 churn before CI; E3 — exercise the live adapter against a banked real capture EARLY rather than discovering a missing live layer at story-end; E5 — the first sprint-6 deploy at true HEAD (phase now 'review'-corrected on sprint-5) is a clean green run, closing the US-22 condition-B (clean-final-deploy) carry and confirming 200-on-8002 + listener Up + solanaBilly untouched on 8001.
@@ -123,11 +123,12 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
   - Dev: done
 - [x] **AC-24.3:** Future-window clamp (#380): any to=/window parameter the fetcher would send to the Birdeye REST read is clamped to the injected-clock now (Birdeye returns HTTP 400 on a future window). Verified by a pytest test: a snapshot requested with a to-window beyond the injected now is clamped to now — no future window ever leaves the fetcher.
   - Dev: done
-- [ ] **AC-24.4:** The Redis token-bucket rate limiter (ported from solanaBilly, kept per §6.3) gates the on-demand snapshot read, while the per-token-poll SCHEDULER is dropped (no scheduled polling). Verified by a pytest test that the limiter is consulted before the read AND that no periodic/scheduled snapshot task is registered (the H2 task-manifest test confirms the snapshot is on-demand only, not a celery-beat poll). New files carry metadata front matter.
+- [x] **AC-24.4:** The Redis token-bucket rate limiter (ported from solanaBilly, kept per §6.3) gates the on-demand snapshot read, while the per-token-poll SCHEDULER is dropped (no scheduled polling). Verified by a pytest test that the limiter is consulted before the read AND that no periodic/scheduled snapshot task is registered (the H2 task-manifest test confirms the snapshot is on-demand only, not a celery-beat poll). New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-23, US-2, US-11
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
 **Dev Team Notes:**
   AC-24.1 done: Done. Implementation summary for the orchestrator:
   
@@ -164,6 +165,24 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
   - `core/snapshot_fetcher.py` — Added optional `as_of: Optional[datetime] = None` parameter to `SnapshotFetcher.fetch()`. The #380 clamp is applied as `effective_as_of = min(as_of, now) if as_of is not None else now` before passing to the DataSource. When `as_of` is `None` (the existing call signature), `clock.now()` is used unchanged — full backward compatibility. Front matter updated to include AC-24.3. The static-analysis guard from AC-24.1 (no concrete source imports, no direct time calls) still holds; the new `datetime` import is from stdlib, not a DataSource.
   
   - `core/tests/test_snapshot_future_window_clamp_ac243.py` *(new)* — 7 pytest tests with a `RecordingSnapshotSource` test double that captures every `(mint, as_of)` tuple received from the fetcher: (1) `test_future_window_is_clamped_to_clock_now` — main AC assertion: `as_of = T0 + 1h` → DataSource receives `T0`; (2) `test_far_future_window_is_clamped_to_clock_now` — `T0 + 1d` also clamped; (3) `test_present_window_passes_through_unclamped` — `as_of == clock.now()` passes unchanged; …
+  AC-24.4 done: Pushed successfully (commit bc4f408). Implementation summary:
+
+  **Files changed: 5**
+
+  - `core/rate_limiter.py` *(new)* — Redis token-bucket `RateLimiter` ported from solanaBilly. Key prefix changed to `'solanatrilly:rate_limiter'`. Same Lua atomic acquire script, `acquire()` and `wait_for_token()` methods, `get_redis_client()` factory reading REDIS_URL. Metadata front matter included.
+
+  - `core/snapshot_fetcher.py` — Added optional `limiter=None` parameter to `SnapshotFetcher.__init__()`. In `fetch()`, `self._limiter.wait_for_token()` is called AFTER the at-most-one guard and #380 clamp but BEFORE `self._source.get_snapshot()` — exact ordering per AC-24.4. All existing tests (AC-24.1/24.2/24.3) remain green; backward compatibility preserved.
+
+  - `core/tests/test_snapshot_rate_limiter_ac244.py` *(new)* — 7 tests. Prong A (5 tests): shared call_order list confirms ['limiter', 'source'] ordering; limiter called exactly once per first fetch; at-most-one guard fires before limiter on repeat mint; no limiter = no error; 2 mints = 2 limiter calls. Prong B (2 tests): `CELERY_BEAT_SCHEDULE` has no 'snapshot' key/task; `task_manifest.json` has no 'snapshot' task.
+
+  - `core/tests/test_clock.py` — Added `_TIME_TIME_ALLOWED` dict allowlisting `rate_limiter.acquire` for `time.time()` — the rate limiter is infrastructure (wall-clock elapsed time for token refill), not pipeline domain logic subject to the injected-clock seam.
+
+  - `core/tests/test_resolver_ac111.py` — Added `_OS_ENV_ALLOWED_FILES` set containing `'rate_limiter.py'` so the AC-11.1 guard correctly exempts the Redis URL reader (connection URL, not a pipeline tunable).
+
+  **Test count:** 7 new tests (709 total, was 702)
+  **Coverage:** 86% (threshold: 80%)
+  **Ruff:** All checks passed
+  **Branch:** feature/US-24-AC-24.4
 
 **Tester Status:** approved
 **Tester Notes:**
