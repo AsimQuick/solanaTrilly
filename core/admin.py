@@ -1,16 +1,16 @@
 # ---
 # module: core.admin
-# sprint: sprint-3, sprint-4, sprint-5, sprint-6
-# story: US-9 AC-9.4, US-14 AC-14.3, US-17 AC-17.4, US-23 AC-23.4
+# sprint: sprint-3, sprint-4, sprint-5, sprint-6, sprint-7
+# story: US-9 AC-9.4, US-14 AC-14.3, US-17 AC-17.4, US-23 AC-23.4, US-29 AC-29.3
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-16
+# last-updated: 2026-06-17
 # dependencies: django, core.models, simple_history
 # ---
 from django.contrib import admin
 from simple_history.admin import SimpleHistoryAdmin
 
-from core.models import PipelineConfig, Snapshot, Swap, Token
+from core.models import FeatureSet, PipelineConfig, Snapshot, Swap, Token
 
 
 @admin.register(PipelineConfig)
@@ -63,3 +63,30 @@ class SnapshotAdmin(admin.ModelAdmin):
     list_display = ["mint", "taken_at", "elapsed_s"]
     readonly_fields = ["mint", "taken_at", "elapsed_s", "raw"]
     ordering = ["-taken_at"]
+
+
+@admin.register(FeatureSet)
+class FeatureSetAdmin(admin.ModelAdmin):
+    """Read-only admin for FeatureSet — extraction contract viewer (US-29 AC-29.3).
+
+    FeatureSets are immutable hashed configs; no row should ever be added or
+    deleted through the admin.  All fields are readonly so the changelist +
+    detail views are purely observational.
+    """
+
+    list_display = ["id", "version", "math_version", "hash"]
+    readonly_fields = [
+        "version",
+        "math_version",
+        "columns",
+        "live_servable",
+        "hash",
+        "notes",
+    ]
+    ordering = ["id"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
