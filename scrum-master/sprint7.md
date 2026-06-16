@@ -1,8 +1,8 @@
 # Sprint 7
 
 **Phase:** planning
-**Progress:** 1/6 stories | 5/18 ACs
-**Last Updated:** 2026-06-16T16:38:56+00:00
+**Progress:** 2/6 stories | 6/18 ACs
+**Last Updated:** 2026-06-16T20:53:41+00:00
 
 ## Sprint Goal
 Open P5 — the lake + extraction contract + vendored feature math + the Feature Builder + the T0/G1/G2 golden-parity merge gate (PRD §6.4 / §7.2 / §7.6 / §16; retrospective F1). P0–P4 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity, and P4 takes exactly one on-demand score-time snapshot per token with the three-unit (vol_sol/vol_usd/sol_usd) lock. P5 is THE integrity core (§6.4): it makes a model's live score EQUAL its offline score by construction — one vendored feature library, one deterministic extractor serving live + offline + replay, and a golden-parity gate that fails any PR that breaks byte-identity. This is the fix for the evidenced solanaBilly disaster where the t2 go-live got 23% live precision vs 78% offline purely from feature-assembly drift (#358/#359/#367). Deliver, IN ORDER: (1) VENDOR THE FEATURE MATH (§7.2) — copy solanabilly3/src/tape_microstructure.py VERBATIM into the repo (the ONE sanctioned edit is rels.ptp() → np.ptp(rels) for numpy 2.x), preserving compute_features(swaps, window_s=120, bucket_s=15) -> dict|None and the full tape_* family; never hand-edit (re-vendor to update) — and prove it with the G1 function-parity gate (§7.6): the frozen ≈15-token golden fixture (solanabilly3/data/microstructure/golden_fixture_t0t2_15s.json) runs through the vendored math and every feature matches within 1e-9 (US-28); (2) the EXTRACTION CONTRACT — the 'feature_sets' table (§8, §6.4.5): a FeatureSet is a hashed config (ordered columns + vendored-math version) with the live_servable vs training_only split (D2/D3) so same raw + same FeatureSet → byte-identical output (US-29); (3) the SHARED DETERMINISTIC EXTRACTOR (§6.4.4/§6.4.5) — read raw normalized swaps from the lake/'swaps' mirror, feed the §7.1 subset {rel, price, side, vol, owner} to the vendored compute_features, ONE code path for live + offline + replay (Principle #2), leak-free by the causal cutoff (hard-reject any swap with rel ≥ window_s; labels start strictly after), deterministic and versioned (US-30); (4) the FEATURE BUILDER (§6.5) — a one-click Celery export: pick a FeatureSet + cohort + label def → run the SAME vendored extractor over the lake → CSV/parquet + a manifest (FeatureSet version+hash, source(s), date range, mint cohort, row count, content hash, label def) that reproduces the export exactly; runs off the dedicated celery container, NEVER web/gunicorn (#289) (US-31); (5) the T0/G2 SOURCE-PARITY GATE (§7.6, §16) — the #1 merge gate (§6.4.3): Birdeye live↔backfill byte-identical normalized swaps + features (the seam that actually serves; offline, no firehose) PLUS a Helius raw-truth cross-check that confirms Birdeye coverage/side/amount — wired as a hard merge gate in the single canonical ci.yml 'test' job via the ImportError trap (US-32). FIREHOSE: P5's offline gates (G1, G2(a) live↔backfill) require NO activation — G2(a) uses the banked sprint-5 captures (E6ifp2…pump / H9L9…pump) + an on-demand Birdeye seek_by_time REST backfill (a REST read within the professional allowance, NOT a firehose WS activation); G2(b) raw-truth is the project's ONE budgeted G2 activation (CLAUDE.md — 'G2 needs one activation'): a single deliberate, time-boxed, ledgered Helius activation banks the durable raw-truth fixture (Helius 10→9 at most), after which the CI cross-check runs OFFLINE against the banked fixture forever and the P5 gate never depends on a live read (8 Birdeye remain untouched). PROCESS HARDENING (US-33) — the carries that a checklist has demonstrably failed to fix: F2 MECHANIZE phase-promotion (the stale-'phase' deploy failure has tripped the US-13 integrity guard THREE consecutive sprints D2→E1→F2 — make it a mechanical pre-deploy step / CI pre-check, not a step a human remembers); F4 MECHANIZE the ruff gate (a real pre-commit hook or container-entrypoint/Makefile ruff step — the I001/E501/F401 churn has recurred FIVE sprints); F3 close the carried sprint-6 DoD VPS clause — the first sprint-7 deploy at true HEAD is a clean green run, Tester-confirmed 200-on-8002 + listener Up + solanaBilly untouched on 8001 (re-issue of E5 / US-22 condition B). DEFERRED: F5 (build the live Birdeye REST SnapshotDataSource adapter) is consciously deferred to sprint-8, scheduled near where the scorer (P7) consumes it — it is a single on-demand REST read within the Birdeye allowance (NOT a firehose activation) and is off the P5 critical path; keeping sprint-7 focused on the integrity core avoids the over-commitment the retrospectives repeatedly warn against. Build order: US-28 FIRST (the vendored math everything downstream eats) — US-29 (FeatureSet table) and US-33 (process) are independent and may run in parallel; then US-30 (extractor) needs US-28 + US-29 (+ the US-19 lake reader); then US-31 (Feature Builder) needs US-30 and US-32 (T0/G2 parity) needs US-28 + US-30.
@@ -123,14 +123,15 @@ Open P5 — the lake + extraction contract + vendored feature math + the Feature
 ---
 
 ### US-29: P5 — the 'feature_sets' table + the deterministic hashed/versioned FeatureSet + live_servable/training_only split (§6.4.5, §8, D2/D3)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-29.1:** A FeatureSet Django model (table 'feature_sets', PRD §8) holds the extraction contract with columns: id, version, math_version (the vendored tape_microstructure version from US-28), columns[] (the ordered feature column list), live_servable[] (the subset servable at live score time, D2), hash, notes. 'docker compose run --rm web python manage.py makemigrations' + 'migrate' apply cleanly against real Postgres; verified by a pytest test that creates a feature_sets row and reads every column back. New files carry metadata front matter.
   - Dev: done
 - [x] **AC-29.2:** Deterministic content hash (§6.4.5 — 'a FeatureSet is a hashed config'): the hash is a pure function of the ordered columns[] + math_version. Identical inputs → identical hash; reordering columns OR bumping math_version changes the hash. Verified by a pytest test (same config → same hash; reorder → different hash; math_version bump → different hash). This is the 'same raw + same FeatureSet → byte-identical output' anchor that US-30/US-31 build on.
   - Dev: done
-- [ ] **AC-29.3:** The live_servable vs training_only split is recorded as data on the row (D2/D3): live_servable[] is a subset of columns[], and any feature lacking a live computation is training_only (present in columns[], absent from live_servable[]). Verified by a pytest test asserting live_servable ⊆ columns and that a designated training-only column is excluded from live_servable. A read-only Django admin (changelist + detail) returns HTTP 200 for an authenticated staff user. (The P1/§5.2 config validator that REJECTS an active model whose contract ⊄ live_servable already exists; this story establishes the column-set it checks against.) New files carry metadata front matter.
+- [x] **AC-29.3:** The live_servable vs training_only split is recorded as data on the row (D2/D3): live_servable[] is a subset of columns[], and any feature lacking a live computation is training_only (present in columns[], absent from live_servable[]). Verified by a pytest test asserting live_servable ⊆ columns and that a designated training-only column is excluded from live_servable. A read-only Django admin (changelist + detail) returns HTTP 200 for an authenticated staff user. (The P1/§5.2 config validator that REJECTS an active model whose contract ⊄ live_servable already exists; this story establishes the column-set it checks against.) New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-5, US-9
 
@@ -155,6 +156,24 @@ Open P5 — the lake + extraction contract + vendored feature math + the Feature
      - `test_math_version_bump_changes_hash` — bumping math_version → different hash
      - `test_different_math_versions_all_differ` — 4 distinct versions → 4 distinct hashes
      - `test_single_column_reorder_changes_hash` — minimal reo …
+  AC-29.3 done: Pushed successfully.
+  
+  ---
+  
+  **Implementation Summary**
+  
+  **Files changed:**
+  
+  1. `core/admin.py` *(modified)* — Added `FeatureSetAdmin` class registered with `@admin.register(FeatureSet)`. Fully read-only: all fields listed in `readonly_fields`, `has_add_permission` returns `False`, `has_delete_permission` returns `False`. Changelist displays `id`, `version`, `math_version`, `hash`. Updated metadata header to include US-29 AC-29.3. Added `FeatureSet` to the model imports.
+  
+  2. `core/models.py` *(modified)* — Metadata header updated to include `US-29 AC-29.3` in the story list (no logic changes; the model already had `live_servable` from AC-29.1).
+  
+  3. `core/tests/test_feature_set_ac293.py` *(new)* — 10 pytest tests with metadata front matter:
+     - `test_live_servable_is_subset_of_columns` — `live_servable ⊆ columns` (pure logic)
+     - `test_live_servable_is_strict_subset` — confirms training-only features exist
+     - `test_training_only_column_in_columns_not_in_live_servable` — designated training-only column (`tape_max_drawdown`) present in `columns`, absent from `live_servable`
+     - `test_all_live_servable_columns_are_in_columns` — per-element subset check
+     - `test_training_only_featu …
 
 **Tester Status:** approved
 **Tester Notes:**
