@@ -1,7 +1,7 @@
 # ---
 # module: core.snapshot_fetcher
 # sprint: sprint-6
-# story: US-24 AC-24.1, US-24 AC-24.2, US-24 AC-24.3, US-24 AC-24.4
+# story: US-24 AC-24.1, US-24 AC-24.2, US-24 AC-24.3, US-24 AC-24.4, US-25 AC-25.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-16
@@ -86,15 +86,19 @@ class SnapshotFetcher:
     def fetch_and_persist(self, mint: str, elapsed_s: int) -> Optional[dict]:
         """Fetch the snapshot and persist it as an immutable 'snapshots' row (§6.4.1).
 
-        Calls fetch() internally — inherits the at-most-one-per-token guard
-        (§6.3).  If the mint was already fetched, returns None without
-        touching the DB.
+        Two-layer at-most-once guard (§6.3 / AC-25.2):
+          1. DB-level: if a 'snapshots' row already exists for this mint, return None
+             immediately — no DataSource call is made.  This survives listener
+             restarts and duplicate graduation events where the in-memory _fetched
+             set has been reset.
+          2. In-memory: fetch() skips the DataSource if mint is already in _fetched
+             (within-process retry / same-instance duplicate call).
 
         On the first call for a mint:
           • Gets now from the injected Clock (the only source of time — Principle #7).
           • Calls the DataSource to obtain the raw payload.
-          • Persists via Snapshot.objects.update_or_create so that a retry or
-            restart cannot create a duplicate row (US-23.2 idempotency).
+          • Persists via Snapshot.objects.update_or_create so that a concurrent
+            create cannot produce a duplicate row (US-23.2 idempotency).
           • raw is stored verbatim; the JSONField's JsonSafeEncoder keeps the
             H3/US-5 guard green (NaN/Inf → null, Decimal → float).
 
@@ -102,6 +106,9 @@ class SnapshotFetcher:
         (orchestration) supplies this value (score_at_elapsed_s from
         get_active_config(), US-25); the fetcher does not derive it.
         """
+        # DB-level guard: survive listener restarts (AC-25.2).
+        if Snapshot.objects.filter(mint=mint).exists():
+            return None
         taken_at = self._clock.now()
         raw = self.fetch(mint)
         if raw is None:
