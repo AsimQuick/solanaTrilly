@@ -1,8 +1,8 @@
 # Sprint 6
 
 **Phase:** planning
-**Progress:** 4/5 stories | 16/17 ACs
-**Last Updated:** 2026-06-16T14:57:30+00:00
+**Progress:** 5/5 stories | 17/17 ACs
+**Last Updated:** 2026-06-16T15:03:13+00:00
 
 ## Sprint Goal
 Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retrospective E4). P0–P3 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', and P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity. Sprint-6 adds the ONLY non-tape live read in the whole pipeline (Principle #3): a single on-demand Birdeye REST snapshot per token at score time, for the things the tape cannot give — holder distribution, mint/freeze authority, the LP-burned flag, and a liquidity/TVL/depth read (a first-class field per §1.1, never an assumption) — and locks the three-unit (vol_sol/vol_usd/sol_usd) parity backbone (D1). Deliver, IN ORDER: (1) the persistence target — the 'snapshots' table (§8: mint, taken_at, elapsed_s, raw JSONB) with the AT-MOST-ONE-ROW-PER-TOKEN discipline (§6.3) + a typed score-time snapshot schema, raw written via JsonSafeEncoder so the H3/US-5 guard stays green (US-23); (2) the score-time snapshot FETCHER behind the DataSource seam + injected clock (US-2 / Principle #7) — AT MOST ONE on-demand Birdeye REST read per token (the scheduled per-token poll regime is RETIRED — that cost cut funds retiring solanaBilly), capturing holders/authority/LP-burned/liquidity raw, with the #380 future-window clamp (any to=/window clamped to the injected now — Birdeye 400s on future windows) and the Redis token-bucket limiter KEPT while the scheduler is DROPPED (US-24); (3) score-time ORCHESTRATION — on graduation, schedule EXACTLY ONE snapshot at scoring.score_at_elapsed_s read from get_active_config() (US-11 resolver; Principle #1 — never a constant/os.getenv), honoring capture_buffer_s so the tape tail has landed, idempotent (at-most-once even on retry/restart), behind the seam + virtual clock so it is replay-testable, with NO scheduled-polling task registered (H2 manifest) (US-25); (4) UNITS LOCKED (D1) — every recorded swap carries all three units with the relationship locked (vol_usd ≈ vol_sol·sol_usd; sol_usd = the per-block reference) and unit-invariant features (shares/ratios/counts) are byte-identical regardless of unit basis (the parity backbone), wired into the canonical ci.yml so it cannot silently vanish (US-26); (5) the P4 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye score-time snapshot through ReplaySource + virtual clock → EXACTLY the expected raw 'snapshots' row, deterministically (run twice → byte-identical raw JSONB), raw=immutable-truth re-derivability, and the #380-clamp / at-most-once / unit-parity regression suite green in CI (US-27). The P4 gate is OFFLINE and synthetic — the score-time read is a single on-demand REST snapshot (NOT a firehose WS activation), so NO Birdeye/Helius firehose activation is required this sprint (8 Birdeye / 10 Helius remain banked); per E3, if a real Birdeye REST snapshot can be banked cheaply it is used as the gate fixture, but the gate never depends on a live read. Build order: US-23 FIRST (the persistence target everything writes to); then US-24 (fetcher) → US-25 (orchestration) are sequential; US-26 (units lock) is independent of the snapshot chain and may run in parallel; US-27 (offline gate) needs US-23/24/25/26. Process carries: E1 — promote the sprint 'phase' (and story dev_status) to their real values BEFORE any sprint-end deploy so the US-13 integrity guard is not tripped by our own staleness (this has now caught a stale-phase deploy two sprints running); E2 — run 'ruff check --fix' inside the web container as a pre-push checklist item to kill the recurring I001/E501 churn before CI; E3 — exercise the live adapter against a banked real capture EARLY rather than discovering a missing live layer at story-end; E5 — the first sprint-6 deploy at true HEAD (phase now 'review'-corrected on sprint-5) is a clean green run, closing the US-22 condition-B (clean-final-deploy) carry and confirming 200-on-8002 + listener Up + solanaBilly untouched on 8001.
@@ -285,14 +285,15 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
 ---
 
 ### US-27: P4 — the offline gate: deterministic ReplaySource snapshot replay → expected raw 'snapshots' row + raw-immutable re-derivability + the #380/at-most-once/unit-parity regression suite (§16, §6.4)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-27.1:** P4 OFFLINE GATE (§16): replaying a captured-or-synthetic Birdeye score-time snapshot through a ReplaySource + virtual clock stores EXACTLY the expected raw 'snapshots' row, deterministically — run twice and the stored raw JSONB is byte-identical. The fixture is a schema-faithful Birdeye snapshot payload (§6.3); if a real Birdeye REST snapshot is banked (per E3) it is used here. Verified by the replay test asserting the expected stored snapshot and run-twice determinism.
   - Dev: done
 - [x] **AC-27.2:** Raw = immutable truth (§6.4.1): the stored snapshot is the verbatim raw payload — never mutated, never re-pulled — and the typed captured fields (holders/authority/lp_burned/liquidity/tvl/depth) are re-derivable from it. Verified by a pytest test asserting the persisted raw JSONB equals the source payload (json-safe-normalized) and that the US-23.3 schema re-derives from the stored raw without a second fetch.
   - Dev: done
-- [ ] **AC-27.3:** The P4 regression suite is green in CI and wired so it cannot silently vanish: the #380 future-window-clamp test (US-24.3), the at-most-one-snapshot / idempotency test (US-23.2 / US-25.2), and the unit-parity test (US-26) all pass in the single canonical ci.yml 'test' job (H1 — no second workflow), wired via a compile-time ImportError trap on the named test functions (mirroring AC-21.3). Verified by the tests passing on the feature branch and at merge. New files carry metadata front matter.
+- [x] **AC-27.3:** The P4 regression suite is green in CI and wired so it cannot silently vanish: the #380 future-window-clamp test (US-24.3), the at-most-one-snapshot / idempotency test (US-23.2 / US-25.2), and the unit-parity test (US-26) all pass in the single canonical ci.yml 'test' job (H1 — no second workflow), wired via a compile-time ImportError trap on the named test functions (mirroring AC-21.3). Verified by the tests passing on the feature branch and at merge. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-23, US-24, US-25, US-26
 
@@ -336,6 +337,23 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
     7. `test_raw_not_mutated_by_schema_re_derivation` — `from_raw()` does not mutate stored JSONB
   
   The branch has no new commits — the deliverable is already on main. No additional changes were made.
+  AC-27.3 already satisfied on main (no new commit; Tester-verified): **ALREADY-SATISFIED**
+  
+  AC-27.3 was fully implemented in commit `67bffcb` ("[US-27] AC-27.1/27.2/27.3: P4 offline gate + raw-immutable + regression wire (#120)"), bundled alongside AC-27.1 and AC-27.2.
+  
+  **Evidence:**
+  
+  - **`core/tests/test_p4_regression_wire_ac273.py`** (201 lines, metadata front matter included) — implements the complete AC-27.3 wiring:
+    - Module-level ImportError traps on 8 named test functions from AC-24.3, AC-23.2, AC-25.2, AC-26.1, and AC-26.2 (compile-time guard — any deleted/renamed function fails pytest collection)
+    - `test_p4_regression_test_files_exist` — asserts all 5 P4 regression source files exist at canonical paths
+    - `test_p4_regression_test_functions_are_callable` — asserts each wired import is callable
+    - `test_p4_regression_suite_in_single_canonical_test_job` — reads `.github/workflows/ci.yml`, asserts job `test` exists and pytest does NOT `--ignore core/tests` (H1 invariant)
+  
+  **Verification results:**
+  - All 3 AC-27.3 tests pass: ✓
+  - Full suite: 758 passed, 0 failed
+  - Coverage: 86.53% (threshold: 80%) ✓
+  - Branch: `feature/US-27-AC-27.3`, clean (no new commits needed)
 
 **Tester Status:** approved
 **Tester Notes:**
