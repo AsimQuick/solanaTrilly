@@ -1,8 +1,8 @@
 # Sprint 7
 
 **Phase:** planning
-**Progress:** 0/6 stories | 1/18 ACs
-**Last Updated:** 2026-06-16T15:54:02+00:00
+**Progress:** 0/6 stories | 2/18 ACs
+**Last Updated:** 2026-06-16T16:09:18+00:00
 
 ## Sprint Goal
 Open P5 — the lake + extraction contract + vendored feature math + the Feature Builder + the T0/G1/G2 golden-parity merge gate (PRD §6.4 / §7.2 / §7.6 / §16; retrospective F1). P0–P4 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity, and P4 takes exactly one on-demand score-time snapshot per token with the three-unit (vol_sol/vol_usd/sol_usd) lock. P5 is THE integrity core (§6.4): it makes a model's live score EQUAL its offline score by construction — one vendored feature library, one deterministic extractor serving live + offline + replay, and a golden-parity gate that fails any PR that breaks byte-identity. This is the fix for the evidenced solanaBilly disaster where the t2 go-live got 23% live precision vs 78% offline purely from feature-assembly drift (#358/#359/#367). Deliver, IN ORDER: (1) VENDOR THE FEATURE MATH (§7.2) — copy solanabilly3/src/tape_microstructure.py VERBATIM into the repo (the ONE sanctioned edit is rels.ptp() → np.ptp(rels) for numpy 2.x), preserving compute_features(swaps, window_s=120, bucket_s=15) -> dict|None and the full tape_* family; never hand-edit (re-vendor to update) — and prove it with the G1 function-parity gate (§7.6): the frozen ≈15-token golden fixture (solanabilly3/data/microstructure/golden_fixture_t0t2_15s.json) runs through the vendored math and every feature matches within 1e-9 (US-28); (2) the EXTRACTION CONTRACT — the 'feature_sets' table (§8, §6.4.5): a FeatureSet is a hashed config (ordered columns + vendored-math version) with the live_servable vs training_only split (D2/D3) so same raw + same FeatureSet → byte-identical output (US-29); (3) the SHARED DETERMINISTIC EXTRACTOR (§6.4.4/§6.4.5) — read raw normalized swaps from the lake/'swaps' mirror, feed the §7.1 subset {rel, price, side, vol, owner} to the vendored compute_features, ONE code path for live + offline + replay (Principle #2), leak-free by the causal cutoff (hard-reject any swap with rel ≥ window_s; labels start strictly after), deterministic and versioned (US-30); (4) the FEATURE BUILDER (§6.5) — a one-click Celery export: pick a FeatureSet + cohort + label def → run the SAME vendored extractor over the lake → CSV/parquet + a manifest (FeatureSet version+hash, source(s), date range, mint cohort, row count, content hash, label def) that reproduces the export exactly; runs off the dedicated celery container, NEVER web/gunicorn (#289) (US-31); (5) the T0/G2 SOURCE-PARITY GATE (§7.6, §16) — the #1 merge gate (§6.4.3): Birdeye live↔backfill byte-identical normalized swaps + features (the seam that actually serves; offline, no firehose) PLUS a Helius raw-truth cross-check that confirms Birdeye coverage/side/amount — wired as a hard merge gate in the single canonical ci.yml 'test' job via the ImportError trap (US-32). FIREHOSE: P5's offline gates (G1, G2(a) live↔backfill) require NO activation — G2(a) uses the banked sprint-5 captures (E6ifp2…pump / H9L9…pump) + an on-demand Birdeye seek_by_time REST backfill (a REST read within the professional allowance, NOT a firehose WS activation); G2(b) raw-truth is the project's ONE budgeted G2 activation (CLAUDE.md — 'G2 needs one activation'): a single deliberate, time-boxed, ledgered Helius activation banks the durable raw-truth fixture (Helius 10→9 at most), after which the CI cross-check runs OFFLINE against the banked fixture forever and the P5 gate never depends on a live read (8 Birdeye remain untouched). PROCESS HARDENING (US-33) — the carries that a checklist has demonstrably failed to fix: F2 MECHANIZE phase-promotion (the stale-'phase' deploy failure has tripped the US-13 integrity guard THREE consecutive sprints D2→E1→F2 — make it a mechanical pre-deploy step / CI pre-check, not a step a human remembers); F4 MECHANIZE the ruff gate (a real pre-commit hook or container-entrypoint/Makefile ruff step — the I001/E501/F401 churn has recurred FIVE sprints); F3 close the carried sprint-6 DoD VPS clause — the first sprint-7 deploy at true HEAD is a clean green run, Tester-confirmed 200-on-8002 + listener Up + solanaBilly untouched on 8001 (re-issue of E5 / US-22 condition B). DEFERRED: F5 (build the live Birdeye REST SnapshotDataSource adapter) is consciously deferred to sprint-8, scheduled near where the scorer (P7) consumes it — it is a single on-demand REST read within the Birdeye allowance (NOT a firehose activation) and is off the P5 critical path; keeping sprint-7 focused on the integrity core avoids the over-commitment the retrospectives repeatedly warn against. Build order: US-28 FIRST (the vendored math everything downstream eats) — US-29 (FeatureSet table) and US-33 (process) are independent and may run in parallel; then US-30 (extractor) needs US-28 + US-29 (+ the US-19 lake reader); then US-31 (Feature Builder) needs US-30 and US-32 (T0/G2 parity) needs US-28 + US-30.
@@ -41,7 +41,8 @@ Open P5 — the lake + extraction contract + vendored feature math + the Feature
 #### Acceptance Criteria
 - [x] **AC-28.1:** The feature math is vendored VERBATIM from solanabilly3/src/tape_microstructure.py into the repo (e.g. core/tape_microstructure.py), applying ONLY the one sanctioned edit rels.ptp() → np.ptp(rels) (numpy 2.x), preserving the compute_features(swaps, window_s=120, bucket_s=15) -> dict|None signature and the full tape_* feature family (tape_n_trades, tape_n_unique_traders, tape_ret_total, tape_max_drawdown, tape_logprice_slope_per_s, tape_close_b{0..n}, …). A metadata front-matter header is added as a top-of-file comment WITHOUT altering the math body. Verified by a pytest test that imports compute_features and calls it over a small in-memory swap list, asserting it returns a non-None dict with the expected tape_* keys. A re-vendor note in the header documents that updates re-copy from solanabilly3/src/ and the file is NEVER hand-edited.
   - Dev: done
-- [ ] **AC-28.2:** G1 function parity (§7.6): the frozen ≈15-token golden fixture (solanabilly3/data/microstructure/golden_fixture_t0t2_15s.json, banked VERBATIM into the repo golden set with its provenance — regenerator solanabilly3/scripts/make_microstructure_golden.py — recorded) is run through the vendored compute_features and EVERY feature matches the fixture's expected value within 1e-9 absolute. Verified by a pytest test asserting abs(actual − expected) <= 1e-9 per feature across all ~15 tokens.
+- [x] **AC-28.2:** G1 function parity (§7.6): the frozen ≈15-token golden fixture (solanabilly3/data/microstructure/golden_fixture_t0t2_15s.json, banked VERBATIM into the repo golden set with its provenance — regenerator solanabilly3/scripts/make_microstructure_golden.py — recorded) is run through the vendored compute_features and EVERY feature matches the fixture's expected value within 1e-9 absolute. Verified by a pytest test asserting abs(actual − expected) <= 1e-9 per feature across all ~15 tokens.
+  - Dev: done
 - [ ] **AC-28.3:** The None-on-no-usable-swap contract holds and the G1 gate cannot silently vanish: compute_features returns None (recorded as no-feature, NEVER a zero row, §7.2) for an empty/degenerate swap list — verified by a test. The G1 parity test is wired into the single canonical ci.yml 'test' job (H1 — no second workflow) via a compile-time ImportError trap on the named test function (mirroring AC-21.3) so deleting/renaming it fails pytest collection. New files carry metadata front matter.
 
 **Dependencies:** US-17
@@ -68,10 +69,32 @@ Open P5 — the lake + extraction contract + vendored feature math + the Feature
      - `test_compute_features_known_values` — deterministic spot-check (n_trades, ret_total, first_swap_rel_s, time_to_first_sell_s)
   
   3. `requirements.txt` *(modified)* — Added …
+  AC-28.2 fixed: **Fix summary:** Removed the dead `import pytest` from `core/tests/test_tape_microstructure_ac282.py:45`. The import was never used — no `@pytest.mark`, `pytest.raises`, or fixtures anywhere in the file. One-line deletion, pushed to `feature/US-28-AC-28.2`.
 
 **Tester Status:** approved
 **Tester Notes:**
-  Requirements approved — all 3 ACs are testable. AC-28.1 wording tightened (added 'asserting it returns a non-None dict with the expected tape_* keys' to clarify the smoke-test assertion — minor fix applied directly). AC-28.2 is the parity heart of P5: golden fixture path is explicit, 1e-9 tolerance is a concrete numerical bound, ~15 tokens is the fixture count. AC-28.3 covers the None contract (distinct from AC-28.2's value check) and the ImportError CI trap — both are independently testable. This is the build-order anchor; US-30/31/32 all depend on it.
+  AC-28.2 diagnosis: Found it. The failure is clear.
+  
+  ---
+  
+  **Diagnosis: Code Bug — F401 Unused Import**
+  
+  **Type:** Code bug (not a requirements issue)
+  
+  **Severity:** Low — single-line, auto-fixable
+  
+  **File:** `core/tests/test_tape_microstructure_ac282.py:45`
+  
+  **Error:**
+  ```
+  F401 `pytest` imported but unused
+  ```
+  
+  `import pytest` was added to the test file but never used — the tests only call `compute_features` directly and use bare `assert` statements. There are no `@pytest.mark` decorators, `pytest.raises`, `pytest.fixture`, or any other `pytest` symbols in the file. The import is dead weight.
+  
+  **Recommended fix:** Remove line 45 (`import pytest`) from `core/tests/test_tape_microstructure_ac282.py`. That's the entire change needed. `ruff check --fix` would apply it automatically.
+  
+  No requirements changes, no fixture changes, no logic changes needed. The golden fixture and all four parity tests are correct — only the stray import needs to go.
 
 ---
 
