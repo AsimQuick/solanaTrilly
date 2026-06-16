@@ -1,7 +1,7 @@
 # ---
 # module: core.feature_extractor
 # sprint: sprint-7
-# story: US-30 AC-30.1, AC-30.2
+# story: US-30 AC-30.1, AC-30.2, AC-30.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -106,7 +106,14 @@ class FeatureExtractor:
             exist within [0, window_s).  None means no-feature — never a zero row.
         """
         swaps = self._load_db_swaps(mint)
-        return self._compute(swaps, window_s=window_s, bucket_s=bucket_s)
+        features = self._compute(swaps, window_s=window_s, bucket_s=bucket_s)
+        if features is None:
+            return None
+        return {
+            **features,
+            "_feature_set_hash": self._feature_set.hash,
+            "_math_version": self._feature_set.math_version,
+        }
 
     def extract_from_lake(
         self,
@@ -132,7 +139,14 @@ class FeatureExtractor:
             exist within [0, window_s).
         """
         swaps = self._load_lake_swaps(mint, rows)
-        return self._compute(swaps, window_s=window_s, bucket_s=bucket_s)
+        features = self._compute(swaps, window_s=window_s, bucket_s=bucket_s)
+        if features is None:
+            return None
+        return {
+            **features,
+            "_feature_set_hash": self._feature_set.hash,
+            "_math_version": self._feature_set.math_version,
+        }
 
     # ------------------------------------------------------------------
     # Source adapters — produce an identical §7.1 list from each source
