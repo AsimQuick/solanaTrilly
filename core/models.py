@@ -1,9 +1,9 @@
 # ---
 # module: core.models
-# sprint: sprint-6
+# sprint: sprint-7
 # story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4,
 #        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2,
-#        US-23 AC-23.1
+#        US-23 AC-23.1, US-29 AC-29.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-16
@@ -250,3 +250,32 @@ class Snapshot(models.Model):
     class Meta:
         app_label = "core"
         db_table = "snapshots"
+
+
+class FeatureSet(models.Model):
+    """Feature extraction contract (PRD §8, §6.4.5, US-29).
+
+    A FeatureSet is a versioned, hashed extraction contract tying the offline lab to
+    the live scorer.  It records the ordered feature column list, the live-servable
+    subset (D2 — features computable at score time), the vendored math version, and a
+    deterministic content hash so that same raw data + same FeatureSet → byte-identical
+    output (Principle #2, §6.4.5).
+
+    columns        — ordered list of all feature names produced by the extractor.
+    live_servable  — subset of columns computable at live score time (D2); features
+                     present in columns but absent here are training-only (D3).
+    math_version   — version identifier of the vendored tape_microstructure module
+                     (e.g. 'solanabilly3:sprint-7'); must match the vendored file.
+    hash           — SHA-256 of canonical(columns, math_version); computed in AC-29.2.
+    """
+
+    version = models.CharField(max_length=64)
+    math_version = models.CharField(max_length=64)
+    columns = models.JSONField(default=list, encoder=JsonSafeEncoder)
+    live_servable = models.JSONField(default=list, encoder=JsonSafeEncoder)
+    hash = models.CharField(max_length=64, db_index=True)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        app_label = "core"
+        db_table = "feature_sets"
