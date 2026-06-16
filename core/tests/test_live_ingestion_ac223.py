@@ -82,13 +82,17 @@ def test_mapper_returns_none_for_unmappable() -> None:
     assert map_birdeye_swap("not a dict") is None
     assert map_birdeye_swap({}) is None
     # token leg not identifiable
-    bad = _raw_birdeye_event("sell"); bad["from"] = {"address": "X"}; bad["to"] = {"address": "Y"}
+    bad = _raw_birdeye_event("sell")
+    bad["from"] = {"address": "X"}
+    bad["to"] = {"address": "Y"}
     assert map_birdeye_swap(bad) is None
     # bad side
-    bad2 = _raw_birdeye_event("sell"); bad2["side"] = "weird"
+    bad2 = _raw_birdeye_event("sell")
+    bad2["side"] = "weird"
     assert map_birdeye_swap(bad2) is None
     # missing price
-    bad3 = _raw_birdeye_event("sell"); bad3.pop("tokenPrice")
+    bad3 = _raw_birdeye_event("sell")
+    bad3.pop("tokenPrice")
     assert map_birdeye_swap(bad3) is None
 
 
