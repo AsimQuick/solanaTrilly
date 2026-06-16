@@ -18,9 +18,9 @@ last-updated: 2026-06-15
 
 | Source    | Total | Used | Remaining |
 |-----------|------:|-----:|----------:|
-| Birdeye   |    10 |    1 |         9 |
+| Birdeye   |    10 |    2 |         8 |
 | Helius    |    10 |    0 |        10 |
-| **Total** |**20** | **1**|    **19** |
+| **Total** |**20** | **2**|    **18** |
 
 Both Birdeye and Helius API keys are provisioned in `.env` (gitignored + untracked).
 They are **never committed** — not here, not in any source file, not in any workflow file.
@@ -62,6 +62,7 @@ then build against it forever.
 | Date | Role/Agent | WS | Purpose | Duration | Count Remaining (Birdeye / Helius) | Fixtures Banked |
 |------|-----------|-----|---------|----------|-------------------------------------|-----------------|
 | 2026-06-15 | dev-team | Birdeye SUBSCRIBE_TXS | First firehose spend (US-22 AC-22.2, retrospective D4): bank a real graduated pump.fun token's PumpSwap swap tape as the durable golden fixture the offline replay/parity suite runs against forever. | 3.7 min (≤ 30 min box) | 9 Birdeye / 10 Helius | `lake/golden/birdeye_subscribe_txs/dt=2026-06-15/E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump_pumpswap_golden.jsonl.gz` — 40 real PumpSwap (`source=pump_amm`) swaps for mint `E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump` (SPCX, a graduated pump.fun token), captured live, banked raw (immutable truth, §6.4.1). 23 buy / 17 sell, 40 distinct signatures, ~186 s of tape. |
+| 2026-06-16 | dev-team (operator) | Birdeye SUBSCRIBE_TXS | US-22 AC-22.3 end-to-end live proof: real PumpSwap swaps flow Birdeye SUBSCRIBE_TXS → BirdeyeSwapSource → map_birdeye_swap → TapeRecorder → `swaps` rows + jsonl.gz on the VPS `listener` container (`-p solanatrilly`). Proves the live recorder path that the offline US-21 replay/parity suite mirrors. | ≤ 150 s box | 8 Birdeye / 10 Helius | `swaps` table on VPS: 8 real `source=pump_amm` swaps for mint `H9L9apxE8RREZZgTaNLmGeUfCYJQfHBwQxuXzvPNpump` (graduated pump.fun token), recorded live (signer=owner, base/quote reserves NULL per §3.3/§7.1) + the AC-22.2 golden fixture remains the durable offline replay anchor. |
 
 ### Activation detail — 2026-06-15 Birdeye SUBSCRIBE_TXS
 
