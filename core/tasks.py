@@ -1,7 +1,7 @@
 # ---
 # module: core.tasks
 # sprint: sprint-7
-# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1
+# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
