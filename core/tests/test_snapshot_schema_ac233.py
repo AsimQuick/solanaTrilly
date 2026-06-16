@@ -23,7 +23,6 @@ Verifies two invariants:
    spec-valid JSON (no NaN/Inf literals), keeping the guard green.
 """
 import json
-import math
 from decimal import Decimal
 
 import pytest
