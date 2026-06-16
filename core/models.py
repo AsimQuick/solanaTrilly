@@ -3,7 +3,7 @@
 # sprint: sprint-7
 # story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4,
 #        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2,
-#        US-23 AC-23.1, US-29 AC-29.1
+#        US-23 AC-23.1, US-29 AC-29.1, US-29 AC-29.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-16
@@ -11,6 +11,9 @@
 # ---
 # Domain models live here. Run `docker compose run --rm web python manage.py
 # makemigrations` after adding models, and commit the generated migration.
+import hashlib
+import json
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models
@@ -275,6 +278,20 @@ class FeatureSet(models.Model):
     live_servable = models.JSONField(default=list, encoder=JsonSafeEncoder)
     hash = models.CharField(max_length=64, db_index=True)
     notes = models.TextField(blank=True, default="")
+
+    @staticmethod
+    def compute_hash(columns: list, math_version: str) -> str:
+        """SHA-256 of canonical(columns, math_version) — pure function, §6.4.5.
+
+        Column order is preserved in the JSON array, so reordering columns
+        produces a different hash.  Bumping math_version also changes the hash.
+        The hex digest is 64 characters, matching the hash field max_length.
+        """
+        canonical = json.dumps(
+            {"columns": columns, "math_version": math_version},
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()
 
     class Meta:
         app_label = "core"
