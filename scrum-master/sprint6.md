@@ -1,8 +1,8 @@
 # Sprint 6
 
 **Phase:** planning
-**Progress:** 4/5 stories | 14/17 ACs
-**Last Updated:** 2026-06-16T14:25:54+00:00
+**Progress:** 4/5 stories | 15/17 ACs
+**Last Updated:** 2026-06-16T14:40:34+00:00
 
 ## Sprint Goal
 Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retrospective E4). P0–P3 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', and P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity. Sprint-6 adds the ONLY non-tape live read in the whole pipeline (Principle #3): a single on-demand Birdeye REST snapshot per token at score time, for the things the tape cannot give — holder distribution, mint/freeze authority, the LP-burned flag, and a liquidity/TVL/depth read (a first-class field per §1.1, never an assumption) — and locks the three-unit (vol_sol/vol_usd/sol_usd) parity backbone (D1). Deliver, IN ORDER: (1) the persistence target — the 'snapshots' table (§8: mint, taken_at, elapsed_s, raw JSONB) with the AT-MOST-ONE-ROW-PER-TOKEN discipline (§6.3) + a typed score-time snapshot schema, raw written via JsonSafeEncoder so the H3/US-5 guard stays green (US-23); (2) the score-time snapshot FETCHER behind the DataSource seam + injected clock (US-2 / Principle #7) — AT MOST ONE on-demand Birdeye REST read per token (the scheduled per-token poll regime is RETIRED — that cost cut funds retiring solanaBilly), capturing holders/authority/LP-burned/liquidity raw, with the #380 future-window clamp (any to=/window clamped to the injected now — Birdeye 400s on future windows) and the Redis token-bucket limiter KEPT while the scheduler is DROPPED (US-24); (3) score-time ORCHESTRATION — on graduation, schedule EXACTLY ONE snapshot at scoring.score_at_elapsed_s read from get_active_config() (US-11 resolver; Principle #1 — never a constant/os.getenv), honoring capture_buffer_s so the tape tail has landed, idempotent (at-most-once even on retry/restart), behind the seam + virtual clock so it is replay-testable, with NO scheduled-polling task registered (H2 manifest) (US-25); (4) UNITS LOCKED (D1) — every recorded swap carries all three units with the relationship locked (vol_usd ≈ vol_sol·sol_usd; sol_usd = the per-block reference) and unit-invariant features (shares/ratios/counts) are byte-identical regardless of unit basis (the parity backbone), wired into the canonical ci.yml so it cannot silently vanish (US-26); (5) the P4 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye score-time snapshot through ReplaySource + virtual clock → EXACTLY the expected raw 'snapshots' row, deterministically (run twice → byte-identical raw JSONB), raw=immutable-truth re-derivability, and the #380-clamp / at-most-once / unit-parity regression suite green in CI (US-27). The P4 gate is OFFLINE and synthetic — the score-time read is a single on-demand REST snapshot (NOT a firehose WS activation), so NO Birdeye/Helius firehose activation is required this sprint (8 Birdeye / 10 Helius remain banked); per E3, if a real Birdeye REST snapshot can be banked cheaply it is used as the gate fixture, but the gate never depends on a live read. Build order: US-23 FIRST (the persistence target everything writes to); then US-24 (fetcher) → US-25 (orchestration) are sequential; US-26 (units lock) is independent of the snapshot chain and may run in parallel; US-27 (offline gate) needs US-23/24/25/26. Process carries: E1 — promote the sprint 'phase' (and story dev_status) to their real values BEFORE any sprint-end deploy so the US-13 integrity guard is not tripped by our own staleness (this has now caught a stale-phase deploy two sprints running); E2 — run 'ruff check --fix' inside the web container as a pre-push checklist item to kill the recurring I001/E501 churn before CI; E3 — exercise the live adapter against a banked real capture EARLY rather than discovering a missing live layer at story-end; E5 — the first sprint-6 deploy at true HEAD (phase now 'review'-corrected on sprint-5) is a clean green run, closing the US-22 condition-B (clean-final-deploy) carry and confirming 200-on-8002 + listener Up + solanaBilly untouched on 8001.
@@ -285,16 +285,35 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
 ---
 
 ### US-27: P4 — the offline gate: deterministic ReplaySource snapshot replay → expected raw 'snapshots' row + raw-immutable re-derivability + the #380/at-most-once/unit-parity regression suite (§16, §6.4)
-**Status:** ready | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-27.1:** P4 OFFLINE GATE (§16): replaying a captured-or-synthetic Birdeye score-time snapshot through a ReplaySource + virtual clock stores EXACTLY the expected raw 'snapshots' row, deterministically — run twice and the stored raw JSONB is byte-identical. The fixture is a schema-faithful Birdeye snapshot payload (§6.3); if a real Birdeye REST snapshot is banked (per E3) it is used here. Verified by the replay test asserting the expected stored snapshot and run-twice determinism.
+- [x] **AC-27.1:** P4 OFFLINE GATE (§16): replaying a captured-or-synthetic Birdeye score-time snapshot through a ReplaySource + virtual clock stores EXACTLY the expected raw 'snapshots' row, deterministically — run twice and the stored raw JSONB is byte-identical. The fixture is a schema-faithful Birdeye snapshot payload (§6.3); if a real Birdeye REST snapshot is banked (per E3) it is used here. Verified by the replay test asserting the expected stored snapshot and run-twice determinism.
+  - Dev: done
 - [ ] **AC-27.2:** Raw = immutable truth (§6.4.1): the stored snapshot is the verbatim raw payload — never mutated, never re-pulled — and the typed captured fields (holders/authority/lp_burned/liquidity/tvl/depth) are re-derivable from it. Verified by a pytest test asserting the persisted raw JSONB equals the source payload (json-safe-normalized) and that the US-23.3 schema re-derives from the stored raw without a second fetch.
 - [ ] **AC-27.3:** The P4 regression suite is green in CI and wired so it cannot silently vanish: the #380 future-window-clamp test (US-24.3), the at-most-one-snapshot / idempotency test (US-23.2 / US-25.2), and the unit-parity test (US-26) all pass in the single canonical ci.yml 'test' job (H1 — no second workflow), wired via a compile-time ImportError trap on the named test functions (mirroring AC-21.3). Verified by the tests passing on the feature branch and at merge. New files carry metadata front matter.
 
 **Dependencies:** US-23, US-24, US-25, US-26
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-27.1 done: The implementation is solid and all tests pass. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  ## Implementation Summary
+  
+  **Branch:** `feature/US-27-AC-27.1`  
+  **Commit:** `f60f87a` — pushed  
+  **Tests:** +16 new tests; 758 total pass (was 742); coverage ≥80%
+  
+  ### Files Changed (3 new test files, no source code changes needed)
+  
+  **`core/tests/test_p4_offline_gate_ac271.py`** *(new — AC-27.1, 6 tests)*  
+  Replays a schema-faithful synthetic Birdeye payload through `ReplaySnapshotSource` + `VirtualClock` → `SnapshotFetcher` → `ScoreTimeOrchestrator`. Asserts: exactly one `snapshots` row with correct mint/elapsed_s/taken_at/raw; `orchestrate()` returns the fixture payload; run-twice determinism via `json.dumps(..., sort_keys=True)` byte comparison after deleting the row between runs; DataSource called exactly once; all 7 fixture keys present in stored raw; DB-level at-most-once guard blocks a second fresh orchestrator from calling the DataSource.
+  
+  **`core/tests/test_raw_immutable_ac272.py`** *(new — AC-27.2, 7 tests)*  
+  Verifies stored raw JSONB == json-safe-normalized source (via `json.loads(json.dumps(payload, cls=JsonSafeEncoder))`); pure-JSON-safe payloads stored verb …
 
 **Tester Status:** approved
 **Tester Notes:**
