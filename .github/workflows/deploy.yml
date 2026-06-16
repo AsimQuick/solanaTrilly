@@ -4,9 +4,9 @@
 # purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
 #          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
 # sprint: sprint-4
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-17
 # ---
 #
 # GHCR auth uses the built-in GITHUB_TOKEN with packages:write — no extra secrets required.
@@ -98,6 +98,26 @@ jobs:
           done
           echo "Smoke test FAILED: /health/ did not return HTTP 200 after all ${SMOKE_MAX_ATTEMPTS} attempts (${SMOKE_MAX_ATTEMPTS} x ${SMOKE_RETRY_DELAY}s)"
           exit 1
+
+      - name: Verify listener container Up (AC-33.3)
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-33.3 — verifying 'listener' container is Up in the solanatrilly stack"
+          printf '%s\n' "$VPS_SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          ps_out=$(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
+            "${VPS_USER}@${VPS_HOST}" \
+            'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml ps 2>&1')
+          echo "$ps_out"
+          rm -f /tmp/deploy_key
+          if ! echo "$ps_out" | grep -iE '^solanatrilly.listener' | grep -qiE 'running|up'; then
+            echo "AC-33.3 FAIL: 'listener' container is NOT in running/up state"
+            exit 1
+          fi
+          echo "AC-33.3 PASS: 'listener' container is Up"
 
       - name: Verify solanaBilly isolation (AC-6.5 / AC-12.4)
         env:
