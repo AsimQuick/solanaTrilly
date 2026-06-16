@@ -7,10 +7,67 @@ last-updated: 2026-06-16
 
 # solanaTrilly — Scrum Master Board
 
-## Current Sprint: sprint-6 — Open P4 (Score-time Snapshot + units locked, §6.3 / D1) — PLANNING
+## Sprint-7 — Open P5 (Lake + Extraction Contract + Vendored Math + Feature Builder + T0/G1/G2 Golden Parity, §6.4 / §7.2 / §7.6) — PLANNING
 - **Phase:** planning
+- **Sprint plan (source of truth):** [`sprint7.json`](sprint7.json)
+- **PRD:** [`PRD.md`](PRD.md) — delivers **P5 (the integrity core, §6.4)**: parity by construction so a model's live score equals its offline score
+- **Previous sprint:** [`sprint6.json`](sprint6.json) — **closed** (review complete; **P4 score-time snapshot + units-lock delivered, Tester-approved 17/17 ACs**; one DoD item — the clean final HEAD deploy — carried as F3; project advanced to P5 — see Sprint-6 Review below + [`retrospective.md`](retrospective.md) action items F1–F5)
+- **Project state:** owned by Project Lead — `../project-state.json`
+- **Why this sprint:** P0–P4 are closed — the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 lands graduated `tokens`, P3's recorder captures every PumpSwap swap from t0 into the immutable `jsonl.gz` lake + the queryable `swaps` mirror with live↔backfill byte-parity, and P4 takes one on-demand score-time snapshot per token with the three-unit lock. Retrospective **F1** directs **P5 (the lake + extraction contract + vendored math + Feature Builder + T0/G1/G2 golden parity, §6.4 / §7.2 / §7.6)** as the **primary deliverable** — THE integrity core that makes live==offline **by construction** (one vendored feature library, one deterministic extractor serving live+offline+replay, a golden-parity merge gate) and fixes the evidenced solanaBilly disaster (23% live vs 78% offline precision purely from assembly drift, #358/#359/#367). Process carries: **F2** — *mechanize* phase-promotion (the stale-`phase` deploy has tripped the US-13 guard **three consecutive sprints**; a checklist has proven not to work); **F4** — *mechanize* the ruff gate (I001/E501/F401 churn, five sprints running); **F3** — confirm a clean final deploy at true HEAD closing the carried sprint-6 VPS clause. **F5** (the live Birdeye REST snapshot adapter) is **consciously deferred to sprint-8**, scheduled near where the scorer (P7) consumes it — a single REST read off the P5 critical path, kept out of sprint-7 to avoid over-commitment on the heaviest phase.
+
+### Sprint Goal
+**Open P5 — the lake + extraction contract.** Deliver, in build order: **(1)** vendor `tape_microstructure.py`
+**verbatim** (§7.2; only sanctioned edit `rels.ptp()`→`np.ptp(rels)`) + the **G1** function-parity gate (§7.6 —
+the ≈15-token golden fixture within `1e-9`) (US-28); **(2)** the `feature_sets` table (§8) — a **hashed,
+versioned** FeatureSet (ordered columns + math version) with the `live_servable`/`training_only` split (D2/D3)
+(US-29); **(3)** the **shared deterministic extractor** — raw lake → vendored `compute_features`, **one code
+path** for live+offline+replay (Principle #2), **leak-free** by the causal cutoff (reject `rel ≥ window_s`),
+deterministic+versioned (US-30); **(4)** the **Feature Builder** — one-click CSV/parquet + **manifest** over the
+lake, off the dedicated `celery` container (§6.5) (US-31); **(5)** the **T0/G2 source-parity gate** (§7.6, §16) —
+Birdeye **live↔backfill** byte-parity (offline, no firehose) + a **Helius raw-truth** cross-check, wired as a
+**hard merge gate** in the canonical `ci.yml` (US-32). Plus **process hardening** — mechanize phase-promotion
+(F2) + the ruff gate (F4) + the clean HEAD deploy (F3) (US-33). **Firehose:** P5's offline gates (G1, G2(a))
+need **no** activation; G2(b) raw-truth is at most **one** budgeted, logged Helius activation banking a durable
+fixture (Helius 10→9), the gate offline-by-construction (8 Birdeye remain banked).
+
+## Stories (sprint-7 — committed scope)
+| ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
+|----|-------|----------|------|-----|--------|-----|--------|
+| US-28 | P5 — vendor `tape_microstructure.py` verbatim (§7.2) + G1 function-parity gate (§7.6) | high | US-17 | 3 | ready | not-started | — |
+| US-29 | P5 — `feature_sets` table + deterministic hashed/versioned FeatureSet + live_servable/training_only split (§6.4.5, §8) | high | US-5, US-9 | 3 | ready | not-started | — |
+| US-30 | P5 — shared deterministic extractor: raw lake → vendored `compute_features`, one code path, leak-free cutoff (§6.4.4) | high | US-28, US-29, US-19 | 3 | ready | not-started | — |
+| US-31 | P5 — Feature Builder: one-click CSV/parquet + manifest off the `celery` container (§6.5) | high | US-30 | 3 | ready | not-started | — |
+| US-32 | P5 — T0/G2 source-parity gate: Birdeye live↔backfill byte-parity + Helius raw-truth, hard merge gate (§7.6) | high | US-28, US-30, US-19, US-20 | 3 | ready | not-started | — |
+| US-33 | Process — mechanize phase-promotion (F2) + ruff gate (F4) + clean HEAD deploy (F3) | high | US-13 | 3 | ready | not-started | — |
+
+> **Scope:** sprint-7 commits **6 stories / 18 ACs** — the full P5 integrity core (US-28…US-32) plus the
+> process-hardening carries (US-33: F2/F3/F4). Source of truth: [`sprint7.json`](sprint7.json). On P5 exit, the
+> golden-parity gate (T0/G1/G2) gates every PR by byte-identity and the Feature Builder produces the labs' CSV
+> input; the project advances to **P6 (dashboard, §13)**. **F5** (the live Birdeye REST snapshot adapter) is
+> **deferred to sprint-8**.
+
+**Build order:** **US-28 first** — the vendored math everything downstream eats. **US-29** (FeatureSet table) and
+**US-33** (process) are independent and may run in parallel. Then **US-30** (extractor) needs US-28 + US-29 (+ the
+US-19 lake reader); then **US-31** (Feature Builder) needs US-30 and **US-32** (T0/G2 parity) needs US-28 + US-30.
+The offline P5 gates (G1, G2(a)) do **not** depend on any live activation, so the firehose budget stays banked
+except the single budgeted G2(b) Helius raw-truth fixture spend.
+
+**GitHub Issues:** created at sprint-7 kickoff (2026-06-16), one per story, mirroring the prior convention —
+[US-28 #121](https://github.com/AsimQuick/solanaTrilly/issues/121) ·
+[US-29 #122](https://github.com/AsimQuick/solanaTrilly/issues/122) ·
+[US-30 #123](https://github.com/AsimQuick/solanaTrilly/issues/123) ·
+[US-31 #124](https://github.com/AsimQuick/solanaTrilly/issues/124) ·
+[US-32 #125](https://github.com/AsimQuick/solanaTrilly/issues/125) ·
+[US-33 #126](https://github.com/AsimQuick/solanaTrilly/issues/126).
+Source of truth remains [`sprint7.json`](sprint7.json).
+
+---
+
+## Sprint-6 — Open P4 (Score-time Snapshot + units locked, §6.3 / D1) — REVIEW COMPLETE (closeout pending a clean re-deploy)
+- **Phase:** done (corrected from a stale `planning` at review — see process note below)
 - **Sprint plan (source of truth):** [`sprint6.json`](sprint6.json)
 - **PRD:** [`PRD.md`](PRD.md) — delivers **P4 (score-time snapshot, §6.3) + units locked (D1)**
+- **Review outcome:** **The full P4 score-time snapshot core is built, merged CI-green, and Tester-approved.** All 5 stories / 17 ACs are approved across PRs #108–#120 — the snapshot fetcher + orchestration behind the `DataSource` seam + injected clock, the three-unit (vol_sol/vol_usd/sol_usd) parity backbone locked (D1), and the deterministic P4 offline gate green. Sprint goal **met.** **One DoD item outstanding:** the clean final VPS deploy at true HEAD never landed — the sprint-end deploy **failed on a stale `phase: planning`** that tripped the US-13 guard (the third consecutive sprint for this self-inflicted slip), corrected to `done` in this review; a clean re-deploy is pending to close the VPS clause. See the Sprint-6 Review below + [`retrospective.md`](retrospective.md) (action items F1–F5). Project advances to **P5 (lake + extraction contract + vendored math + Feature Builder + T0/G1/G2 golden parity, §6.4 / §7.2)**.
 - **Previous sprint:** [`sprint5.json`](sprint5.json) — **closed** (review complete; **P3 tape recorder delivered and live on the VPS**, detection→recorder proven live; project advanced to P4 — see Sprint-5 Review below + [`retrospective.md`](retrospective.md) action items E1–E5)
 - **Project state:** owned by Project Lead — `../project-state.json`
 - **Why this sprint:** P0–P3 are closed — the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 lands graduated `tokens`, and P3's recorder captures every PumpSwap swap from t0 into the immutable `jsonl.gz` lake + the queryable `swaps` mirror with live↔backfill parity. Retrospective **E4** directs **P4 (score-time snapshot + units locked, §6.3 / D1)** as the **primary deliverable** — the project's **only** non-tape live read (Principle #3): a single on-demand Birdeye REST snapshot per token at score time (holder distribution, mint/freeze authority, LP-burned flag, liquidity/TVL/depth — a first-class field per §1.1), plus locking the three-unit (vol_sol/vol_usd/sol_usd) parity backbone (D1). Process carries: **E1** (promote `phase`/`dev_status` *before* sprint-end deploys — the US-13 guard has now caught a stale-`phase` deploy two sprints running), **E2** (`ruff check --fix` inside the container as a pre-push checklist item), **E3** (exercise the live adapter against a banked real capture early), **E5** (the first sprint-6 deploy at true HEAD is a clean green run, closing the US-22 condition-B carry).
@@ -36,17 +93,27 @@ Helius remain banked).
 ## Stories (sprint-6 — committed scope)
 | ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
 |----|-------|----------|------|-----|--------|-----|--------|
-| US-23 | P4 — `snapshots` table + score-time snapshot schema: persistence target (§8, §6.3) | high | US-14, US-5 | 4 | ready | not-started | not-started |
-| US-24 | P4 — score-time snapshot fetcher behind the `DataSource` seam: at-most-one on-demand Birdeye REST read + #380 clamp + token-bucket limiter (§6.3) | high | US-23, US-2, US-11 | 4 | ready | not-started | not-started |
-| US-25 | P4 — score-time orchestration: schedule exactly one snapshot at `score_at_elapsed_s` from `get_active_config()`, idempotent, replay-testable (§6.3, Principle #1) | high | US-24, US-11, US-15 | 3 | ready | not-started | not-started |
-| US-26 | P4 — units locked (D1): three-unit (vol_sol/vol_usd/sol_usd) invariant + unit-invariant feature parity backbone, CI-wired (§6.2 D1, §7.1) | high | US-17, US-18 | 3 | ready | not-started | not-started |
-| US-27 | P4 — offline gate: deterministic `ReplaySource` snapshot replay + raw-immutable re-derivability + #380/at-most-once/unit-parity regression suite (§16, §6.4) | high | US-23, US-24, US-25, US-26 | 3 | ready | not-started | not-started |
+| US-23 | P4 — `snapshots` table + score-time snapshot schema: persistence target (§8, §6.3) | high | US-14, US-5 | 4 | done | done | **approved** |
+| US-24 | P4 — score-time snapshot fetcher behind the `DataSource` seam: at-most-one on-demand Birdeye REST read + #380 clamp + token-bucket limiter (§6.3) | high | US-23, US-2, US-11 | 4 | done | done | **approved** |
+| US-25 | P4 — score-time orchestration: schedule exactly one snapshot at `score_at_elapsed_s` from `get_active_config()`, idempotent, replay-testable (§6.3, Principle #1) | high | US-24, US-11, US-15 | 3 | done | done | **approved** |
+| US-26 | P4 — units locked (D1): three-unit (vol_sol/vol_usd/sol_usd) invariant + unit-invariant feature parity backbone, CI-wired (§6.2 D1, §7.1) | high | US-17, US-18 | 3 | done | done | **approved** |
+| US-27 | P4 — offline gate: deterministic `ReplaySource` snapshot replay + raw-immutable re-derivability + #380/at-most-once/unit-parity regression suite (§16, §6.4) | high | US-23, US-24, US-25, US-26 | 3 | done | done | **approved** |
 
 > **Scope:** sprint-6 commits **5 stories / 17 ACs** — the full P4 score-time snapshot core (US-23…US-25) plus
-> the D1 units-lock (US-26) and the P4 offline gate (US-27). Source of truth: [`sprint6.json`](sprint6.json). On
-> P4 exit, the pipeline can take one on-demand snapshot per token at score time and the three-unit parity backbone
-> is locked, and the project advances to **P5 (lake + extraction contract + vendored math + Feature Builder +
-> T0/G1/G2 golden parity, §6.4 / §7.2)**.
+> the D1 units-lock (US-26) and the P4 offline gate (US-27). Source of truth: [`sprint6.json`](sprint6.json).
+> **Review outcome: all 5 stories Tester-approved (17/17 ACs)** — the pipeline can take one on-demand snapshot per
+> token at score time and the three-unit parity backbone is locked. The project advances to **P5 (lake +
+> extraction contract + vendored math + Feature Builder + T0/G1/G2 golden parity, §6.4 / §7.2)**.
+
+> **Process note (the recurring stale-`phase` deploy trip — third sprint running):** the sprint-end deploy
+> (run 27627161427) **failed at the US-13 integrity step** because `sprint6.json` still read `phase: planning`
+> while every story was `done` — the same self-inflicted slip flagged as D2 (sprint-4) and E1 (sprint-5). The
+> per-story deploys for US-23/24/25 passed (runs 27595669019 / 27597270397 / 27598463211), so the VPS *runs* the
+> snapshot code, but the **clean final deploy at true HEAD is still pending** to close the DoD VPS clause.
+> `phase` is corrected to `done` and story-level `dev_status` is normalized to `done` (D3) in this review pass;
+> fix-at-source (automate phase-promotion in the deploy sequence) is carried as **F2**, the clean re-deploy as
+> **F3**. The auto-generated [`sprint6.md`](sprint6.md) still renders `Dev Team Status: not-started` per story; the
+> `.json` is authoritative.
 
 **Build order:** **US-23 first** — the persistence target everything writes to. Then **US-24** (fetcher) →
 **US-25** (orchestration) are sequential. **US-26** (units lock) is independent of the snapshot chain and may run
@@ -252,6 +319,26 @@ A story is Done only when ALL of the following hold:
 - **Status integrity enforced (retrospective B4):** no story/AC reads `status: done` while its `tester_status` is `failed`/`blocked`; stale `phase`/`dev_status` fields are normalized at review.
 - `retrospective.md` updated for sprint-3 — **named owner: Tester / scrum facilitator** (retrospective A3)
 
+## Sprint-6 Review — Summary (2026-06-16)
+**Phase:** done (corrected from a stale `planning` at review) | **Committed scope:** US-23…US-27 (5 stories, 17 ACs) | **Goal:** **met — P4 (score-time snapshot + units locked) delivered**
+**Full retrospective + action items (F1–F5):** [`retrospective.md`](retrospective.md)
+
+**Outcome:** **The full P4 score-time snapshot core is built, merged CI-green, and Tester-approved.** All 5 stories / 17 ACs are approved across PRs #108–#120. The pipeline can now take **exactly one on-demand Birdeye REST snapshot per token at score time** — the only non-tape live read in the whole pipeline (Principle #3) — for what the tape cannot give (holder distribution, mint/freeze authority, the LP-burned flag, liquidity/TVL/depth as a first-class field, §1.1), and the **three-unit (vol_sol/vol_usd/sol_usd) parity backbone is locked (D1)**. Sprint goal **met.** **One DoD item outstanding:** the clean final VPS deploy at true HEAD never landed — the sprint-end deploy failed on a stale `phase: planning` that tripped the US-13 guard (third consecutive sprint); a clean re-deploy is pending. The project advances to **P5 (lake + extraction contract + vendored math + Feature Builder + T0/G1/G2 golden parity, §6.4 / §7.2)**.
+
+**US-23/24/25 — the score-time snapshot core, behind the live/replay seam (Principle #7).** US-23 ships the `snapshots` table (§8: `mint`/`taken_at`/`elapsed_s`/`raw` JSONB) with at-most-one-row-per-token (`unique=True` + `update_or_create`), the `raw` JSONField written via `JsonSafeEncoder` (H3/US-5 guard green), a single typed `SnapshotSchema` (7 captured fields), and a read-only Django admin. US-24 is the `SnapshotFetcher` reading from a `SnapshotDataSource` + injected `Clock` — **at most one** on-demand read per token, the **#380** future-window clamp (`min(as_of, now)` so no future window leaves the fetcher), and the Redis token-bucket limiter **kept** while the scheduled per-token poll regime is **retired** (H2 manifest confirms no periodic snapshot task); the US-2 static-analysis guard (no concrete-source import, no `time.time()`/`datetime.now()` on the core path) held throughout. US-25's `ScoreTimeOrchestrator` schedules **exactly one** snapshot at `scoring.score_at_elapsed_s` read from `get_active_config()` (Principle #1, not a constant/`os.getenv`), idempotent **end-to-end** — AC-25.2 added a DB-level `Snapshot.objects.filter(mint).exists()` guard so a **listener restart** with a fresh fetcher won't re-hit the DataSource — and replay-testable via `ReplaySnapshotSource`.
+
+**US-26/27 — units locked (D1) + the deterministic offline gate.** US-26 locks the three units with `REL_TOL = 1e-6` as a *named, documented* constant (the Tester's AC-26.1 amendment), all three fields non-null/non-zero, `vol_usd ≈ vol_sol·sol_usd` within tolerance, and unit-invariant aggregates (buy-fraction / flow-ratio / per-trader-share) byte-identical whether derived via SOL or USD — wired into the canonical `ci.yml` `test` job via a compile-time `ImportError` trap (AC-21.3 pattern). US-27 is the P4 offline gate: replaying a schema-faithful synthetic Birdeye snapshot through `ReplaySnapshotSource` + virtual clock stores exactly the expected raw `snapshots` row, **run-twice byte-identical** (`json.dumps(..., sort_keys=True)` after row deletion); raw = verbatim immutable truth, re-derivable without a second fetch; and the #380-clamp / at-most-once / unit-parity regression suite is trapped into the single canonical job on 8 named functions so it cannot silently vanish. **The gate is offline and synthetic — 0 firehose activations spent; 8 Birdeye / 10 Helius remain banked.**
+
+**Forward design paid off.** Several ACs were **test-only** (AC-23.2, AC-26.1/26.2/26.3, AC-27.2/27.3): the `Snapshot` model already carried `unique=True` + `JsonSafeEncoder` (AC-23.1) and `Swap`/`NormalizedSwap` already carried all three units (P3), so P4 was largely proving and trapping invariants the P1/P3 groundwork had anticipated, not retrofitting them.
+
+**Process notes.** **E1/D2 recurred a THIRD consecutive sprint** — the sprint-end deploy (run 27627161427) **failed at the US-13 integrity step** on stale `phase: planning` while all stories were `done`; the per-story deploys for US-23/24/25 passed (runs 27595669019 / 27597270397 / 27598463211), so the VPS runs the snapshot code, but the clean final deploy at HEAD is still pending. The guard works; the habit it keeps catching does not — fix-at-source (automate phase-promotion) is carried as **F2**, the clean re-deploy as **F3**. **D3 actioned again** — story-level `dev_status` normalized to `done` at closeout. **E2 recurred a fifth time** — AC-23.3 shipped an unused `import math` (F401), caught by CI/ruff, fixed in one iteration; mechanize the ruff gate is carried as **F4**. **E3 partial** — the seam + synthetic gate are delivered, but the concrete Birdeye REST `SnapshotDataSource` (the live client) was not built this sprint; build + prove it against a banked real REST snapshot is carried as **F5**. Two minor boundary slips: AC-24.4's second commit (`0f7c8c7`) modified orchestrator-owned `sprint6.md`, and US-26 bundled AC-26.2/26.3 into AC-26.1's commit, leaving empty feature branches that tripped the No-Commits guard (work is real and merged in PR #119).
+
+**Defects:** lint-only (AC-23.3 F401), caught by CI and fixed in 1 iteration; none reached pytest or production. Coverage 86.53% vs. the ≥80% gate; 758 tests passing.
+
+**Carry into sprint-7 (priority order):** **F1** open **P5** (lake + extraction contract + vendored `tape_microstructure.py` + Feature Builder + T0/G1/G2 golden parity) · **F2** automate phase-promotion in the deploy sequence — the stale-`phase` trip is now three sprints running and a checklist has not fixed it · **F3** trigger + confirm the clean final deploy at true HEAD and close the sprint-6 DoD VPS clause (re-issue of E5) · **F4** mechanize the ruff gate (pre-commit/entrypoint hook), not a checklist · **F5** build + prove the live Birdeye REST snapshot adapter against a banked real snapshot before the scorer needs it. See `retrospective.md` F1–F5.
+
+**Metrics:** 5 stories committed · **5 fully Tester-approved** (17/17 ACs) · P4 delivered · PRs #108–#120 (13), CI `test` green at merge · per-story deploys **GREEN** (US-23/24/25) — sprint-end HEAD deploy **FAILED** (run 27627161427) on stale `phase` (D2/E1 third recurrence, corrected to `done`) · **0 firehose activations** (8 Birdeye / 10 Helius banked) · 1 lint defect (AC-23.3 F401) caught and fixed in 1 iteration · 758 tests · coverage 86.53% (≥80% gate). Token/cost spend: see `../project-state.json` (Project Lead).
+
 ## Sprint-5 Review — Summary (2026-06-16)
 **Phase:** review | **Committed scope:** US-17…US-22 (6 stories, 20 ACs) | **Goal:** **met — P3 (tape recorder) delivered; detection→recorder proven LIVE**
 **Full retrospective + action items (E1–E5):** [`retrospective.md`](retrospective.md)
@@ -445,7 +532,7 @@ topology-only stories, and give `retrospective.md` a named owner each sprint. Se
 - **PR prefixes (PRD §1):** `detection:` / `tape:` / `features:` / `scoring:` / `trading:` / `dashboard:` / `ops:`
 
 ## Ownership boundaries
-- **Product Owner:** owns the active sprint plan (`sprint5.json`), this board, user stories, change control. Does NOT write code.
+- **Product Owner:** owns the active sprint plan (`sprint6.json`), this board, user stories, change control. Does NOT write code.
 - **Dev Team:** implements ACs in Docker on `feature/US-X-AC-Y` branches; updates only `dev_status`/`dev_notes`.
 - **Tester:** flips `checked`/`tester_status`, enforces DoD, interprets CI, owns `retrospective.md` each sprint. Does NOT execute tests or edit source.
 - **Project Lead:** external script; sole owner of `project-state.json`.
@@ -453,10 +540,15 @@ topology-only stories, and give `retrospective.md` a named owner each sprint. Se
 ## Open items / human dependencies
 See [`po-requests.md`](po-requests.md) — **all four sprint-1/P0 operator blockers remain RESOLVED (2026-06-14):**
 the GitHub remote (`AsimQuick/solanaTrilly`), the default branch, and the CD secrets (`VPS_SSH_KEY` / `VPS_HOST` /
-`VPS_USER`; GHCR via the built-in `GITHUB_TOKEN`) are all provisioned. **No open human dependencies for sprint-6** —
-P4 (the score-time snapshot + units lock) is agent-buildable end-to-end and its offline gate is synthetic, so it
-needs **no** firehose activation; the score-time read is a single on-demand Birdeye **REST** snapshot (not a
-firehose WS activation), an agent task within the Birdeye professional allowance — not an operator blocker.
+`VPS_USER`; GHCR via the built-in `GITHUB_TOKEN`) are all provisioned. **No open human dependencies for sprint-7** —
+P5 (the lake + extraction contract + vendored math + Feature Builder + T0/G1/G2 golden parity) is agent-buildable
+end-to-end. Its core gates are **offline**: G1 function parity and G2(a) Birdeye live↔backfill parity need **no**
+firehose activation (G2(a) uses banked sprint-5 captures + an on-demand Birdeye `seek_by_time` REST backfill — a
+REST read within the professional allowance, not a firehose WS activation). The **one** budgeted live read — the
+G2(b) Helius raw-truth cross-check (CLAUDE.md: "G2 needs one activation") — is an **agent** task within the
+firehose budget (Helius 10→9, logged in `ops/firehose_activation_log.md`, banks a durable fixture), **not** an
+operator blocker. The three operator-only Cutover levers (trading-wallet secret, start firehose, enable
+real-capital trading) remain out of scope until Cutover.
 The sprint-3 "operator firewall" suspicion was **falsified** by US-12's on-box diagnosis (C1): port 8002 was always
 reachable; the deploy failure was a code-side smoke-test timing race that agents fixed (no operator action). The
 three operator-only Cutover levers (trading-wallet secret, start firehose, enable real-capital trading) remain out
