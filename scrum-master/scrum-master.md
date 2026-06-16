@@ -2,15 +2,72 @@
 file: scrum-master.md
 purpose: Current sprint status board + controlled vocabulary for solanaTrilly
 owner: product-owner
-last-updated: 2026-06-15
+last-updated: 2026-06-16
 -->
 
 # solanaTrilly — Scrum Master Board
 
-## Current Sprint: sprint-5 — Open P3 (the Tape Recorder) + prove detection live (D4)
+## Current Sprint: sprint-6 — Open P4 (Score-time Snapshot + units locked, §6.3 / D1) — PLANNING
 - **Phase:** planning
+- **Sprint plan (source of truth):** [`sprint6.json`](sprint6.json)
+- **PRD:** [`PRD.md`](PRD.md) — delivers **P4 (score-time snapshot, §6.3) + units locked (D1)**
+- **Previous sprint:** [`sprint5.json`](sprint5.json) — **closed** (review complete; **P3 tape recorder delivered and live on the VPS**, detection→recorder proven live; project advanced to P4 — see Sprint-5 Review below + [`retrospective.md`](retrospective.md) action items E1–E5)
+- **Project state:** owned by Project Lead — `../project-state.json`
+- **Why this sprint:** P0–P3 are closed — the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 lands graduated `tokens`, and P3's recorder captures every PumpSwap swap from t0 into the immutable `jsonl.gz` lake + the queryable `swaps` mirror with live↔backfill parity. Retrospective **E4** directs **P4 (score-time snapshot + units locked, §6.3 / D1)** as the **primary deliverable** — the project's **only** non-tape live read (Principle #3): a single on-demand Birdeye REST snapshot per token at score time (holder distribution, mint/freeze authority, LP-burned flag, liquidity/TVL/depth — a first-class field per §1.1), plus locking the three-unit (vol_sol/vol_usd/sol_usd) parity backbone (D1). Process carries: **E1** (promote `phase`/`dev_status` *before* sprint-end deploys — the US-13 guard has now caught a stale-`phase` deploy two sprints running), **E2** (`ruff check --fix` inside the container as a pre-push checklist item), **E3** (exercise the live adapter against a banked real capture early), **E5** (the first sprint-6 deploy at true HEAD is a clean green run, closing the US-22 condition-B carry).
+
+### Sprint Goal
+**Open P4 — the score-time snapshot + units locked.** Build the §6.3 score-time read behind the `DataSource`
+seam + injected clock (Principle #7), in build order: **(1)** the `snapshots` table (§8) + a typed score-time
+snapshot schema with the **at-most-one-row-per-token** discipline (§6.3) and raw written via `JsonSafeEncoder`
+(US-23); **(2)** the snapshot **fetcher** — **at most one** on-demand Birdeye REST read per token (the scheduled
+per-token poll regime is **retired**), capturing holders/authority/LP-burned/liquidity raw, with the **#380**
+future-window clamp and the Redis token-bucket limiter **kept** while the scheduler is **dropped** (US-24);
+**(3)** score-time **orchestration** — on graduation, schedule **exactly one** snapshot at
+`scoring.score_at_elapsed_s` read from `get_active_config()` (Principle #1), idempotent (at-most-once),
+replay-testable, with **no** scheduled-polling task registered (H2) (US-25); **(4)** **units locked (D1)** — every
+swap carries all three units with the relationship locked (`vol_usd ≈ vol_sol·sol_usd`), unit-invariant features
+byte-identical across unit bases, CI-wired so it can't vanish (US-26); **(5)** the **P4 offline gate** (§16) —
+deterministic `ReplaySource` snapshot replay → exactly the expected raw `snapshots` row (run twice →
+byte-identical), raw-immutable re-derivability, and the #380-clamp / at-most-once / unit-parity regression suite
+green in CI (US-27). The P4 gate is **offline and synthetic** — the score-time read is a single on-demand **REST**
+snapshot (not a firehose WS activation), so **no firehose activation is required** this sprint (8 Birdeye / 10
+Helius remain banked).
+
+## Stories (sprint-6 — committed scope)
+| ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
+|----|-------|----------|------|-----|--------|-----|--------|
+| US-23 | P4 — `snapshots` table + score-time snapshot schema: persistence target (§8, §6.3) | high | US-14, US-5 | 4 | ready | not-started | not-started |
+| US-24 | P4 — score-time snapshot fetcher behind the `DataSource` seam: at-most-one on-demand Birdeye REST read + #380 clamp + token-bucket limiter (§6.3) | high | US-23, US-2, US-11 | 4 | ready | not-started | not-started |
+| US-25 | P4 — score-time orchestration: schedule exactly one snapshot at `score_at_elapsed_s` from `get_active_config()`, idempotent, replay-testable (§6.3, Principle #1) | high | US-24, US-11, US-15 | 3 | ready | not-started | not-started |
+| US-26 | P4 — units locked (D1): three-unit (vol_sol/vol_usd/sol_usd) invariant + unit-invariant feature parity backbone, CI-wired (§6.2 D1, §7.1) | high | US-17, US-18 | 3 | ready | not-started | not-started |
+| US-27 | P4 — offline gate: deterministic `ReplaySource` snapshot replay + raw-immutable re-derivability + #380/at-most-once/unit-parity regression suite (§16, §6.4) | high | US-23, US-24, US-25, US-26 | 3 | ready | not-started | not-started |
+
+> **Scope:** sprint-6 commits **5 stories / 17 ACs** — the full P4 score-time snapshot core (US-23…US-25) plus
+> the D1 units-lock (US-26) and the P4 offline gate (US-27). Source of truth: [`sprint6.json`](sprint6.json). On
+> P4 exit, the pipeline can take one on-demand snapshot per token at score time and the three-unit parity backbone
+> is locked, and the project advances to **P5 (lake + extraction contract + vendored math + Feature Builder +
+> T0/G1/G2 golden parity, §6.4 / §7.2)**.
+
+**Build order:** **US-23 first** — the persistence target everything writes to. Then **US-24** (fetcher) →
+**US-25** (orchestration) are sequential. **US-26** (units lock) is independent of the snapshot chain and may run
+in parallel. **US-27** (offline gate) needs US-23/24/25/26. The offline P4 gate (US-27) does **not** depend on any
+live activation, so the firehose budget stays banked.
+
+**GitHub Issues:** created at sprint-6 kickoff (2026-06-16), one per story, mirroring the prior convention —
+[US-23 #103](https://github.com/AsimQuick/solanaTrilly/issues/103) ·
+[US-24 #104](https://github.com/AsimQuick/solanaTrilly/issues/104) ·
+[US-25 #105](https://github.com/AsimQuick/solanaTrilly/issues/105) ·
+[US-26 #106](https://github.com/AsimQuick/solanaTrilly/issues/106) ·
+[US-27 #107](https://github.com/AsimQuick/solanaTrilly/issues/107).
+Source of truth remains [`sprint6.json`](sprint6.json).
+
+---
+
+## Sprint-5 — Open P3 (the Tape Recorder) + prove detection live (D4) — CLOSED (review complete)
+- **Phase:** review (closed)
 - **Sprint plan (source of truth):** [`sprint5.json`](sprint5.json)
 - **PRD:** [`PRD.md`](PRD.md) — delivers **P3 (tape recorder, §6.2)**, "the heart" of the pipeline
+- **Review outcome:** **P3 delivered and live on the VPS.** US-17…US-21 fully Tester-**PASS** (17/17 ACs); **US-22 CONDITIONAL_PASS** (functionally DoD-complete; held at review on 2 process items — this retrospective, now written, and a clean re-deploy). Detection→recorder proven **live** end-to-end (8 real PumpSwap swaps on the VPS `listener`); first 2 firehose activations spent + banked. See the Sprint-5 Review below + [`retrospective.md`](retrospective.md) (action items E1–E5). Project advances to **P4 (score-time snapshot + units locked, §6.3 / D1)**.
 - **Previous sprint:** [`sprint4.json`](sprint4.json) — **closed** (review complete; **P0 EXITED**, P2 detection delivered; project advanced to P3 — see Sprint-4 Review below + [`retrospective.md`](retrospective.md) action items D1–D5)
 - **Project state:** owned by Project Lead — `../project-state.json`
 - **Why this sprint:** P0/P1/P2 are closed — the VPS staging stack is live on 8002, the config core is the single source of truth, and P2 detection lands graduated `tokens` rows carrying `graduated_block_time` as the integer rel-anchor the recorder needs. Retrospective **D1** directs P3 (the PumpSwap swap-tape recorder — capture every swap from t0, Birdeye tape as the single source of truth for all signal) as the **primary deliverable**, and **D4** carries the live wiring (drive the `listener` with a concrete Birdeye source + bank the first firehose fixture). Process carries: **D2** (promote `phase`/`dev_status` *before* sprint-end deploys so the US-13 guard isn't tripped by our own staleness), **D3** (normalize story-level `dev_status` to `done` at closeout instead of exempting it), **D5** (standing rule — run the on-box check our root SSH allows before declaring a blocker "human/operator required").
@@ -35,12 +92,12 @@ capture as the golden-token fixture US-21 runs against offline forever (US-22).
 ## Stories (sprint-5 — committed scope)
 | ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
 |----|-------|----------|------|-----|--------|-----|--------|
-| US-17 | P3 — `swaps` table + the one `NormalizedSwap` schema: tape persistence target (§8, §7.1) | high | US-14, US-5 | 4 | ready | not-started | not-started |
-| US-18 | P3 — tape recorder core behind the `DataSource` seam: emission, stable ordering, owner=signer, drop-failed, zero-guard (§6.2) | high | US-17, US-2, US-15 | 4 | ready | not-started | not-started |
-| US-19 | P3 — append-only `jsonl.gz` lake + queryable `swaps` writer + truncated-tail-tolerant reader (§6.2, §6.4) | high | US-18 | 3 | ready | not-started | not-started |
-| US-20 | P3 — recorder resilience: `seek_by_time` gap reconcile (one code path) + idle-kill TTL re-attach, config-driven (§6.2 D4) | high | US-18, US-11 | 3 | ready | not-started | not-started |
-| US-21 | P3 — the offline gate: deterministic replay + live↔backfill byte-parity on golden tokens + regression suite (§16) | high | US-18, US-19, US-20 | 3 | ready | not-started | not-started |
-| US-22 | P3/D4 — wire a live Birdeye `SUBSCRIBE_TXS` source into the `listener` + spend & bank the first firehose activation (§6.2, §15.7) | high | US-16, US-18, US-21 | 3 | ready | not-started | not-started |
+| US-17 | P3 — `swaps` table + the one `NormalizedSwap` schema: tape persistence target (§8, §7.1) | high | US-14, US-5 | 4 | done | done | **PASS** |
+| US-18 | P3 — tape recorder core behind the `DataSource` seam: emission, stable ordering, owner=signer, drop-failed, zero-guard (§6.2) | high | US-17, US-2, US-15 | 4 | done | done | **PASS** |
+| US-19 | P3 — append-only `jsonl.gz` lake + queryable `swaps` writer + truncated-tail-tolerant reader (§6.2, §6.4) | high | US-18 | 3 | done | done | **PASS** |
+| US-20 | P3 — recorder resilience: `seek_by_time` gap reconcile (one code path) + idle-kill TTL re-attach, config-driven (§6.2 D4) | high | US-18, US-11 | 3 | done | done | **PASS** |
+| US-21 | P3 — the offline gate: deterministic replay + live↔backfill byte-parity on golden tokens + regression suite (§16) | high | US-18, US-19, US-20 | 3 | done | done | **PASS** |
+| US-22 | P3/D4 — wire a live Birdeye `SUBSCRIBE_TXS` source into the `listener` + spend & bank the first firehose activation (§6.2, §15.7) | high | US-16, US-18, US-21 | 3 | done | done | **CONDITIONAL_PASS** |
 
 > **Scope:** sprint-5 commits **6 stories / 20 ACs** — the full P3 tape-recorder core (US-17…US-21) plus the
 > D4 live-wiring + firehose-fixture story (US-22). Source of truth: [`sprint5.json`](sprint5.json). On P3 exit,
@@ -194,6 +251,24 @@ A story is Done only when ALL of the following hold:
 - Hard isolation from live solanaBilly preserved (every docker command scoped with `-p solanatrilly`; solanaBilly on port 8001 untouched)
 - **Status integrity enforced (retrospective B4):** no story/AC reads `status: done` while its `tester_status` is `failed`/`blocked`; stale `phase`/`dev_status` fields are normalized at review.
 - `retrospective.md` updated for sprint-3 — **named owner: Tester / scrum facilitator** (retrospective A3)
+
+## Sprint-5 Review — Summary (2026-06-16)
+**Phase:** review | **Committed scope:** US-17…US-22 (6 stories, 20 ACs) | **Goal:** **met — P3 (tape recorder) delivered; detection→recorder proven LIVE**
+**Full retrospective + action items (E1–E5):** [`retrospective.md`](retrospective.md)
+
+**Outcome:** **The full P3 tape recorder is built, merged CI-green, and live on the VPS.** US-17…US-21 are fully Tester-**PASS** (17/17 ACs); **US-22 is CONDITIONAL_PASS** — its 3 ACs are functionally DoD-complete and the live end-to-end proof is confirmed on the box, but the story was held at review on two **process** items: (A) the sprint-5 retrospective (DoD item — now written) and (B) a clean final deploy after a stale-`phase` slip tripped the US-13 guard. The recorder captures every PumpSwap swap from t0 into an immutable `jsonl.gz` lake + a queryable `swaps` mirror, with `rel` anchored to the DB `Token.graduated_block_time`. The project advances to **P4 (score-time snapshot + units locked, §6.3 / D1)**.
+
+**US-17/18/19/20/21 — the P3 core, behind the live/replay seam (Principle #7).** US-17 ships the `swaps` table + the one `NormalizedSwap` schema (constrained source/phase/side vocabularies; `rel` anchored to `graduated_block_time` on both sides). US-18 is the source-agnostic recorder core — one `NormalizedSwap` per **landed** swap, `owner`=signer, all three units (vol_sol/vol_usd/sol_usd), failed swaps dropped, **stable** `(block_time, slot, signature)` ordering (#403), and an explicit `DEGENERATE_SWAP_POLICY="skip"` zero-guard (#405) — with the US-2 static-analysis guard (no concrete-source import, no `time.time()`/`datetime.now()` on the core path) green throughout. US-19 adds the append-only daily-partitioned `jsonl.gz` lake (raw = immutable truth, §6.4.1), the `update_or_create`-idempotent `swaps` writer (no dup on `(mint, signature)`), and a truncated-tail-tolerant reader (the recovered-161k-rows scaffolding). US-20 is **parity by construction**: `GapReconciler` *is* the `TapeRecorder` backfill path (AST-guarded — no direct `from_raw_swap`), so a live-gap reconcile and a pure backfill are byte-identical, plus config-resolved idle-kill TTL re-attach reading `idle_kill_ttl_s` from `get_active_config()` (Principle #1). US-21 is the deterministic offline gate — `ReplaySource` replay yields exactly the expected swaps/`jsonl.gz` (run-twice byte-identical), live↔backfill byte-parity on golden tokens, and the #403/#405/truncated-tail regression suite wired into `ci.yml` via a compile-time `ImportError` trap so it cannot silently vanish.
+
+**US-22 — detection→recorder proven LIVE (D4), first firehose spends banked.** A concrete `BirdeyeSwapSource` (`SUBSCRIBE_TXS`) + `WallClock` are wired into `run_listener` **only** in the adapter layer (core path untouched, US-2 guard green). Two deliberate, time-boxed firehose activations were spent (**Birdeye 10→9→8**, Helius untouched): the first banked a 40-swap golden fixture (`E6ifp2…pump`, dt=2026-06-15); the second drove the end-to-end live proof — **8 real PumpSwap swaps for `H9L9…pump` flowed Birdeye → recorder → `swaps` rows + `jsonl.gz` on the VPS `listener`**, Tester-confirmed on the box via `psql … count(*) = 8` (scoped `-p solanatrilly`). AC-22.3 had to build the previously-missing live ingestion layer (`birdeye_swap_mapper`, mapped/bounded sources, a WS-handshake fix, a recorder None-reserve guard) — the offline gate's synthetic fixtures had masked that the live adapter didn't yet exist (carried as E3).
+
+**Process notes.** **D3 actioned** — story-level `dev_status` is normalized to `done` at closeout in `sprint5.json` (first time in five sprints the A5/B4/C4/D3 artifact is fixed at the source, not exempted via `--skip-complete`). **D2 recurred** — the final doc-only commit (`ddb203b`) deploy (run 27593136555) **failed** at the US-13 integrity step because `phase` still read `planning` while all stories were `done`; the prior deploy at `d8a9e18` (run 27592748809) was fully green, so the VPS runs the AC-22.3 code. `phase` corrected to `review` at this review; fix-at-source carried as **E1**. The recurring `I001`/`E501` lint slips (AC-17.1/17.2/19.3/22.2) are carried as **E2**. The auto-generated `sprint5.md` lags the normalized `.json` state (`.json` is authoritative).
+
+**Defects:** lint-only (`I001`/`E501`), each caught by CI and fixed in ≤2 iterations; none reached pytest or production. Coverage ≥80% enforced throughout.
+
+**Carry into sprint-6 (priority order):** **E1** promote `phase`/`dev_status` *before* the sprint-end deploy (D2, now twice guard-caught) · **E2** `ruff check --fix` inside the container as a pre-push checklist item · **E3** exercise the live adapter against a banked real capture *early* (synthetic parity ≠ a working live adapter; it cost a second firehose spend) · **E4** open **P4 (score-time snapshot + units locked, §6.3 / D1)** · **E5** trigger + confirm a clean final deploy at true HEAD and flip US-22 → PASS. See `retrospective.md` E1–E5.
+
+**Metrics:** 6 stories committed · **5 fully Tester-PASS** (US-17…US-21) · **1 CONDITIONAL_PASS** (US-22 — functionally DoD-complete, held on 2 process items) · 20/20 ACs implemented + merged + CI-green · PRs #83–#102 + the AC-22.3 series, CI `test` green at merge (AC-22.3 red at `2f906c5`/`c24a002`, green at `d8a9e18`) · deploy `d8a9e18` **GREEN** (run 27592748809; 200 on 8002, listener Up, solanaBilly untouched on 8001) — final doc-only `ddb203b` deploy failed on stale `phase` (D2 slip, corrected) · **2 firehose activations spent** (Birdeye 10→9→8; Helius 10 banked), both logged with durable fixtures · coverage ≥80%. Token/cost spend: see `../project-state.json` (Project Lead).
 
 ## Sprint-4 Review — Summary (2026-06-15)
 **Phase:** review | **Committed scope:** US-12 + US-13 + US-14/US-15/US-16 (5 stories, 18 ACs) | **Goal:** **fully met — P0 EXITED, P2 delivered**
@@ -370,7 +445,7 @@ topology-only stories, and give `retrospective.md` a named owner each sprint. Se
 - **PR prefixes (PRD §1):** `detection:` / `tape:` / `features:` / `scoring:` / `trading:` / `dashboard:` / `ops:`
 
 ## Ownership boundaries
-- **Product Owner:** owns the active sprint plan (`sprint4.json`), this board, user stories, change control. Does NOT write code.
+- **Product Owner:** owns the active sprint plan (`sprint5.json`), this board, user stories, change control. Does NOT write code.
 - **Dev Team:** implements ACs in Docker on `feature/US-X-AC-Y` branches; updates only `dev_status`/`dev_notes`.
 - **Tester:** flips `checked`/`tester_status`, enforces DoD, interprets CI, owns `retrospective.md` each sprint. Does NOT execute tests or edit source.
 - **Project Lead:** external script; sole owner of `project-state.json`.
@@ -378,10 +453,10 @@ topology-only stories, and give `retrospective.md` a named owner each sprint. Se
 ## Open items / human dependencies
 See [`po-requests.md`](po-requests.md) — **all four sprint-1/P0 operator blockers remain RESOLVED (2026-06-14):**
 the GitHub remote (`AsimQuick/solanaTrilly`), the default branch, and the CD secrets (`VPS_SSH_KEY` / `VPS_HOST` /
-`VPS_USER`; GHCR via the built-in `GITHUB_TOKEN`) are all provisioned. **No open human dependencies for sprint-5** —
-P3 (the tape recorder) is agent-buildable end-to-end, and US-22/D4's single Birdeye `SUBSCRIBE_TXS` firehose
-activation is an agent task (keys in `.env`, logged in `ops/firehose_activation_log.md` per §15.7), not an operator
-blocker.
+`VPS_USER`; GHCR via the built-in `GITHUB_TOKEN`) are all provisioned. **No open human dependencies for sprint-6** —
+P4 (the score-time snapshot + units lock) is agent-buildable end-to-end and its offline gate is synthetic, so it
+needs **no** firehose activation; the score-time read is a single on-demand Birdeye **REST** snapshot (not a
+firehose WS activation), an agent task within the Birdeye professional allowance — not an operator blocker.
 The sprint-3 "operator firewall" suspicion was **falsified** by US-12's on-box diagnosis (C1): port 8002 was always
 reachable; the deploy failure was a code-side smoke-test timing race that agents fixed (no operator action). The
 three operator-only Cutover levers (trading-wallet secret, start firehose, enable real-capital trading) remain out
