@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_clock
-# sprint: sprint-2
-# story: US-2 AC-2.2
-# status: implemented
+# sprint: sprint-2, sprint-6
+# story: US-2 AC-2.2, US-24 AC-24.4
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-16
 # dependencies: core.clock, core.replay_source, datetime, pathlib, ast, asyncio
 # ---
 """AC-2.2 — Injectable Clock abstraction tests.
@@ -165,6 +165,14 @@ def test_stamp_events_uses_injected_clock() -> None:
 _ALLOWED_FILE = CORE_ROOT / "clock.py"
 _ALLOWED_FUNCTION = "now"  # method name inside WallClock
 
+# Additional allowlist for time.time() in infrastructure modules.
+# The Redis token-bucket rate limiter (core/rate_limiter.py) legitimately needs
+# wall-clock time to compute elapsed seconds for token refill — this is NOT
+# pipeline domain logic and is NOT subject to the injected-clock seam (AC-24.4).
+_TIME_TIME_ALLOWED: dict[Path, set[str]] = {
+    CORE_ROOT / "rate_limiter.py": {"acquire"},
+}
+
 
 def _core_source_files() -> list[Path]:
     """All .py files under core/ that are NOT under core/tests/."""
@@ -238,6 +246,10 @@ def _forbidden_calls_in_file(py_file: Path) -> list[str]:
             and node.func.value.id == "time"
         ):
             fn_name = _enclosing_function(node, tree)
+            # Allow time.time() in explicitly allowlisted infrastructure modules.
+            allowed_fns = _TIME_TIME_ALLOWED.get(py_file.resolve(), set())
+            if fn_name in allowed_fns:
+                continue
             found.append(
                 f"{rel}:{node.lineno}: forbidden 'time.time()' call "
                 f"(in function '{fn_name}')"

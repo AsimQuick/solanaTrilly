@@ -1,11 +1,11 @@
 # ---
 # module: core.snapshot_fetcher
 # sprint: sprint-6
-# story: US-24 AC-24.1, US-24 AC-24.2, US-24 AC-24.3
+# story: US-24 AC-24.1, US-24 AC-24.2, US-24 AC-24.3, US-24 AC-24.4
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-16
-# dependencies: core.clock, core.snapshot_source, core.models, datetime
+# dependencies: core.clock, core.snapshot_source, core.models, core.rate_limiter, datetime
 # ---
 """SnapshotFetcher — at-most-one on-demand score-time snapshot per token.
 
@@ -40,13 +40,19 @@ from core.snapshot_source import SnapshotDataSource
 class SnapshotFetcher:
     """At-most-one on-demand snapshot fetcher (§6.3, Principle #7).
 
-    Accepts a SnapshotDataSource (the abstract seam) and a Clock (the time seam).
+    Accepts a SnapshotDataSource (the abstract seam), a Clock (the time seam),
+    and an optional RateLimiter (AC-24.4).  The limiter gates the DataSource
+    read so that on-demand REST calls cannot burst beyond the token-bucket
+    capacity.  Pass limiter=None (the default) to disable rate limiting — all
+    existing callers are backward-compatible.
+
     Guarantees that get_snapshot() is called at most once per mint address.
     """
 
-    def __init__(self, source: SnapshotDataSource, clock: Clock) -> None:
+    def __init__(self, source: SnapshotDataSource, clock: Clock, limiter=None) -> None:
         self._source = source
         self._clock = clock
+        self._limiter = limiter
         self._fetched: set[str] = set()
 
     def fetch(self, mint: str, as_of: Optional[datetime] = None) -> Optional[dict]:
@@ -66,6 +72,9 @@ class SnapshotFetcher:
         now = self._clock.now()
         # #380 clamp: never forward a future window to the DataSource
         effective_as_of = min(as_of, now) if as_of is not None else now
+        # AC-24.4: gate the DataSource read through the Redis token-bucket limiter
+        if self._limiter is not None:
+            self._limiter.wait_for_token()
         raw = self._source.get_snapshot(mint, as_of=effective_as_of)
         self._fetched.add(mint)
         return raw
