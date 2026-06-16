@@ -23,6 +23,7 @@ websockets>=12.0,<13             # async WebSocket client for Birdeye SUBSCRIBE_
 
 # Background tasks
 celery>=5.4,<6                   # distributed task queue
+tzlocal>=5.2,<6                  # local-tz lookup imported by Celery at app load (config/__init__.py -> config.celery); pin explicitly so fresh image builds don't lose it as a vanishing transitive dep
 redis>=5.0,<6                    # Python redis client (Celery broker/backend)
 
 # Utilities

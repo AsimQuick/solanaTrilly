@@ -129,8 +129,13 @@ byte-parity + a Helius raw-truth cross-check, wired as a **hard merge gate**.
 `trilly_pregrad_v3_2` is **not a single model**: it is a **seed-bagged rank-average blend of 15 LightGBM
 boosters** (3 labels × 5 seeds — `tr30_t1800_25`, `oracle_25`, `log1p(cumbv_peak)`), scored by
 percentile-ranking each label's score across the candidate pool then averaging the three ranks
-(`MODEL_HANDOFF.md`). The `model.onnx` currently under `solanatrilly/models/` is a **different artifact**
-and will not serve v3.2.
+(`MODEL_HANDOFF.md`). **solanaTrilly currently has NO trading model committed.** The only thing under
+`solanatrilly/models/` is `model.onnx` — a BERT/XLM-Roberta **sentence-embedder that belongs to DevRAG**
+(its local semantic-search model; gitignored, referenced by `devrag-config.json`, used by NO project code).
+It is **not** a trading artifact — do not mistake it for one. The serving path (P7) must be **built** to
+load v3.2's 15-booster LightGBM blend; nothing in `models/` today serves it. (Naming footgun: DevRAG put
+its embedder in `models/`, the conventional name for trading artifacts — when P7 needs a model dir, keep
+the promoted artifact clearly separate from DevRAG's `model.onnx`.)
 
 > **DIRECTION TO PO — two reconciliations before promotion:**
 > 1. **Feature contract:** the FeatureSet built in US-29/US-30 must reconcile **column-for-column and in
