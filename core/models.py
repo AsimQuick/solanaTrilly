@@ -3,10 +3,10 @@
 # sprint: sprint-7
 # story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4,
 #        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2,
-#        US-23 AC-23.1, US-29 AC-29.1, US-29 AC-29.2
+#        US-23 AC-23.1, US-29 AC-29.1, US-29 AC-29.2, US-29 AC-29.3
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-16
+# last-updated: 2026-06-17
 # dependencies: django, core.encoders, simple_history, core.schemas, pydantic
 # ---
 # Domain models live here. Run `docker compose run --rm web python manage.py
