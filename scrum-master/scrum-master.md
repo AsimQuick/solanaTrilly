@@ -7,6 +7,15 @@ last-updated: 2026-06-16
 
 # solanaTrilly — Scrum Master Board
 
+> 🔮 **PO: before planning sprint-8, READ [`oracle-direction.md`](oracle-direction.md).** It sets the
+> road from P5 → the endgame (promote `trilly_pregrad_v3_2` + start the firehose). Key points it proves:
+> (1) the model we promote scores **pre-graduation** behavior, so we need a **Helius program-wide
+> birth-tape source** (per-mint Birdeye structurally cannot capture birth); (2) the dead-token
+> unsubscribe is already built (`core/tape/idle_kill.py`) but needs a **two-tier idle TTL** (a flat 5-min
+> kill violates the `idle_kill_ttl_s ≥ outcome.window_s` D4 invariant); (3) v3.2 is a **15-booster
+> rank-blend**, not the single ONNX — the serving path + `model_registry` write contract must support it.
+> All config-driven; the anti-drift parity gate (US-32) extends to the new source.
+
 ## Sprint-7 — Open P5 (Lake + Extraction Contract + Vendored Math + Feature Builder + T0/G1/G2 Golden Parity, §6.4 / §7.2 / §7.6) — PLANNING
 - **Phase:** planning
 - **Sprint plan (source of truth):** [`sprint7.json`](sprint7.json)
