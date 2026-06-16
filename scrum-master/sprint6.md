@@ -1,8 +1,8 @@
 # Sprint 6
 
 **Phase:** planning
-**Progress:** 0/5 stories | 2/17 ACs
-**Last Updated:** 2026-06-16T04:54:49+00:00
+**Progress:** 0/5 stories | 3/17 ACs
+**Last Updated:** 2026-06-16T05:06:10+00:00
 
 ## Sprint Goal
 Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retrospective E4). P0–P3 are closed: the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 detection lands graduated 'tokens', and P3's tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + the queryable 'swaps' mirror with live↔backfill byte-parity. Sprint-6 adds the ONLY non-tape live read in the whole pipeline (Principle #3): a single on-demand Birdeye REST snapshot per token at score time, for the things the tape cannot give — holder distribution, mint/freeze authority, the LP-burned flag, and a liquidity/TVL/depth read (a first-class field per §1.1, never an assumption) — and locks the three-unit (vol_sol/vol_usd/sol_usd) parity backbone (D1). Deliver, IN ORDER: (1) the persistence target — the 'snapshots' table (§8: mint, taken_at, elapsed_s, raw JSONB) with the AT-MOST-ONE-ROW-PER-TOKEN discipline (§6.3) + a typed score-time snapshot schema, raw written via JsonSafeEncoder so the H3/US-5 guard stays green (US-23); (2) the score-time snapshot FETCHER behind the DataSource seam + injected clock (US-2 / Principle #7) — AT MOST ONE on-demand Birdeye REST read per token (the scheduled per-token poll regime is RETIRED — that cost cut funds retiring solanaBilly), capturing holders/authority/LP-burned/liquidity raw, with the #380 future-window clamp (any to=/window clamped to the injected now — Birdeye 400s on future windows) and the Redis token-bucket limiter KEPT while the scheduler is DROPPED (US-24); (3) score-time ORCHESTRATION — on graduation, schedule EXACTLY ONE snapshot at scoring.score_at_elapsed_s read from get_active_config() (US-11 resolver; Principle #1 — never a constant/os.getenv), honoring capture_buffer_s so the tape tail has landed, idempotent (at-most-once even on retry/restart), behind the seam + virtual clock so it is replay-testable, with NO scheduled-polling task registered (H2 manifest) (US-25); (4) UNITS LOCKED (D1) — every recorded swap carries all three units with the relationship locked (vol_usd ≈ vol_sol·sol_usd; sol_usd = the per-block reference) and unit-invariant features (shares/ratios/counts) are byte-identical regardless of unit basis (the parity backbone), wired into the canonical ci.yml so it cannot silently vanish (US-26); (5) the P4 OFFLINE GATE (§16) — replay a captured-or-synthetic Birdeye score-time snapshot through ReplaySource + virtual clock → EXACTLY the expected raw 'snapshots' row, deterministically (run twice → byte-identical raw JSONB), raw=immutable-truth re-derivability, and the #380-clamp / at-most-once / unit-parity regression suite green in CI (US-27). The P4 gate is OFFLINE and synthetic — the score-time read is a single on-demand REST snapshot (NOT a firehose WS activation), so NO Birdeye/Helius firehose activation is required this sprint (8 Birdeye / 10 Helius remain banked); per E3, if a real Birdeye REST snapshot can be banked cheaply it is used as the gate fixture, but the gate never depends on a live read. Build order: US-23 FIRST (the persistence target everything writes to); then US-24 (fetcher) → US-25 (orchestration) are sequential; US-26 (units lock) is independent of the snapshot chain and may run in parallel; US-27 (offline gate) needs US-23/24/25/26. Process carries: E1 — promote the sprint 'phase' (and story dev_status) to their real values BEFORE any sprint-end deploy so the US-13 integrity guard is not tripped by our own staleness (this has now caught a stale-phase deploy two sprints running); E2 — run 'ruff check --fix' inside the web container as a pre-push checklist item to kill the recurring I001/E501 churn before CI; E3 — exercise the live adapter against a banked real capture EARLY rather than discovering a missing live layer at story-end; E5 — the first sprint-6 deploy at true HEAD (phase now 'review'-corrected on sprint-5) is a clean green run, closing the US-22 condition-B (clean-final-deploy) carry and confirming 200-on-8002 + listener Up + solanaBilly untouched on 8001.
@@ -41,7 +41,8 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
   - Dev: done
 - [x] **AC-23.2:** At-most-one-row-per-token is enforced (§6.3 'one row/token'): a uniqueness constraint on mint (or update_or_create idempotency on mint) means re-taking a snapshot for the same token does NOT create a duplicate row, and the raw JSONField uses encoder=JsonSafeEncoder so the H3/US-5 guard stays green (non-finite → null, Decimal → float, datetime → iso). Verified by a pytest test: writing a snapshot whose raw payload contains NaN/Inf/Decimal/datetime persists without error and reads back json-safe; re-writing the same mint yields exactly one row.
   - Dev: done
-- [ ] **AC-23.3:** A single typed score-time snapshot schema (a dataclass/TypedDict in core — the ONE shape the fetcher emits and the feature assembly will later eat) defines the captured fields {holder_distribution, mint_authority, freeze_authority, lp_burned (bool), liquidity, tvl, depth}, with the liquidity/TVL/depth read carried as a first-class field (§1.1, never assumed). Verified by a pytest test that builds the schema from a raw Birdeye snapshot payload and asserts every field maps, and that any JSON persisted alongside uses JsonSafeEncoder so the H3/US-5 guard stays green. New files carry metadata front matter.
+- [x] **AC-23.3:** A single typed score-time snapshot schema (a dataclass/TypedDict in core — the ONE shape the fetcher emits and the feature assembly will later eat) defines the captured fields {holder_distribution, mint_authority, freeze_authority, lp_burned (bool), liquidity, tvl, depth}, with the liquidity/TVL/depth read carried as a first-class field (§1.1, never assumed). Verified by a pytest test that builds the schema from a raw Birdeye snapshot payload and asserts every field maps, and that any JSON persisted alongside uses JsonSafeEncoder so the H3/US-5 guard stays green. New files carry metadata front matter.
+  - Dev: done
 - [ ] **AC-23.4:** Snapshot is registered in the Django admin (changelist + detail), read-only on the immutable raw fields. Verified by pytest tests that request the admin changelist and a change-detail page for Snapshot as an authenticated staff user, asserting HTTP 200 on both. New files carry metadata front matter.
 
 **Dependencies:** US-14, US-5
@@ -66,27 +67,31 @@ Open P4 — the score-time snapshot + units locked (PRD §6.3 / §8 / D1; retros
   **Test count:** 9 new tests  
   **Full suite:** 654 passed (was 645 before AC-23.1 fix + these 9)  
   **Coverage:** 88% ( …
+  AC-23.3 fixed: **Fix:** Removed `import math` from line 26 of `core/tests/test_snapshot_schema_ac233.py`. The module was never referenced in the test body, causing ruff to raise F401 (unused import) and fail the Lint CI step. One line deleted, committed, and pushed — no logic changed.
 
 **Tester Status:** approved
 **Tester Notes:**
-  AC-23.1 diagnosis: I have everything I need. The failure is fully diagnosed.
+  AC-23.3 diagnosis: Got it. The failure is clear.
   
   ---
   
-  **Diagnosis: CODE BUG — severity LOW, single test assertion stale**
+  **Diagnosis: CODE BUG — severity LOW**
   
-  **What failed:**
-  `core/tests/test_firehose_activation_ac222.py::test_ledger_budget_decremented_to_9_birdeye` (line 247)
+  **What failed:** Ruff lint check, not the test suite.
   
-  **Root cause:**
-  The test asserts the budget summary table in `ops/firehose_activation_log.md` shows `| Birdeye | 10 | 1 | 9 |` (used=1, remaining=9). That was correct after the AC-22.2 first activation. But commit `ddb203b` ("[US-22] AC-22.3 done: live firehose proof + ledger 9->8") added a second Birdeye activation row and updated the summary table to `| Birdeye | 10 | 2 | 8 |`. The test was never updated to match — so the feature/US-23 branch inherited the correct ledger but the stale test.
+  **Exact error:**
+  ```
+  F401 [*] `math` imported but unused
+    --> core/tests/test_snapshot_schema_ac233.py:26:8
+  ```
   
-  **Not a requirements issue.** AC-22.2's requirement (budget is decremented when a live activation is taken) is still met — the table is accurate. The test is simply asserting the wrong current row values.
+  **Root cause:** `import math` was added to `core/tests/test_snapshot_schema_ac233.py` at line 26 but is never referenced in the test body. Ruff catches it as F401 (unused import) and exits with code 1, failing the Lint CI step before tests even run.
   
-  **All other tests pass.** 644/645 green, coverage 88%. No migration failures, no model issues, no new US-23 test failures — `test_snapshot_model_ac231.py` passes cleanly.
+  **Not a requirements issue.** AC-23.3's requirements are sound and complete. The implementation (SnapshotSchema dataclass + 21 tests) appears correct. The only problem is this dead import surviving into the commit.
   
-  **Recommended fix (Dev Team):**
-  In `core/tests/test_firehose_activati …
+  **Severity:** LOW — one-line fix, no logic broken, all 21 tests are expected to pass once lint is cleared.
+  
+  **Recommended fix (Dev Team):** Remove `import math` from line 26 of `core/tests/test_snapshot_schema_ac233.py`. Alternatively, `ruff check --fix .` inside the web container will auto-remove it (per the E2 retrospective carry already in the sprint goal). Either way, re-push the branch to re-trigger CI.
 
 ---
 
