@@ -21,6 +21,12 @@ SECRET_KEY = env("SECRET_KEY", default="dev-insecure-secret-key-change-me")
 DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
 
+# External data-source API keys (US-22): the listener/recorder reads these via
+# Django settings (never os.environ directly — AC-11.1 guard).  Empty by default;
+# set BIRDEYE_API_KEY / HELIUS_API_KEY in the environment to enable live firehose.
+BIRDEYE_API_KEY = env("BIRDEYE_API_KEY", default="")
+HELIUS_API_KEY = env("HELIUS_API_KEY", default="")
+
 INSTALLED_APPS = [
     "daphne",
     "django.contrib.admin",
