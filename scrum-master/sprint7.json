@@ -233,7 +233,7 @@
     {
       "id": "US-33",
       "title": "Process hardening \u2014 mechanize phase-promotion (F2) + the ruff gate (F4) + close the carried sprint-6 DoD VPS clause (F3)",
-      "status": "ready",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-13"
@@ -242,8 +242,8 @@
         {
           "id": "33.1",
           "text": "F2 \u2014 phase-promotion is MECHANICAL, not a checklist. Add a pre-deploy step (in the deploy sequence) or a CI pre-check that promotes a stale sprint 'phase' to its real value (or blocks the deploy with a clear remedy message) so the US-13 integrity guard is never tripped by our own staleness. Verified by a test / dry-run: a sprintN.json reading phase:'planning' while all stories are 'done' is auto-promoted (or the deploy is deterministically blocked with the remedy printed) \u2014 reproducing and closing the exact failure mode that tripped the sprint-end deploy three consecutive sprints (D2\u2192E1\u2192F2; runs 27555736146/27555822147, 27593136555, 27627161427).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started",
           "tester_notes": ""
         },
@@ -265,12 +265,12 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-33.1 done: Pushed. Here is the implementation summary for the orchestrator:\n\n---\n\n**AC-33.1 Implementation Summary**\n\n**Files changed:**\n\n1. `tools/promote_sprint_phase.py` *(new)* \u2014 F2 mechanical phase-promotion tool. Three public functions:\n   - `compute_promoted_phase(data) -> str | None` \u2014 returns `'complete'` when phase is `'planning'`/`'in-progress'` and all stories are `'done'`, else `None`\n   - `promote_sprint_phase(data) -> (updated_dict, promoted_to | None)` \u2014 non-mutating wrapper; returns promoted copy and the new phase value\n   - `remedy_message(path, from_phase, promoted_to) -> str` \u2014 deterministic remedy string for `--check-only` mode\n   \n   CLI modes: default (auto-promote in place, exit 0), `--check-only` (block with remedy on stderr, exit 1), `--dry-run` (print without writing, exit 0).\n\n2. `core/tests/test_promote_sprint_phase_ac331.py` *(new)* \u2014 23 pytest tests covering:\n   - All `compute_promoted_phase` boundary cases (planning/in-progress all-done \u2192 complete; incomplete stories \u2192 None; empty stories \u2192 None; unknown/complete phase \u2192 None)\n   - `promote_sprint_phase` immutability, return values, field preservation\n   - `remedy_message` content (REMEDY keyword, phase names, \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements approved \u2014 all 3 ACs are testable. AC-33.1 wording tightened (added 'message' after 'remedy' for clarity \u2014 minor fix applied directly); the three CI run IDs are concrete regression anchors. AC-33.2: seeded-failure test is the standard pattern; the five-sprint recurrence history (AC-17.1/17.2/19.3/22.2, AC-23.3) grounds the urgency. AC-33.3: explicit three-condition Tester confirmation (200 on 8002, listener Up, solanaBilly untouched on 8001) with retry-with-backoff retention \u2014 fully verifiable from the actual deploy run. US-33 can begin in parallel with US-29 (both independent of US-28's vendored math)."
     }
   ],
-  "last_updated": "2026-06-16T22:46:23+00:00",
+  "last_updated": "2026-06-16T22:56:49+00:00",
   "deploy_summary": "",
   "tester_sprint_status": "approved",
   "tester_sprint_notes": "Sprint-7 requirements review COMPLETE \u2014 all 6 stories / 18 ACs approved for implementation. No requirements defects; 4 minor wording fixes applied directly to ACs (AC-28.1: added assertion detail to smoke test; AC-31.3: pinned rejection to 'task submission time with a clear error'; AC-32.2: made G2(b) carry clause explicit ('carries to the next sprint'); AC-33.1: added 'message' after 'remedy'). All ACs carry explicit pytest verification criteria with concrete assertions \u2014 no vague 'it works' clauses. The P5 integrity core (US-28\u219230\u219231\u219232) is properly sequenced: US-28 (vendored math) is the foundation; US-29 and US-33 are independent and may run in parallel with US-28; US-30 (extractor) needs US-28+US-29+US-19; US-31 (Feature Builder) needs US-30; US-32 (T0/G2 gate) needs US-28+US-30. The ImportError CI trap pattern (AC-21.3 / AC-28.3 / AC-30.3 / AC-32.3) is correctly carried through all gate stories. Firehose budget is sound: G1 + G2(a) need NO activation; G2(b) is the ONE budgeted Helius activation (Helius 10\u21929) with an explicit carry-to-next-sprint fallback that never blocks P5 exit. DEFERRED: F5 (live Birdeye REST SnapshotDataSource adapter) correctly deferred to sprint-8 near the scorer (P7). Ready for Dev Team kickoff."
