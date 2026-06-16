@@ -4,11 +4,13 @@
 # story: US-7 AC-7.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-17
 # dependencies: pathlib, re
 # ---
 """AC-7.1 — ops/firehose_activation_log.md exists and is seeded with the
-project-wide budget: 10 Birdeye + 10 Helius activations, 0 used (remaining 10/10).
+project-wide budget: 10 Birdeye + 10 Helius activations (remaining 10/10 at seed).
+Once activations are logged the ledger tracks spends; the durable invariant is that
+each source's budget arithmetic balances (Used + Remaining == Total).
 API keys are referenced via .env — never committed to the ledger (PRD §15.7).
 
 Tests:
@@ -24,8 +26,8 @@ Tests:
   test_ledger_helius_budget_is_ten
       Ledger records a total Helius budget of 10.
 
-  test_ledger_zero_activations_used
-      Ledger shows 0 activations used (both sources at full remaining).
+  test_ledger_budget_table_arithmetic_consistent
+      Each source's budget row balances: Used + Remaining == Total.
 
   test_ledger_references_env_for_api_keys
       Ledger references .env as the source of API keys.
@@ -100,18 +102,37 @@ def test_ledger_helius_budget_is_ten() -> None:
     )
 
 
-def test_ledger_zero_activations_used() -> None:
-    """Ledger must show 0 activations used — the project starts with a clean slate."""
+def test_ledger_budget_table_arithmetic_consistent() -> None:
+    """Ledger budget table is internally consistent: Used + Remaining == Total per source.
+
+    AC-7.1 originally seeded the ledger at 0 used (clean slate). Once legitimate,
+    ledgered firehose activations are logged (e.g. the US-32 AC-32.2 G2(b) Helius
+    spend, Helius 10 -> 9), the "0 used" seed value is no longer true by design —
+    the whole point of the ledger is to track spends as they happen (PRD §15.7).
+    The durable invariant that survives every activation is that each source row's
+    arithmetic balances: Used + Remaining == Total. A mis-decremented budget (the
+    failure the ledger exists to prevent) breaks this.
+    """
     text = _ledger_text()
-    # Match "| 0 |" in table context, "0 used", "used: 0", or "Used | 0"
-    pattern = re.compile(
-        r"(?:\|\s*0\s*\||\b0\s+used\b|used[:\s]+0|\bUsed\b[^|]*\|\s*0)",
-        re.IGNORECASE,
-    )
-    assert pattern.search(text), (
-        "ops/firehose_activation_log.md does not record 0 activations used. "
-        "AC-7.1: the ledger is seeded with 0 used."
-    )
+    checked = 0
+    for source in ("Birdeye", "Helius"):
+        row = next(
+            (ln for ln in text.splitlines() if ln.strip().startswith(f"| {source}")),
+            None,
+        )
+        assert row is not None, f"No {source} budget-table row found in the ledger."
+        # Cells: ['', source, total, used, remaining, '']
+        cells = [c.strip() for c in row.split("|")]
+        nums = [c for c in cells if c.lstrip("-").isdigit()]
+        assert len(nums) >= 3, f"{source} budget row missing Total/Used/Remaining: {row!r}"
+        total, used, remaining = int(nums[0]), int(nums[1]), int(nums[2])
+        assert used + remaining == total, (
+            f"{source} budget arithmetic broken: Used({used}) + Remaining({remaining}) "
+            f"!= Total({total}). Row: {row!r}"
+        )
+        assert 0 <= used <= total, f"{source} Used({used}) out of range [0, {total}]."
+        checked += 1
+    assert checked == 2, "Both Birdeye and Helius budget rows must be present."
 
 
 def test_ledger_birdeye_remaining_is_ten() -> None:
