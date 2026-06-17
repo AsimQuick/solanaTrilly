@@ -1,16 +1,17 @@
 # ---
 # module: core.tests.test_parity_gate_ac323
-# sprint: sprint-7
-# story: US-32 AC-32.3
-# status: implemented
+# sprint: sprint-8
+# story: US-32 AC-32.3, US-36 AC-36.1
+# status: extended
 # created-by: dev-team
 # last-updated: 2026-06-17
 # dependencies: core.tests.test_tape_microstructure_ac283,
 #               core.tests.test_g2a_live_backfill_parity_ac321,
 #               core.tests.test_g2b_raw_truth_ac322,
+#               core.tests.test_post_grad_overlap_parity_ac361,
 #               pathlib, yaml
 # ---
-"""AC-32.3 — Combined T0/G1/G2 parity gate wired into the single canonical ci.yml 'test' job.
+"""AC-32.3 / AC-36.1 — Combined T0/G1/G2 parity gate wired into the single canonical ci.yml 'test' job.
 
 Golden parity is a HARD MERGE GATE (§6.4.3 — 'the #1 gate').  This file is the
 combined wire for the full T0/G1/G2 parity suite:
@@ -25,6 +26,10 @@ combined wire for the full T0/G1/G2 parity suite:
   G2(b) — Helius raw-truth cross-check (US-32 AC-32.2):
            MAIN GATE: test_g2b_coverage_100pct
            MAIN GATE: test_g2b_side_parity_100pct
+
+  G2/helius — helius_live birth-tape post-graduation OVERLAP byte-parity (US-36 AC-36.1):
+              MAIN GATE: test_overlap_swap_level_byte_identity
+              MAIN GATE: test_overlap_feature_level_byte_identity
 
 Wiring mechanism (mirroring AC-21.3)
 -------------------------------------
@@ -71,6 +76,16 @@ from core.tests.test_g2b_raw_truth_ac322 import (
     test_g2b_side_parity_100pct as _g2b_side_test,
 )
 
+# G2/helius — helius_live birth-tape post-graduation OVERLAP byte-parity (AC-36.1)
+# Folding the new source into this gate (oracle §3 / anti-drift contract).
+# Deleting or renaming either function raises ImportError at collection time.
+from core.tests.test_post_grad_overlap_parity_ac361 import (
+    test_overlap_feature_level_byte_identity as _g2_helius_feature_test,
+)
+from core.tests.test_post_grad_overlap_parity_ac361 import (
+    test_overlap_swap_level_byte_identity as _g2_helius_swap_test,
+)
+
 # ---------------------------------------------------------------------------
 # ImportError trap — combined T0/G1/G2 parity gate cannot silently vanish
 #
@@ -100,6 +115,9 @@ _PINNED_GATE_FUNCTIONS: dict[str, object] = {
     "test_g2a_feature_level_byte_identity_e6ifp2": _g2a_feature_test,
     "test_g2b_coverage_100pct": _g2b_coverage_test,
     "test_g2b_side_parity_100pct": _g2b_side_test,
+    # AC-36.1: helius_live birth-tape post-graduation OVERLAP byte-parity
+    "test_overlap_swap_level_byte_identity": _g2_helius_swap_test,
+    "test_overlap_feature_level_byte_identity": _g2_helius_feature_test,
 }
 
 # ---------------------------------------------------------------------------
@@ -108,7 +126,7 @@ _PINNED_GATE_FUNCTIONS: dict[str, object] = {
 
 
 def test_combined_parity_gate_functions_are_callable() -> None:
-    """All five T0/G1/G2 gate functions resolve to callable objects.
+    """All T0/G1/G2 gate functions (including AC-36.1 helius overlap) resolve to callables.
 
     The module-level imports are the primary ImportError trap; this test adds a
     human-readable assertion layer in case an import resolves to a non-callable
