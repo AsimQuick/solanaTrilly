@@ -62,7 +62,6 @@ Tests in this module (diagnosis evidence and fix verification):
       test_deploy_yml_ci_job_references_canonical_ci_yml
 """
 
-import ast
 import json
 import re
 from pathlib import Path
