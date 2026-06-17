@@ -1,0 +1,18 @@
+// ---
+// file: .devcontainer/devcontainer.json
+// project: solanatrilly
+// purpose: AC-39.1 — auto-install git hooks when VS Code opens the dev container
+// story: US-39 AC-39.1
+// sprint: sprint-8
+// status: implemented
+// created-by: dev-team
+// last-updated: 2026-06-17
+// dependencies: docker-compose.yml, scripts/install-hooks.sh
+// ---
+{
+  "name": "solanatrilly",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "web",
+  "workspaceFolder": "/app",
+  "postCreateCommand": "bash scripts/install-hooks.sh"
+}
