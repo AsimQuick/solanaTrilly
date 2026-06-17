@@ -220,7 +220,7 @@
     {
       "id": "US-51",
       "title": "P6 \u2014 human annotation \u2192 labeled export (the killer feature): the annotations table (PRD \u00a78: mint, author, tags[], note, created_at) + a tag panel beside the chart + export to the labs as a labeled dataset (mirroring the \u00a76.5 Feature Builder export, off the celery container per #289) (PRD \u00a713.3)",
-      "status": "to-do",
+      "status": "in-progress",
       "priority": "medium",
       "dependencies": [
         "US-49"
@@ -229,8 +229,8 @@
         {
           "id": "51.1",
           "text": "The 'annotations' table (PRD \u00a78: mint, author, tags[], note, created_at) is created as a SEPARATE store keyed on mint that NEVER writes back into the raw lake (raw=immutable, \u00a76.4.1). A tag panel beside the chart records free-text + categorical tags ('classic rug shape', 'slow bleed', 'clean ignition', 'fakeout pop', 'organic'; the categorical set is config-driven, Principle #1). Verified by a pytest test that an annotation persists with all 5 fields keyed on mint, multiple annotations on one mint are retained, and the write path does not mutate the raw lake.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "pending"
         },
         {
@@ -249,7 +249,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-51.1 done: The implementation is complete and pushed to `feature/US-51-AC-51.1`.\n\n---\n\n## Implementation Summary\n\n**Files changed: 8 | Tests added: 11 | Full suite: 1614 passed, 0 failures**\n\n| File | What it does |\n|---|---|\n| `core/schemas.py` | Added `AnnotationConfig` with `categorical_tags: list[str]` \u2014 the **only** place the 5 literal tag names appear (Principle #1). Extended `DashboardConfig` with an `annotation: AnnotationConfig` field. |\n| `core/models.py` | Added `Annotation` Django model (`db_table=\"annotations\"`) with all 5 PRD \u00a78 fields: mint, author, tags (JSONField), note, created_at. **No FK to `RawEvent`** \u2014 structurally isolated from the raw lake (\u00a76.4.1). |\n| `core/migrations/0012_annotation.py` | Hand-written migration creating the `annotations` table. Depends on `0011_modelregistry_artifact_dir`. |\n| `core/dashboard/annotation_api.py` | New module: `save_annotation(mint, author, tags, note)` and `get_annotations(mint)`. Neither function imports or touches `RawEvent`. |\n| `core/views.py` | Added `annotation_list` (GET \u2192 200 JSON) and `annotation_create` (POST \u2192 201 JSON) views. |\n| `core/urls.py` | Registered `/api/annotations/<mint>/` and `/api/annotations/<mint>/create/` \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements approved. AC-51.1: all 5 schema fields are named (mint, author, tags[], note, created_at); the 'never writes back into raw lake' invariant (\u00a76.4.1) is tested directly; categorical tag set is config-driven (Principle #1); multiple-annotations-per-mint retention is explicitly required and testable. AC-51.2: export format mirrors the US-36/US-31 MANIFEST pattern already validated \u2014 dataset id, content hash, LC_ALL=C sort, SHA-256 of decompressed bytes \u2014 so the bar is known and replicable; the Celery-task structural assertion (not a web view, per #289) matches the pattern used in US-31/US-38; byte-identical run-twice requirement is concrete. AC-51.3: no-auto-start guard (US-11 AST guard) and idempotency are both independently verifiable; ImportError trap on named export function locks CI against silent deletion. All 3 ACs are testable and independently verifiable."
     }
@@ -268,5 +268,5 @@
     ]
   },
   "build_order": "US-46 (I1 clean US-43 redeploy) and US-47 (I4 AI-agent ruff gate) are independent process/deploy carries and may run FIRST / in parallel. The dashboard chain is SEQUENTIAL: US-48 (the React+Vite + DRF + Channels stack + the frontend dev container in both compose files + the ONE-tape-feed consumer) -> US-49 (the tape->candle API + the token-detail/research view = the P6 OFFLINE GATE 'operator sees real candles for a replayed token'). After US-49, US-50 (the cohort pattern-mining wall) and US-51 (human annotation -> labeled export) both depend ONLY on US-49 and may run in parallel. Every dashboard AC is independently verifiable OFFLINE/replay against the existing lake + ReplaySource + the US-43/US-44 banked artifacts \u2014 ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked). P6 is offline/replay-driven by construction.",
-  "last_updated": "2026-06-17T13:17:19+00:00"
+  "last_updated": "2026-06-17T13:28:52+00:00"
 }
