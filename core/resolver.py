@@ -1,10 +1,10 @@
 # ---
 # module: core.resolver
-# sprint: sprint-3
-# story: US-11 AC-11.1, US-11 AC-11.2
+# sprint: sprint-3, sprint-9
+# story: US-11 AC-11.1, US-11 AC-11.2, US-42 AC-42.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-17
 # dependencies: django.core.cache, django.db, core.models, core.schemas
 # ---
 """Single cached resolver for the active PipelineConfig (PRD §5.3).
@@ -21,7 +21,7 @@ at every point in time.
 from django.core.cache import cache
 from django.db import transaction
 
-from core.models import PipelineConfig
+from core.models import ModelRegistry, PipelineConfig
 from core.schemas import PipelineConfigSchema
 
 _CACHE_KEY = "active_pipeline_config_sections"
@@ -90,3 +90,34 @@ def activate_config(config_id: int) -> PipelineConfig:
     # (old) value rather than an empty one.
     invalidate_active_config_cache()
     return config
+
+
+# ---------------------------------------------------------------------------
+# Model registry resolver — mirrors the config-activation pattern (US-42 AC-42.1)
+# ---------------------------------------------------------------------------
+
+
+def get_active_model() -> ModelRegistry | None:
+    """Return the is_active ModelRegistry row, or None if none is active."""
+    try:
+        return ModelRegistry.objects.get(is_active=True)
+    except ModelRegistry.DoesNotExist:
+        return None
+
+
+def activate_model(model_id: int) -> ModelRegistry:
+    """Atomically flip is_active to the given model, deactivating all others.
+
+    Guarantees at most one is_active=True row at every point in time (AC-42.1):
+      1. Within a single transaction, clear all is_active flags then set the
+         target row's flag — both via .update() to skip history middleware
+         complexity inside the transaction.
+      2. Verify the target row exists after the update.
+
+    Raises:
+        ModelRegistry.DoesNotExist: if model_id does not refer to an existing row.
+    """
+    with transaction.atomic():
+        ModelRegistry.objects.filter(is_active=True).update(is_active=False)
+        ModelRegistry.objects.filter(pk=model_id).update(is_active=True)
+        return ModelRegistry.objects.get(pk=model_id)

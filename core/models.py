@@ -1,12 +1,13 @@
 # ---
 # module: core.models
-# sprint: sprint-7
+# sprint: sprint-7, sprint-9
 # story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4,
 #        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2,
-#        US-23 AC-23.1, US-29 AC-29.1, US-29 AC-29.2, US-29 AC-29.3
+#        US-23 AC-23.1, US-29 AC-29.1, US-29 AC-29.2, US-29 AC-29.3,
+#        US-42 AC-42.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-16
+# last-updated: 2026-06-17
 # dependencies: django, core.encoders, simple_history, core.schemas, pydantic
 # ---
 # Domain models live here. Run `docker compose run --rm web python manage.py
@@ -296,3 +297,41 @@ class FeatureSet(models.Model):
     class Meta:
         app_label = "core"
         db_table = "feature_sets"
+
+
+class ModelRegistry(models.Model):
+    """Promoted model artifact registry (PRD §7.4, US-42 AC-42.1).
+
+    Records every promoted model artifact in an audited, immutable-row,
+    at-most-one-active discipline that mirrors PipelineConfig/FeatureSet.
+
+    MODEL-AGNOSTIC: the registry stores whatever model is promoted; v3.2 is the
+    first, never hardcoded here.  For a BLEND artifact the required fields are:
+
+    kind                    — artifact type, e.g. 'lightgbm_regression_blend'.
+    feature_list            — bound ordered list of feature names (binding order
+                              per PRD §7.4: model.feature_list == booster.feature_name()).
+    labels_seeds_manifest   — 3 labels × 5 seeds structure describing the booster set.
+    blend_transform_descriptor — rank-average blend recipe parameters.
+    artifact_content_hashes — SHA-256 content hash(es) of the artifact files.
+    model_version           — version string of the promoted model artifact.
+    feature_set_version     — version of the FeatureSet contract it was trained against.
+    is_active               — exactly one row may be True at a time (activate_model()).
+    """
+
+    kind = models.CharField(max_length=128)
+    feature_list = models.JSONField(default=list, encoder=JsonSafeEncoder)
+    labels_seeds_manifest = models.JSONField(default=dict, encoder=JsonSafeEncoder)
+    blend_transform_descriptor = models.JSONField(default=dict, encoder=JsonSafeEncoder)
+    artifact_content_hashes = models.JSONField(default=dict, encoder=JsonSafeEncoder)
+    model_version = models.CharField(max_length=128)
+    feature_set_version = models.CharField(max_length=128)
+    is_active = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, default="")
+
+    history = HistoricalRecords()
+
+    class Meta:
+        app_label = "core"
+        db_table = "model_registry"
