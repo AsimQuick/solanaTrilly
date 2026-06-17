@@ -8,6 +8,7 @@
     "core.tasks.build_features",
     "core.tasks.ship_lake_partitions",
     "core.tasks.sweep_vps_lake_partitions",
-    "core.tasks.score_token"
+    "core.tasks.score_token",
+    "core.tasks.export_annotations"
   ]
 }
