@@ -135,7 +135,7 @@ def _make_notification(
     instruction = "Buy" if is_buy else "Sell"
 
     log_messages: list[str] = [
-        f"Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
+        "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
     ]
     if include_trade_log:
         log_messages.append(f"Program log: Instruction: {instruction}")
