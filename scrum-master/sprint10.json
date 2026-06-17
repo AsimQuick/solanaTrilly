@@ -73,7 +73,7 @@
     {
       "id": "US-47",
       "title": "I4 \u2014 close the AI dev-agent / ruff hook gap: a structural mechanism that catches I001/E501/F401 before the CI Lint step on the AI-agent commit path, making the gate as unforgeable for agents as G3 made it for humans (retrospective I4/H2)",
-      "status": "to-do",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-39"
@@ -82,8 +82,8 @@
         {
           "id": "47.1",
           "text": "Add a STRUCTURAL mechanism that runs `ruff check` on the AI dev-agent commit path WITHOUT a manual step \u2014 e.g. a container-entrypoint ruff-check step in the dev-agent container, or a tighter pre-commit guard the dev-agent loop invokes \u2014 so a violation is caught BEFORE the CI Lint step (the 4 sprint-9 lint defects \u2014 F401 AC-40.1, I001 AC-41.1, F401 AC-42.3, I001 AC-44.2 \u2014 occurred in AI-agent commits that bypass the G3 local pre-commit hook). The mechanism fires automatically with no manual invocation. Verified by a pytest test asserting the mechanism is wired (structural \u2014 present in the entrypoint/dev-agent-loop/config it lives in) and fires without a manual 'make'/install step, mirroring the AC-39.1/AC-45.1 'no manual step' proof for the human hook.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "pending"
         },
         {
@@ -102,7 +102,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-47.1 done: Pushed to `feature/US-47-AC-47.1` (commit `21df97c`).\n\n## Implementation summary \u2014 US-47 AC-47.1\n\n**What it does:** Closes the AI dev-agent / ruff gap with a structural mechanism that fires automatically (no manual step) on the AI-agent commit path, catching I001/E501/F401 *before* the CI Lint step. The previous agent had built the gate but wired it into the **gitignored** `.claude/settings.local.json`, so the verifying tests passed locally but would have failed in CI (the file is never checked out) \u2014 and the gate script had a blocking-semantics bug. Both are now fixed.\n\n**Root-cause of the gap (why agents bypassed G3):** AI agents run `git commit` on the **host**, where `install-hooks.sh` (the devcontainer/CI auto-installer from AC-39.1) never fires, so `.git/hooks/pre-commit` is absent. The correct mechanism for that path is a Claude Code `PreToolUse` Bash hook that intercepts the commit before it runs.\n\n**Files changed (3, all new):**\n- `.claude/settings.json` \u2014 committed (not gitignored, verified via `git check-ignore`) Claude Code `PreToolUse` Bash hook invoking `bash scripts/dev-agent-ruff-gate.sh`. Strict JSON (parsed by `json.loads` and Claude Code) \u2014 the standard exception \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements approved. AC-47.1 requires a structural pytest assertion proving the mechanism exists and fires without a manual step \u2014 mirrors the AC-39.1/AC-45.1 'no manual step' proof pattern already validated in prior sprints, so the bar is known and replicable. AC-47.2 requires behavioral evidence across all three recurring lint classes (I001, E501, F401): seeded violation \u2192 non-zero exit; clean file \u2192 zero exit. This is the exact 'prove the mechanism fires' rigor the project demanded of G3/G4. AC-47.3's silent-vanish guard (structural/AST test + ImportError-trap-style pinning) mirrors the H1 pattern established across the canonical test job \u2014 no new verification concept required. All 3 ACs are testable and independently verifiable."
     },
@@ -268,5 +268,5 @@
     ]
   },
   "build_order": "US-46 (I1 clean US-43 redeploy) and US-47 (I4 AI-agent ruff gate) are independent process/deploy carries and may run FIRST / in parallel. The dashboard chain is SEQUENTIAL: US-48 (the React+Vite + DRF + Channels stack + the frontend dev container in both compose files + the ONE-tape-feed consumer) -> US-49 (the tape->candle API + the token-detail/research view = the P6 OFFLINE GATE 'operator sees real candles for a replayed token'). After US-49, US-50 (the cohort pattern-mining wall) and US-51 (human annotation -> labeled export) both depend ONLY on US-49 and may run in parallel. Every dashboard AC is independently verifiable OFFLINE/replay against the existing lake + ReplaySource + the US-43/US-44 banked artifacts \u2014 ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked). P6 is offline/replay-driven by construction.",
-  "last_updated": "2026-06-17T10:07:21+00:00"
+  "last_updated": "2026-06-17T10:30:47+00:00"
 }
