@@ -1,7 +1,7 @@
 # ---
 # module: core.schemas
 # sprint: sprint-3, sprint-8, sprint-10
-# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2; US-48 AC-48.2
+# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2; US-48 AC-48.2; US-49 AC-49.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -95,17 +95,22 @@ class OutcomeConfig(BaseModel):
 
 
 class DashboardConfig(BaseModel):
-    """Dashboard realtime WebSocket section (PRD §13.4, AC-48.2).
+    """Dashboard realtime WebSocket section (PRD §13.4, AC-48.2, AC-49.1).
 
     All names and cadence are Principle #1 config-driven — no literals anywhere
     in the consumer code.  The consumer reads this section via get_active_config()
     and NEVER hard-codes channel prefixes, topic names, or candle intervals.
+
+    candle_intervals_s (AC-49.1): the four supported tape→candle API intervals
+    (1s/5s/15s/1m) served by the candle endpoint.  Config-driven so the operator
+    can tune the set without touching code (Principle #1).
     """
 
     ws_channel_prefix: str = "tape"
     candle_topic: str = "candle_delta"
     position_topic: str = "position_delta"
     candle_interval_s: int = Field(default=15, gt=0)
+    candle_intervals_s: list[int] = Field(default_factory=lambda: [1, 5, 15, 60])
 
 
 class TradingConfig(BaseModel):
