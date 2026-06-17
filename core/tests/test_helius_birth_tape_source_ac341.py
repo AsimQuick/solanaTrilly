@@ -54,12 +54,9 @@ Tests:
 import ast
 import asyncio
 import base64
-import hashlib
 import struct
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 from core.datasource import DataSource
 from core.normalized_swap import VALID_SOURCES
@@ -370,11 +367,12 @@ def test_decode_determinism() -> None:
 
 def test_replay_through_source_emits_normalized_swaps() -> None:
     """ReplaySource + MappedSwapSource + TapeRecorder emits 3 NormalizedSwaps with correct provenance."""
+    from datetime import datetime, timezone
+
     from core.clock import VirtualClock
     from core.replay_source import ReplaySource
     from core.tape.mapped_source import MappedSwapSource
     from core.tape.recorder import TapeRecorder
-    from datetime import datetime, timezone
 
     async def _run():
         source = MappedSwapSource(
