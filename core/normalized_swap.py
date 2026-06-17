@@ -1,7 +1,7 @@
 # ---
 # module: core.normalized_swap
 # sprint: sprint-8
-# story: US-34 AC-34.1
+# story: US-34 AC-34.1, US-34 AC-34.2
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -16,6 +16,15 @@ lake writer, DB writer) read NormalizedSwap instances.
 
 rel is ALWAYS anchored to Token.graduated_block_time from the DB row.
 It is NEVER derived from the first swap's block_time.
+
+AC-34.2 (mint field):
+    NormalizedSwap carries the base-token ``mint`` so a lake row written via
+    LakeWriter is self-describing: the US-30 FeatureExtractor filters lake rows
+    by ``row["mint"]`` (extract_from_lake) exactly as it filters the DB mirror by
+    the indexed Swap.mint column.  This closes the gap where a LakeWriter-written
+    lake could not be read per-mint by the extractor (the 'swaps' mirror could,
+    because Swap.mint is a column).  The field is ADDITIVE with a "" default so
+    every existing caller and every banked fixture is unaffected.
 """
 import json
 from dataclasses import dataclass
@@ -61,6 +70,11 @@ class NormalizedSwap:
     source: str         # "birdeye_live" | "birdeye_backfill" | "helius_verify" | "helius_live"
     phase: str          # "pre" | "post"
 
+    # Base-token mint (AC-34.2).  Additive — defaults to "" so existing callers
+    # and banked fixtures (which constructed NormalizedSwap without mint) are
+    # unaffected.  Populated by from_raw_swap from raw["mint"] when present.
+    mint: str = ""
+
     def __post_init__(self) -> None:
         """Enforce constrained vocabularies immediately on construction."""
         if self.source not in VALID_SOURCES:
@@ -93,6 +107,11 @@ class NormalizedSwap:
         rel is anchored to token.graduated_block_time — NEVER to the first swap's
         block_time.  The token argument must be a core.models.Token instance (or any
         object with a graduated_block_time integer attribute).
+
+        AC-34.2: ``mint`` is read from ``raw.get("mint", "")`` (default "") so the
+        resulting lake row is self-describing for the per-mint FeatureExtractor
+        filter.  Both the Birdeye internal dict and the Helius birth-tape internal
+        dict already carry "mint", so both paths populate it identically.
         """
         block_time: int = int(raw["block_time"])
         rel: float = float(block_time - token.graduated_block_time)
@@ -112,6 +131,7 @@ class NormalizedSwap:
             quote_mint=str(raw["quote_mint"]),
             source=source,
             phase=phase,
+            mint=str(raw.get("mint", "")),
         )
 
     def to_dict(self) -> dict:
@@ -132,6 +152,7 @@ class NormalizedSwap:
             "quote_mint": self.quote_mint,
             "source": self.source,
             "phase": self.phase,
+            "mint": self.mint,
         }
 
     def to_json(self) -> str:
