@@ -111,7 +111,7 @@
     {
       "id": "US-42",
       "title": "P7-2a \u2014 model_registry + promote_model.py BLEND write contract: accept a lightgbm_regression BLEND (15 boosters + rank-blend transform), feature-order gate enforced (oracle \u00a74.2, PRD \u00a77.4)",
-      "status": "not-started",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-41",
@@ -121,8 +121,8 @@
         {
           "id": "42.1",
           "text": "A model_registry persistence target (table/schema + admin/audit per the P1 conventions) records a promoted model artifact: kind (e.g. lightgbm_regression_blend), the bound ordered feature_list, the labels/seeds manifest (3 labels x 5 seeds), the blend-transform descriptor (rank-average recipe params), the artifact content hash(es), and the model/feature-set version. solanaTrilly stays MODEL-AGNOSTIC \u2014 the registry stores whatever model is promoted; v3.2 is the first, never a hardcode. Verified by a pytest test that a BLEND artifact is recorded with all required fields and an at-most-one-active-model discipline (mirroring the config-activation pattern).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "not-started"
         },
         {
@@ -141,7 +141,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-42.1 done: Done. Here is the implementation summary:\n\n---\n\n## Implementation Summary \u2014 US-42 AC-42.1\n\n**Files changed (5):**\n\n- **`core/models.py`** \u2014 added `ModelRegistry` Django model (`db_table = \"model_registry\"`) with all 9 required fields: `kind`, `feature_list`, `labels_seeds_manifest`, `blend_transform_descriptor`, `artifact_content_hashes`, `model_version`, `feature_set_version`, `is_active` (default `False`), `created_at` (auto). All JSONFields use `JsonSafeEncoder`. `HistoricalRecords` wired for audit trail per P1 conventions. MODEL-AGNOSTIC \u2014 no v3.2 hardcodes.\n\n- **`core/migrations/0010_modelregistry.py`** \u2014 migration creating both `model_registry` and `historicalmodelregistry` tables.\n\n- **`core/admin.py`** \u2014 `ModelRegistryAdmin` with `SimpleHistoryAdmin` for history/diff; all fields readonly; `has_add_permission` / `has_delete_permission` return False (observational only).\n\n- **`core/resolver.py`** \u2014 `activate_model(model_id)` (atomic at-most-one-active flip, mirrors `activate_config()`) and `get_active_model()`, the sanctioned read/write paths for the model registry.\n\n- **`core/tests/test_model_registry_ac421.py`** \u2014 **30 tests** covering:\n  - H1 ImportError trap (3 tests \u2014 `M \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements approved. All 3 ACs are testable and verifiable. AC-42.1: at-most-one-active-model discipline mirrors the config-activation pattern established in US-9/US-11 \u2014 well-established precedent. AC-42.2: the 'or a faithful fixture' clause is intentional and acceptable \u2014 the real v3.2 boosters live outside the repo; a fixture covering the 3-labels x 5-seeds structure fully exercises the gate logic. The seeded mismatch rejection test is the decisive verification. AC-42.3: the AST no-auto-start guard extension is the correct mechanical check (established in US-11, extended in US-33); idempotency test is clean. LightGBM in-container requirement correctly flagged here (Docker Rules compliance)."
     },
@@ -266,7 +266,7 @@
     ]
   },
   "build_order": "US-40 FIRST (closes the outstanding sprint-8 DoD deploy gap; independent of the P7 chain, may run in parallel) and US-45 (process/H2) is independent and may run in parallel. Then the P7 chain is sequential: US-41 (feature-contract reconciliation) -> US-42 (model_registry + BLEND write contract, consumes the US-41 gate) -> US-43 (the 15-booster blend serving path, loads the promoted BLEND) -> US-44 (scorer-parity offline gate, proves live==offline against banked golden vectors). The offline scorer-parity gate (US-44) does NOT depend on any live read, so the firehose budget stays fully banked (8 Birdeye + 8 Helius). P7 is offline by construction \u2014 no firehose activation this sprint.",
-  "last_updated": "2026-06-17T06:15:06+00:00",
+  "last_updated": "2026-06-17T06:25:05+00:00",
   "deploy_summary": "",
   "tester_sprint_status": "approved",
   "tester_sprint_notes": "All 6 stories / 18 ACs approved for sprint-9 planning. Requirements are testable and verifiable throughout. Key observations: (1) All ACs follow established project patterns \u2014 seeded-mismatch rejection tests, ImportError traps, run-twice byte/tol-identical checks, MANIFEST content-hash verification. No novel verification approaches that introduce uncertainty. (2) The cutover risk resolution (AC-43.2) is appropriately scoped: the mechanism is left to the dev team (frozen distribution vs rolling pool) while the CONTRACT is pinned (config-driven, documented, determinism + pool-vs-single-token parity pytest). (3) Firehose budget constraint is enforceable \u2014 all gates run against already-banked fixtures (helius_birth_tape golden fixture from US-34; v3.2 golden_scores.parquet banked in US-44). (4) No stories are requirements-defects. (5) The 'Scores in sync' standing DoD line is correctly scoped as an extension of 'Sources in sync' \u2014 same mechanism, same wiring, new domain."
