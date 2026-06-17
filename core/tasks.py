@@ -1,11 +1,11 @@
 # ---
 # module: core.tasks
-# sprint: sprint-7, sprint-8
-# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2, AC-31.3; US-38 AC-38.1, AC-38.2, AC-38.3
+# sprint: sprint-7, sprint-8, sprint-9
+# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2, AC-31.3; US-38 AC-38.1, AC-38.2, AC-38.3; US-43 AC-43.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
-# dependencies: celery, core.detection.birdeye_sweep, core.feature_builder, core.models
+# dependencies: celery, core.detection.birdeye_sweep, core.feature_builder, core.models, core.scorer
 # ---
 """Core Celery tasks — autodiscovered by the Celery worker on startup."""
 from celery import shared_task
@@ -234,3 +234,58 @@ def sweep_vps_lake_partitions(
             Path(lake_base), reference_date_str, retention_days
         )
     return {"expired": result.expired, "retained": result.retained}
+
+
+@shared_task(name="core.tasks.score_token")
+def score_token(mint, features, ref_dist_data=None):
+    """Score a graduated token using the active BLEND model (AC-43.3, US-43).
+
+    Runs in the celery-worker container — NEVER on web/gunicorn (#289).
+    Gated by PipelineState.scoring_enabled (§5.3/§15.6 — explicit operator
+    action). This task NEVER sets scoring_enabled or trading_enabled True.
+    trading_enabled is kept separate and is not touched here.
+
+    Features must be supplied by the caller, produced by the single shared
+    US-30 FeatureExtractor (Principle #2 — no scorer-local feature assembly).
+
+    Args:
+        mint: Token mint address string.
+        features: Feature dict produced by the shared FeatureExtractor.
+        ref_dist_data: Optional serialized per-label score dict (from
+            ReferenceDistribution.to_dict()).  When supplied, used directly
+            as the reference distribution for percentile ranking.
+            When None, ScoringConfig.reference_dist_path is read from the
+            active config (Principle #1 — config-driven path).
+
+    Returns:
+        {"mint": mint, "score": {...}} on success, or
+        {"skipped": True, "reason": str} when scoring is disabled or no
+        active model is registered.
+    """
+    from core.models import PipelineState
+    from core.resolver import get_active_config, get_active_model
+    from core.scorer import BlendScorer, ReferenceDistribution
+
+    state = PipelineState.objects.filter(pk=1).first()
+    if state is None or not state.scoring_enabled:
+        return {"skipped": True, "reason": "scoring_enabled is False"}
+
+    model_entry = get_active_model()
+    if model_entry is None:
+        return {"skipped": True, "reason": "no active model in registry"}
+
+    scorer = BlendScorer.from_registry(model_entry)
+
+    if ref_dist_data is not None:
+        ref_dist = ReferenceDistribution.from_dict(ref_dist_data)
+        result = scorer.score_single(features, ref_dist)
+    else:
+        config = get_active_config()
+        ref_dist_path = config.scoring.reference_dist_path if config else None
+        if ref_dist_path:
+            ref_dist = ReferenceDistribution.from_file(ref_dist_path)
+            result = scorer.score_single(features, ref_dist)
+        else:
+            result = scorer.score_pool([features])[0]
+
+    return {"mint": mint, "score": result}
