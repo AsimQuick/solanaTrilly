@@ -4,7 +4,7 @@
 # purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
 #          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
 # sprint: sprint-4
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2
 # created-by: dev-team
 # last-updated: 2026-06-17
 # ---
@@ -79,7 +79,7 @@ jobs:
             "${VPS_USER}@${VPS_HOST}:/root/solanatrilly/docker-compose.staging.yml"
           ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
             "${VPS_USER}@${VPS_HOST}" \
-            'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml pull && docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml up -d'
+            'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml pull && docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml up -d --remove-orphans'
           rm -f /tmp/deploy_key
 
       - name: Smoke-test staging stack (AC-6.4 / AC-12.3)

@@ -43,7 +43,6 @@ Tests:
   test_rca_rules_out_lgbm_image_divergence
   test_rca_references_us40_workflow_call_gate
   test_rca_is_not_a_symptom_only_record
-  test_deploy_yml_missing_remove_orphans_confirms_gap
 """
 
 from pathlib import Path
@@ -227,25 +226,3 @@ def test_rca_is_not_a_symptom_only_record() -> None:
     )
 
 
-def test_deploy_yml_missing_remove_orphans_confirms_gap() -> None:
-    """deploy.yml must NOT yet have --remove-orphans — confirming this is a real open gap.
-
-    AC-46.1 is a diagnostic AC only; AC-46.2 adds the fix. If --remove-orphans
-    is already present in the current deploy.yml, either AC-46.2 was pre-implemented
-    (which violates the one-AC-per-branch rule) or the gap no longer exists and
-    AC-46.1's root cause is incorrect. This test proves the RCA's root cause is
-    still a live gap in the deploy pipeline.
-
-    NOTE: This test will legitimately fail (and must be removed or inverted) after
-    AC-46.2 adds --remove-orphans to deploy.yml.
-    """
-    script = _deploy_vps_step_script()
-    assert "--remove-orphans" not in script, (
-        "AC-46.1: deploy.yml already contains '--remove-orphans' in the "
-        f"'{FAILING_STEP}' step. This means either:\n"
-        "  (a) AC-46.2 was pre-implemented before AC-46.1 was closed (one-AC-per-branch"
-        " violation), or\n"
-        "  (b) the fix was already in place before US-46 started (check if ALREADY-SATISFIED"
-        " applies to AC-46.2).\n"
-        "If AC-46.2 has been implemented, remove this test from AC-46.1's test file."
-    )
