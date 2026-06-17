@@ -49,13 +49,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from core.pregrad_features import PRE_FEATURE_NAMES
+from tools.promote_model import FeatureContractError, promote_blend
+
 # ---------------------------------------------------------------------------
 # H1 ImportError trap — these imports must succeed; deletion/rename fails
 # pytest collection before any test runs, enforcing the wiring contract.
 # ---------------------------------------------------------------------------
-from tools.promote_model import FeatureContractError, promote_blend  # noqa: F401
-
-from core.pregrad_features import PRE_FEATURE_NAMES
 
 # ---------------------------------------------------------------------------
 # Repo layout constants
