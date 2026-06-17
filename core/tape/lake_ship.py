@@ -1,7 +1,7 @@
 # ---
 # module: core.tape.lake_ship
 # sprint: sprint-8
-# story: US-38 AC-38.1, AC-38.2
+# story: US-38 AC-38.1, AC-38.2, AC-38.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -32,7 +32,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from core.tape.manifest import build_manifest, compute_content_hash, write_manifest
+from core.tape.manifest import (
+    MANIFEST_FILENAME,
+    build_manifest,
+    compute_content_hash,
+    read_manifest,
+    write_manifest,
+)
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -247,6 +253,144 @@ def sweep_expired_partitions(
         if partition_date < cutoff:
             shutil.rmtree(entry)
             expired.append(date_str)
+        else:
+            retained.append(date_str)
+
+    return SweepResult(expired=sorted(expired), retained=sorted(retained))
+
+
+# ---------------------------------------------------------------------------
+# Expire-after-ship verification gate (AC-38.3)
+# ---------------------------------------------------------------------------
+
+
+def is_partition_verified_shipped(
+    vps_part_dir: Path,
+    local_part_dir: Path,
+) -> bool:
+    """Return True iff the local copy is a verified, hash-matching ship (AC-38.3).
+
+    Verification steps:
+    1. The local partition directory exists.
+    2. A MANIFEST.json exists in the local partition directory.
+    3. The MANIFEST contains a non-empty ``content_hash`` field.
+    4. Re-hashing the VPS source's primary part file (``part-0.jsonl.gz``, or
+       the first available ``part-*.jsonl.gz``) produces a hash identical to the
+       one recorded in the local MANIFEST.
+
+    A False return means the partition MUST NOT be expired — it is retained.
+
+    Args:
+        vps_part_dir:   Source partition directory on the VPS lake.
+        local_part_dir: Destination partition directory on the local lake.
+
+    Returns:
+        ``True`` if the ship is verified; ``False`` for any missing/invalid
+        state (no local copy, no MANIFEST, hash mismatch, unreadable files).
+    """
+    local_part_dir = Path(local_part_dir)
+    vps_part_dir = Path(vps_part_dir)
+
+    if not local_part_dir.is_dir():
+        return False
+
+    manifest_file = local_part_dir / MANIFEST_FILENAME
+    if not manifest_file.exists():
+        return False
+
+    try:
+        manifest = read_manifest(local_part_dir)
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    expected_hash = manifest.get("content_hash", "")
+    if not expected_hash:
+        return False
+
+    vps_parts = sorted(vps_part_dir.glob("part-*.jsonl.gz"))
+    if not vps_parts:
+        return False
+
+    primary = vps_part_dir / "part-0.jsonl.gz"
+    if not primary.exists():
+        primary = vps_parts[0]
+
+    try:
+        actual_hash = compute_content_hash(primary)
+    except (OSError, EOFError, gzip.BadGzipFile):
+        return False
+
+    return actual_hash == expected_hash
+
+
+def sweep_expired_partitions_safe(
+    vps_lake: Path,
+    local_lake: Path,
+    reference_date_str: str,
+    retention_days: int,
+) -> SweepResult:
+    """Expire VPS lake partitions older than *retention_days* — ONLY if verified shipped.
+
+    Identical to :func:`sweep_expired_partitions` except a partition is expired
+    only when :func:`is_partition_verified_shipped` returns ``True`` for it.
+    Partitions that are old enough to expire but are unshipped or have a
+    hash-mismatched local copy are added to ``retained`` — they are NEVER
+    deleted until the ship is verified (AC-38.3 / data-lake.md no-data-loss rule).
+
+    Design guarantees (identical to sweep_expired_partitions):
+    - SCOPED: only operates within *vps_lake*.
+    - SAFE: only removes ``dt=YYYY-MM-DD`` directories; no other files touched.
+    - NO Docker commands: pure filesystem operation.
+    - IDEMPOTENT: second run on the same lake yields the same outcome.
+    - NO wall-clock calls: ``reference_date_str`` is supplied by the caller.
+
+    Args:
+        vps_lake:           Root of the VPS lake tree to sweep.
+        local_lake:         Root of the local lake tree (ship destination).
+        reference_date_str: Today's date as ``"YYYY-MM-DD"`` — cutoff is
+                            calculated relative to this value.
+        retention_days:     Partitions with date <
+                            ``(reference_date - retention_days)`` are eligible
+                            for expiry (subject to ship verification).
+
+    Returns:
+        :class:`SweepResult` with sorted ``expired`` and ``retained`` date lists.
+    """
+    vps_lake = Path(vps_lake)
+    local_lake = Path(local_lake)
+
+    reference_date = datetime.strptime(reference_date_str, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    cutoff = reference_date - timedelta(days=retention_days)
+
+    expired: list[str] = []
+    retained: list[str] = []
+
+    if not vps_lake.is_dir():
+        return SweepResult(expired=[], retained=[])
+
+    for entry in sorted(vps_lake.iterdir()):
+        if not entry.is_dir():
+            continue
+        m = _DT_PATTERN.match(entry.name)
+        if not m:
+            continue
+        date_str = m.group(1)
+        try:
+            partition_date = datetime.strptime(date_str, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            continue
+
+        if partition_date < cutoff:
+            local_dir = local_lake / f"dt={date_str}"
+            if is_partition_verified_shipped(entry, local_dir):
+                shutil.rmtree(entry)
+                expired.append(date_str)
+            else:
+                retained.append(date_str)
         else:
             retained.append(date_str)
 
