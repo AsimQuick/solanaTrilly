@@ -3,8 +3,8 @@
 # stack: django
 # purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
 #          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
-# sprint: sprint-4
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2
+# sprint: sprint-4, sprint-10
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3
 # created-by: dev-team
 # last-updated: 2026-06-17
 # ---
@@ -52,6 +52,17 @@ jobs:
           tags: |
             ghcr.io/asimquick/solanatrilly:latest
             ghcr.io/asimquick/solanatrilly:${{ github.sha }}
+
+      - name: Build and push frontend image (AC-48.3)
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          target: production
+          push: true
+          tags: |
+            ghcr.io/asimquick/solanatrilly-frontend:latest
+            ghcr.io/asimquick/solanatrilly-frontend:${{ github.sha }}
 
   deploy:
     needs: build-and-push
@@ -101,6 +112,91 @@ jobs:
           done
           echo "Smoke test FAILED: /health/ did not return HTTP 200 after all ${SMOKE_MAX_ATTEMPTS} attempts (${SMOKE_MAX_ATTEMPTS} x ${SMOKE_RETRY_DELAY}s)"
           exit 1
+
+      - name: Smoke-test dashboard route HTTP 200 (AC-48.3)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-48.3 — verifying dashboard route returns HTTP 200 at http://${VPS_HOST}:8002/dashboard/"
+          SMOKE_MAX_ATTEMPTS=6
+          SMOKE_RETRY_DELAY=5
+          for i in $(seq 1 "${SMOKE_MAX_ATTEMPTS}"); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_HOST}:8002/dashboard/" || true)
+            if [ "$status" = "200" ]; then
+              echo "Dashboard route PASS on attempt ${i}: GET /dashboard/ returned HTTP 200"
+              exit 0
+            fi
+            echo "Attempt ${i}/${SMOKE_MAX_ATTEMPTS}: HTTP ${status} — retrying in ${SMOKE_RETRY_DELAY}s"
+            sleep "${SMOKE_RETRY_DELAY}"
+          done
+          echo "Dashboard route FAILED: /dashboard/ did not return HTTP 200 after ${SMOKE_MAX_ATTEMPTS} attempts"
+          exit 1
+
+      - name: Smoke-test WS endpoint HTTP 101 upgrade (AC-48.3)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-48.3 — verifying WebSocket endpoint accepts upgrade (HTTP 101) at ws://${VPS_HOST}:8002/ws/tape/smoke_test/"
+          python3 - <<'PYEOF'
+          import os, socket, base64, sys, time
+          host = os.environ["VPS_HOST"]
+          port = 8002
+          path = "/ws/tape/smoke_test/"
+          key = base64.b64encode(b"solanatrilly_ac483_key").decode()
+          request = (
+              f"GET {path} HTTP/1.1\r\n"
+              f"Host: {host}:{port}\r\n"
+              "Upgrade: websocket\r\n"
+              "Connection: Upgrade\r\n"
+              f"Sec-WebSocket-Key: {key}\r\n"
+              "Sec-WebSocket-Version: 13\r\n"
+              "\r\n"
+          )
+          max_attempts = 6
+          for attempt in range(1, max_attempts + 1):
+              try:
+                  s = socket.create_connection((host, port), timeout=10)
+                  s.sendall(request.encode())
+                  time.sleep(0.5)
+                  response = s.recv(1024).decode("utf-8", errors="replace")
+                  s.close()
+                  if "101" in response:
+                      print(f"WS upgrade PASS on attempt {attempt}: HTTP 101 Switching Protocols")
+                      sys.exit(0)
+                  else:
+                      print(f"Attempt {attempt}/{max_attempts}: unexpected response: {response[:120]}")
+              except Exception as exc:
+                  print(f"Attempt {attempt}/{max_attempts}: connection error: {exc}")
+              if attempt < max_attempts:
+                  time.sleep(5)
+          print(f"WS upgrade FAILED after {max_attempts} attempts")
+          sys.exit(1)
+          PYEOF
+
+      - name: Verify frontend and web containers Up (AC-48.3)
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-48.3 — verifying 'frontend' and 'web' containers are Up in the solanatrilly stack"
+          printf '%s\n' "$VPS_SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          ps_out=$(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
+            "${VPS_USER}@${VPS_HOST}" \
+            'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml ps 2>&1')
+          echo "$ps_out"
+          rm -f /tmp/deploy_key
+          if ! echo "$ps_out" | grep -iE '^solanatrilly.web' | grep -qiE 'running|up'; then
+            echo "AC-48.3 FAIL: 'web' container is NOT in running/up state"
+            exit 1
+          fi
+          echo "AC-48.3 PASS: 'web' container is Up"
+          if ! echo "$ps_out" | grep -iE '^solanatrilly.frontend' | grep -qiE 'running|up'; then
+            echo "AC-48.3 FAIL: 'frontend' container is NOT in running/up state"
+            exit 1
+          fi
+          echo "AC-48.3 PASS: 'frontend' container is Up"
 
       - name: Verify listener container Up (AC-33.3)
         env:
