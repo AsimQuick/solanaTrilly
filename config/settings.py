@@ -123,10 +123,15 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 
-# Celery-beat periodic task schedule (AC-16.2 — third-belt graduation sweep)
+# Celery-beat periodic task schedule (AC-16.2 — third-belt graduation sweep;
+#                                      AC-38.1 — daily VPS→local lake ship)
 CELERY_BEAT_SCHEDULE = {
     "birdeye-graduation-sweep": {
         "task": "core.tasks.birdeye_graduation_sweep",
         "schedule": 300.0,  # every 5 minutes
+    },
+    "ship-lake-partitions": {
+        "task": "core.tasks.ship_lake_partitions",
+        "schedule": 86400.0,  # once per day (24 hours)
     },
 }

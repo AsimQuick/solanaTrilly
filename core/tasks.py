@@ -1,7 +1,7 @@
 # ---
 # module: core.tasks
-# sprint: sprint-7
-# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2, AC-31.3
+# sprint: sprint-7, sprint-8
+# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2, AC-31.3; US-38 AC-38.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -95,3 +95,73 @@ def build_features(
         output_path=output_path,
         window_s=window_s,
     )
+
+
+@shared_task(name="core.tasks.ship_lake_partitions")
+def ship_lake_partitions(
+    reference_date_str=None,
+    src_base=None,
+    dst_base=None,
+    window_days=None,
+):
+    """Ship the day's lake partitions from VPS to local lake (AC-38.1, oracle §5).
+
+    ONE-WAY: VPS = capture+serve; local = single source of truth for history.
+    Runs on the dedicated celery-worker/celery-beat container — NEVER web/gunicorn
+    (#289 lesson).  The ship window (how many trailing days to ship) is read from
+    ``get_active_config().tape.lake_ship_window_days`` (config-driven, Principle #1).
+
+    Args:
+        reference_date_str: UTC date string ``"YYYY-MM-DD"`` representing 'today'.
+            When ``None`` the current UTC date is read from the injected Clock
+            seam (``WallClock``, AC-2.2) — never datetime.now() directly.  For
+            testing, pass any date string to keep the task deterministic.
+        src_base: Source lake root path (VPS lake).  Defaults to ``"lake/tapes"``.
+        dst_base: Destination lake root path (local lake).  Defaults to
+            ``"lake/local"``.
+        window_days: Override for the config-driven ship window (integer ≥ 1).
+            Used by tests to bypass the DB; production omits this and reads from
+            ``get_active_config()``.
+
+    Returns:
+        List of dicts ``{"date_str", "row_count", "manifest"}`` for each
+        shipped partition; empty list if no partitions were found.
+    """
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    from core.clock import WallClock
+    from core.resolver import get_active_config
+    from core.tape.lake_ship import ship_lake
+
+    # --- resolve window_days (config-driven, Principle #1) ---
+    if window_days is None:
+        config = get_active_config()
+        window_days = config.tape.lake_ship_window_days if config else 1
+
+    # --- resolve reference date via the Clock seam (AC-2.2), never datetime.now() ---
+    if reference_date_str is None:
+        reference_date_str = WallClock().now().strftime("%Y-%m-%d")
+
+    # --- resolve paths (literal defaults; beat schedule may override via kwargs) ---
+    if src_base is None:
+        src_base = "lake/tapes"
+    if dst_base is None:
+        dst_base = "lake/local"
+
+    # Build the list of dates to ship: trailing window_days days before reference
+    ref = datetime.strptime(reference_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    date_strs = [
+        (ref - timedelta(days=i)).strftime("%Y-%m-%d")
+        for i in range(1, window_days + 1)
+    ]
+
+    results = ship_lake(Path(src_base), Path(dst_base), date_strs)
+    return [
+        {
+            "date_str": r.date_str,
+            "row_count": r.row_count,
+            "manifest": str(r.manifest_written),
+        }
+        for r in results
+    ]
