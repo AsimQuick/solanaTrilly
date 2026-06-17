@@ -68,9 +68,15 @@ class ReconcileResult:
         for feat in self.missing:
             lines.append(f"MISSING feature '{feat}': present in model list but absent from FeatureSet.columns")
         for feat in self.training_only:
-            lines.append(f"TRAINING-ONLY feature '{feat}': model requires live computation but feature is not in live_servable")
+            lines.append(
+                f"TRAINING-ONLY feature '{feat}': model requires live computation"
+                " but feature is not in live_servable"
+            )
         if self.order_divergence:
-            lines.append("ORDER DIVERGENCE: model feature list order does not match FeatureSet.columns order (PRD §7.4 binding-order violation)")
+            lines.append(
+                "ORDER DIVERGENCE: model feature list order does not match"
+                " FeatureSet.columns order (PRD §7.4 binding-order violation)"
+            )
         for idx, booster_features in self.booster_mismatches:
             lines.append(f"BOOSTER MISMATCH at index {idx}: booster feature_name() differs from model feature list")
         for feat in self.extra:
