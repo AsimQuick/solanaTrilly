@@ -1,0 +1,25 @@
+{
+  "banked_at": "2026-06-17T12:00:00+00:00",
+  "mint": "AC372BirdeyeSnapshotMint1111111111111111111",
+  "elapsed_s": 60,
+  "as_of": "2026-06-17T12:01:00+00:00",
+  "raw": {
+    "holder_distribution": {
+      "items": [
+        {"address": "HolderAddr1111111111111111111111111111111111", "balance": 5000000000},
+        {"address": "HolderAddr2222222222222222222222222222222222", "balance": 2500000000},
+        {"address": "HolderAddr3333333333333333333333333333333333", "balance": 1000000000}
+      ],
+      "total": 847
+    },
+    "mint_authority": null,
+    "freeze_authority": null,
+    "lp_burned": true,
+    "liquidity": 23456.78,
+    "tvl": 21000.0,
+    "depth": {
+      "buy": 145.0,
+      "sell": 132.0
+    }
+  }
+}
