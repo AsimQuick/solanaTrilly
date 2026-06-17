@@ -1,7 +1,7 @@
 # ---
 # module: core.tests.test_parity_gate_ac323
 # sprint: sprint-8
-# story: US-32 AC-32.3, US-36 AC-36.1
+# story: US-32 AC-32.3, US-36 AC-36.1, US-36 AC-36.3
 # status: extended
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -9,9 +9,10 @@
 #               core.tests.test_g2a_live_backfill_parity_ac321,
 #               core.tests.test_g2b_raw_truth_ac322,
 #               core.tests.test_post_grad_overlap_parity_ac361,
+#               core.tests.test_pregrad_self_consistency_ac362,
 #               pathlib, yaml
 # ---
-"""AC-32.3 / AC-36.1 — Combined T0/G1/G2 parity gate wired into the single canonical ci.yml 'test' job.
+"""AC-32.3 / AC-36.1 / AC-36.3 — Combined T0/G1/G2 parity gate wired into the single canonical ci.yml 'test' job.
 
 Golden parity is a HARD MERGE GATE (§6.4.3 — 'the #1 gate').  This file is the
 combined wire for the full T0/G1/G2 parity suite:
@@ -31,6 +32,12 @@ combined wire for the full T0/G1/G2 parity suite:
               MAIN GATE: test_overlap_swap_level_byte_identity
               MAIN GATE: test_overlap_feature_level_byte_identity
 
+  G2/helius pre-grad — helius_live pre-graduation raw-truth self-consistency (US-36 AC-36.2/36.3):
+              MAIN GATE: test_pregrad_decode_twice_byte_identical
+              MAIN GATE: test_pregrad_normalized_swaps_twice_identical
+              MAIN GATE: test_pregrad_g1_feature_golden_parity
+              MAIN GATE: test_birth_tape_manifest_content_hash_correct
+
 Wiring mechanism (mirroring AC-21.3)
 -------------------------------------
 The module-level imports below create a hard compile-time dependency on each
@@ -44,7 +51,7 @@ ci.yml 'test' job via the existing pytest invocation over core/tests/.
 Tests
 -----
   test_combined_parity_gate_functions_are_callable
-      All five ImportError-trapped functions resolve to callables.
+      All ImportError-trapped functions resolve to callables.
 
   test_combined_parity_gate_in_single_canonical_test_job
       ci.yml defines a job named 'test' and the pytest invocation does NOT
@@ -86,6 +93,23 @@ from core.tests.test_post_grad_overlap_parity_ac361 import (
     test_overlap_swap_level_byte_identity as _g2_helius_swap_test,
 )
 
+# G2/helius pre-grad — helius_live pre-graduation raw-truth self-consistency (AC-36.2/36.3)
+# Extends the gate: pre-grad window has no Birdeye counterpart, so the gate is
+# decode determinism + §6.4 schema invariants + G1 golden-parity + MANIFEST integrity.
+# Deleting or renaming any of these four raises ImportError at collection time.
+from core.tests.test_pregrad_self_consistency_ac362 import (
+    test_birth_tape_manifest_content_hash_correct as _pregrad_manifest_hash_test,
+)
+from core.tests.test_pregrad_self_consistency_ac362 import (
+    test_pregrad_decode_twice_byte_identical as _pregrad_decode_determinism_test,
+)
+from core.tests.test_pregrad_self_consistency_ac362 import (
+    test_pregrad_g1_feature_golden_parity as _pregrad_g1_parity_test,
+)
+from core.tests.test_pregrad_self_consistency_ac362 import (
+    test_pregrad_normalized_swaps_twice_identical as _pregrad_swap_determinism_test,
+)
+
 # ---------------------------------------------------------------------------
 # ImportError trap — combined T0/G1/G2 parity gate cannot silently vanish
 #
@@ -106,7 +130,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CI_YML = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 # ---------------------------------------------------------------------------
-# Registry — all five pinned gate functions
+# Registry — all pinned gate functions (G1 + G2(a) + G2(b) + AC-36.1 + AC-36.2)
 # ---------------------------------------------------------------------------
 
 _PINNED_GATE_FUNCTIONS: dict[str, object] = {
@@ -118,6 +142,11 @@ _PINNED_GATE_FUNCTIONS: dict[str, object] = {
     # AC-36.1: helius_live birth-tape post-graduation OVERLAP byte-parity
     "test_overlap_swap_level_byte_identity": _g2_helius_swap_test,
     "test_overlap_feature_level_byte_identity": _g2_helius_feature_test,
+    # AC-36.2/36.3: helius_live pre-graduation raw-truth self-consistency
+    "test_pregrad_decode_twice_byte_identical": _pregrad_decode_determinism_test,
+    "test_pregrad_normalized_swaps_twice_identical": _pregrad_swap_determinism_test,
+    "test_pregrad_g1_feature_golden_parity": _pregrad_g1_parity_test,
+    "test_birth_tape_manifest_content_hash_correct": _pregrad_manifest_hash_test,
 }
 
 # ---------------------------------------------------------------------------
@@ -126,7 +155,7 @@ _PINNED_GATE_FUNCTIONS: dict[str, object] = {
 
 
 def test_combined_parity_gate_functions_are_callable() -> None:
-    """All T0/G1/G2 gate functions (including AC-36.1 helius overlap) resolve to callables.
+    """All T0/G1/G2 gate functions (including AC-36.1 overlap + AC-36.2 pre-grad) are callable.
 
     The module-level imports are the primary ImportError trap; this test adds a
     human-readable assertion layer in case an import resolves to a non-callable
