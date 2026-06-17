@@ -56,6 +56,7 @@ from tools.promote_model import FeatureContractError, promote_blend
 # H1 ImportError trap — these imports must succeed; deletion/rename fails
 # pytest collection before any test runs, enforcing the wiring contract.
 # ---------------------------------------------------------------------------
+assert FeatureContractError  # H1 ImportError trap — deletion fails pytest collection
 
 # ---------------------------------------------------------------------------
 # Repo layout constants
