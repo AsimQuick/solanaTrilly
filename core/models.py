@@ -4,7 +4,7 @@
 # story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4,
 #        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2,
 #        US-23 AC-23.1, US-29 AC-29.1, US-29 AC-29.2, US-29 AC-29.3,
-#        US-42 AC-42.1
+#        US-42 AC-42.1, US-43 AC-43.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -326,6 +326,9 @@ class ModelRegistry(models.Model):
     artifact_content_hashes = models.JSONField(default=dict, encoder=JsonSafeEncoder)
     model_version = models.CharField(max_length=128)
     feature_set_version = models.CharField(max_length=128)
+    # Absolute path to the artifact directory on disk (e.g. /path/to/trilly_pregrad_v3_2).
+    # Written by promote_blend(); read by BlendScorer.from_registry() to locate boosters.
+    artifact_dir = models.TextField(blank=True, default="")
     is_active = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True, default="")

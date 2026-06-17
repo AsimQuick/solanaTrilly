@@ -1,7 +1,7 @@
 # ---
 # module: tools.promote_model
 # sprint: sprint-9
-# story: US-41 AC-41.3, US-42 AC-42.2
+# story: US-41 AC-41.3, US-42 AC-42.2, US-43 AC-43.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -264,6 +264,7 @@ def promote_blend(
         artifact_content_hashes=artifact_content_hashes,
         model_version=model_version,
         feature_set_version=feature_set_version,
+        artifact_dir=str(artifact_dir.resolve()),
         notes=notes,
     )
 
