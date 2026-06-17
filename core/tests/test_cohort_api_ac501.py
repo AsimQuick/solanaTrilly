@@ -1,8 +1,8 @@
 # ---
 # module: core.tests.test_cohort_api_ac501
 # sprint: sprint-10
-# story: US-50 AC-50.1
-# status: implemented
+# story: US-50 AC-50.1, US-50 AC-50.3
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-17
 # dependencies: core.dashboard.cohort_api, core.dashboard.candle_api, core.schemas, ast, pathlib, django.test
@@ -296,7 +296,13 @@ class CohortApiEndpointTest(TestCase):
         })
 
     def test_endpoint_returns_200_with_json(self):
-        """GET /api/cohort/?interval_s=5&mints=A,B returns 200 with correct shape."""
+        """GET /api/cohort/?interval_s=5&mints=A,B returns 200 with correct shape.
+
+        AC-50.3: the cohort view now always delegates to build_cohort_wall(),
+        which returns the wall format (groups/group_by/sort_by) rather than a
+        bare sparklines list.  When no group_by is requested, a single group
+        with key=None contains all entries.
+        """
         mints_param = f"{_MINT_A},{_MINT_B}"
         with patch("core.views.LakeReader") as MockReader:
             MockReader.return_value.iter_rows.return_value = iter(
@@ -307,12 +313,15 @@ class CohortApiEndpointTest(TestCase):
         data = json.loads(response.content)
         self.assertEqual(data["interval_s"], 5)
         self.assertEqual(data["count"], 2)
-        self.assertIn("sparklines", data)
-        self.assertEqual(len(data["sparklines"]), 2)
-        for s in data["sparklines"]:
-            self.assertIn("mint", s)
-            self.assertIn("candles", s)
-            self.assertIsInstance(s["candles"], list)
+        # AC-50.3: response uses wall format (groups) not bare sparklines list
+        self.assertIn("groups", data)
+        self.assertEqual(len(data["groups"]), 1)
+        entries = data["groups"][0]["entries"]
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            self.assertIn("mint", entry)
+            self.assertIn("candles", entry)
+            self.assertIsInstance(entry["candles"], list)
 
     def test_endpoint_run_twice_identical(self):
         """Calling the endpoint twice on the same banked fixture returns identical JSON."""
@@ -351,7 +360,10 @@ class CohortApiEndpointTest(TestCase):
         self.assertIn("error", data)
 
     def test_endpoint_auto_discovers_mints_from_lake(self):
-        """Without mints param, endpoint discovers all unique mints from the lake."""
+        """Without mints param, endpoint discovers all unique mints from the lake.
+
+        AC-50.3: response uses wall format; mints are in group entries.
+        """
         with patch("core.views.LakeReader") as MockReader:
             MockReader.return_value.iter_rows.return_value = iter(
                 copy.deepcopy(_BANKED_ROWS)
@@ -359,14 +371,19 @@ class CohortApiEndpointTest(TestCase):
             response = self.client.get("/api/cohort/?interval_s=5")
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
-        discovered_mints = {s["mint"] for s in data["sparklines"]}
+        # AC-50.3: mints are in groups[0]["entries"]
+        entries = data["groups"][0]["entries"]
+        discovered_mints = {e["mint"] for e in entries}
         self.assertIn(_MINT_A, discovered_mints)
         self.assertIn(_MINT_B, discovered_mints)
         # count matches number of unique mints in the lake
         self.assertEqual(data["count"], len(discovered_mints))
 
     def test_endpoint_absent_mint_empty_candles(self):
-        """A requested mint not in the lake gets an empty candle list, not a crash."""
+        """A requested mint not in the lake gets an empty candle list, not a crash.
+
+        AC-50.3: response uses wall format; entries are in groups[0]["entries"].
+        """
         mints_param = f"{_MINT_A},{_ABSENT_MINT}"
         with patch("core.views.LakeReader") as MockReader:
             MockReader.return_value.iter_rows.return_value = iter(
@@ -375,6 +392,8 @@ class CohortApiEndpointTest(TestCase):
             response = self.client.get(f"/api/cohort/?interval_s=5&mints={mints_param}")
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
-        by_mint = {s["mint"]: s for s in data["sparklines"]}
+        # AC-50.3: entries are in groups[0]["entries"] (wall format)
+        entries = data["groups"][0]["entries"]
+        by_mint = {e["mint"]: e for e in entries}
         self.assertIn(_ABSENT_MINT, by_mint)
         self.assertEqual(by_mint[_ABSENT_MINT]["candles"], [])
