@@ -1,11 +1,14 @@
 # ---
 # file: docker-compose.staging.yml
-# stack: django+channels+listener+celery
+# stack: django+channels+listener+celery+react+vite
 # purpose: VPS staging compose — the ONLY compose file run on the VPS (PRD §15.4).
 #   Compose project: -p solanatrilly (enforced via top-level name: field AND CLI flag).
 #   Isolation: distinct Postgres DB (solanatrilly), distinct volume (solanatrilly_pgdata),
 #   distinct Redis, distinct Docker network (solanatrilly_net).
 #   web on host port 8002 (solanaBilly owns 8001 — never touch it).
+#   frontend: React+Vite SPA served by the ghcr.io/asimquick/solanatrilly-frontend image
+#     (nginx serving pre-built static assets); no external port — traffic routed via
+#     web container proxy or direct access; built from frontend/Dockerfile prod stage.
 #   listener: dedicated detection/reconciler container — never shares the web/gunicorn
 #     process (#289 lesson); runs python manage.py run_listener inside the GHCR image.
 #   celery-worker: dedicated Feature Builder container — NEVER web/gunicorn (#289 lesson).
@@ -13,7 +16,7 @@
 #   VPS is never hand-edited: deploy.yml pulls the GHCR image and brings up this file.
 # created-by: dev-team
 # sprint: sprint-7
-# story: US-6 AC-6.2, US-16 AC-16.3, US-31 AC-31.1
+# story: US-6 AC-6.2, US-16 AC-16.3, US-31 AC-31.1, US-48 AC-48.1
 # last-updated: 2026-06-17
 # ---
 #
@@ -151,6 +154,18 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "test -f /tmp/celery-beat.pid && kill -0 $(cat /tmp/celery-beat.pid) 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    image: ghcr.io/asimquick/solanatrilly-frontend:latest
+    networks:
+      - solanatrilly_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/ > /dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

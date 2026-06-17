@@ -1,0 +1,12 @@
+# ---
+# file: frontend/.dockerignore
+# purpose: Exclude host artifacts from the Docker build context.
+#   node_modules is always installed inside the container (Docker Rules).
+# created-by: dev-team
+# sprint: sprint-10
+# story: US-48 AC-48.1
+# ---
+node_modules
+dist
+.git
+*.md
