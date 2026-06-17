@@ -1,7 +1,8 @@
 # ---
 # module: core.admin
-# sprint: sprint-3, sprint-4, sprint-5, sprint-6, sprint-7
-# story: US-9 AC-9.4, US-14 AC-14.3, US-17 AC-17.4, US-23 AC-23.4, US-29 AC-29.3
+# sprint: sprint-3, sprint-4, sprint-5, sprint-6, sprint-7, sprint-9
+# story: US-9 AC-9.4, US-14 AC-14.3, US-17 AC-17.4, US-23 AC-23.4, US-29 AC-29.3,
+#        US-42 AC-42.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -10,7 +11,7 @@
 from django.contrib import admin
 from simple_history.admin import SimpleHistoryAdmin
 
-from core.models import FeatureSet, PipelineConfig, Snapshot, Swap, Token
+from core.models import FeatureSet, ModelRegistry, PipelineConfig, Snapshot, Swap, Token
 
 
 @admin.register(PipelineConfig)
@@ -84,6 +85,44 @@ class FeatureSetAdmin(admin.ModelAdmin):
         "notes",
     ]
     ordering = ["id"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ModelRegistry)
+class ModelRegistryAdmin(SimpleHistoryAdmin):
+    """Audit-trail admin for ModelRegistry — promoted model artifact viewer (US-42 AC-42.1).
+
+    Rows are immutable after promotion; the admin is observational + history/diff only.
+    Activation is done via activate_model() — not through admin save().
+    """
+
+    list_display = [
+        "id",
+        "kind",
+        "model_version",
+        "feature_set_version",
+        "is_active",
+        "created_at",
+    ]
+    list_filter = ["is_active", "kind"]
+    readonly_fields = [
+        "kind",
+        "feature_list",
+        "labels_seeds_manifest",
+        "blend_transform_descriptor",
+        "artifact_content_hashes",
+        "model_version",
+        "feature_set_version",
+        "is_active",
+        "created_at",
+        "notes",
+    ]
+    ordering = ["-created_at"]
 
     def has_add_permission(self, request):
         return False
