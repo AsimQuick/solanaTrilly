@@ -1,7 +1,7 @@
 # ---
 # module: core.tape.lake_ship
 # sprint: sprint-8
-# story: US-38 AC-38.1
+# story: US-38 AC-38.1, AC-38.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -49,6 +51,21 @@ class ShipResult:
     mint_cohort: list[str]
     content_hash: str
     manifest_written: Path
+
+
+@dataclass
+class SweepResult:
+    """Outcome of a retention sweep over a lake base directory (AC-38.2).
+
+    Attributes:
+        expired:  Sorted list of ``"YYYY-MM-DD"`` strings for partitions that
+                  were older than the retention window and have been deleted.
+        retained: Sorted list of ``"YYYY-MM-DD"`` strings for partitions that
+                  fell within the retention window and were left intact.
+    """
+
+    expired: list[str] = field(default_factory=list)
+    retained: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +177,80 @@ def ship_partition(
         content_hash=content_hash,
         manifest_written=manifest_path,
     )
+
+
+# ---------------------------------------------------------------------------
+# Retention sweep (AC-38.2)
+# ---------------------------------------------------------------------------
+
+_DT_PATTERN = re.compile(r"^dt=(\d{4}-\d{2}-\d{2})$")
+
+
+def sweep_expired_partitions(
+    lake_base: Path,
+    reference_date_str: str,
+    retention_days: int,
+) -> SweepResult:
+    """Expire VPS lake partitions older than *retention_days* (AC-38.2).
+
+    Scans all ``dt=YYYY-MM-DD`` subdirectories immediately under *lake_base*.
+    Any partition whose date is strictly older than
+    ``reference_date - retention_days`` is removed with ``shutil.rmtree``.
+
+    Design guarantees:
+    - SCOPED: only operates within *lake_base*; caller supplies the path explicitly.
+    - SAFE: only removes directories whose names match the ``dt=YYYY-MM-DD``
+      pattern — no other files or directories are touched.
+    - NO Docker commands: pure filesystem operation.
+    - IDEMPOTENT: running twice on the same lake yields the same outcome; the
+      second run returns an empty ``expired`` list (nothing left to delete).
+    - NO wall-clock calls: ``reference_date_str`` is supplied by the caller
+      (Clock principle, AC-2.2).
+
+    Args:
+        lake_base:          Root of the lake tree to sweep (e.g. ``Path("lake/tapes")``).
+        reference_date_str: Today's date as ``"YYYY-MM-DD"`` — the sweep cutoff
+                            is calculated relative to this value.
+        retention_days:     Partitions with date <
+                            ``(reference_date - retention_days)`` are expired.
+
+    Returns:
+        :class:`SweepResult` with sorted ``expired`` and ``retained`` date lists.
+    """
+    lake_base = Path(lake_base)
+
+    reference_date = datetime.strptime(reference_date_str, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    cutoff = reference_date - timedelta(days=retention_days)
+
+    expired: list[str] = []
+    retained: list[str] = []
+
+    if not lake_base.is_dir():
+        return SweepResult(expired=[], retained=[])
+
+    for entry in sorted(lake_base.iterdir()):
+        if not entry.is_dir():
+            continue
+        m = _DT_PATTERN.match(entry.name)
+        if not m:
+            continue
+        date_str = m.group(1)
+        try:
+            partition_date = datetime.strptime(date_str, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            continue
+
+        if partition_date < cutoff:
+            shutil.rmtree(entry)
+            expired.append(date_str)
+        else:
+            retained.append(date_str)
+
+    return SweepResult(expired=sorted(expired), retained=sorted(retained))
 
 
 def ship_lake(

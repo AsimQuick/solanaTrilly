@@ -1,7 +1,7 @@
 # ---
 # module: core.tasks
 # sprint: sprint-7, sprint-8
-# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2, AC-31.3; US-38 AC-38.1
+# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2, AC-31.3; US-38 AC-38.1, AC-38.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -165,3 +165,54 @@ def ship_lake_partitions(
         }
         for r in results
     ]
+
+
+@shared_task(name="core.tasks.sweep_vps_lake_partitions")
+def sweep_vps_lake_partitions(
+    reference_date_str=None,
+    lake_base=None,
+    retention_days=None,
+):
+    """Expire VPS lake partitions older than the configured retention window (AC-38.2).
+
+    Runs the :func:`~core.tape.lake_ship.sweep_expired_partitions` sweep over
+    *lake_base*, removing any ``dt=YYYY-MM-DD`` directory whose date is strictly
+    older than ``reference_date - retention_days``.
+
+    SCOPED and SAFE:
+    - Only operates within *lake_base* (passed explicitly — never implicit).
+    - Only removes directories matching the ``dt=YYYY-MM-DD`` naming pattern.
+    - Uses ``shutil.rmtree`` — NO docker commands, prune, or volume removal.
+
+    Args:
+        reference_date_str: UTC date string ``"YYYY-MM-DD"`` representing today.
+            When ``None``, reads from the injected Clock seam (``WallClock``,
+            AC-2.2) — never ``datetime.now()`` directly.
+        lake_base: Root of the lake tree to sweep. Defaults to ``"lake/tapes"``.
+        retention_days: Override for the config-driven retention window (integer
+            1–7).  When ``None``, reads from
+            ``get_active_config().tape.lake_retention_days``; falls back to 7.
+
+    Returns:
+        ``{"expired": [...], "retained": [...]}`` — sorted date string lists.
+    """
+    from pathlib import Path
+
+    from core.clock import WallClock
+    from core.resolver import get_active_config
+    from core.tape.lake_ship import sweep_expired_partitions
+
+    if retention_days is None:
+        config = get_active_config()
+        retention_days = config.tape.lake_retention_days if config else 7
+
+    if reference_date_str is None:
+        reference_date_str = WallClock().now().strftime("%Y-%m-%d")
+
+    if lake_base is None:
+        lake_base = "lake/tapes"
+
+    result = sweep_expired_partitions(
+        Path(lake_base), reference_date_str, retention_days
+    )
+    return {"expired": result.expired, "retained": result.retained}
