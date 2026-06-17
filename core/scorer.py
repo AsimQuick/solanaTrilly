@@ -1,13 +1,13 @@
 # ---
 # module: core.scorer
 # sprint: sprint-9
-# story: US-43 AC-43.1
+# story: US-43 AC-43.1, AC-43.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
 # dependencies: numpy, lightgbm (in-container), core.resolver, core.models
 # ---
-"""BlendScorer — ONE shared deterministic scorer for a LightGBM BLEND (AC-43.1).
+"""BlendScorer — ONE shared deterministic scorer for a LightGBM BLEND (AC-43.1/AC-43.2).
 
 Selection recipe (meta.json:selection_recipe, PRD §7.4):
   For each of the 3 labels:
@@ -28,11 +28,23 @@ Percentile-rank formula:
   Values are in (0, 1]; the highest-scoring token receives rank 1.0.
   Equal scores receive equal rank (natural for the blend average).
 
+AC-43.2 — cutover risk resolution:
+  Live serving scores ONE token at graduation with no same-day pool, so
+  percentile ranks cannot be computed against a live pool.  The fix is a
+  ReferenceDistribution: a frozen per-label score distribution banked from
+  training data (or a rolling daily pool), stored at ScoringConfig.reference_dist_path
+  (Principle #1 — config-driven, never a literal path in code).
+
+  Parity invariant: if the reference distribution is built from the same pool
+  that score_pool() ranked against, then score_single(token, ref_dist) produces
+  the same label_ranks and blend_score as score_pool(pool)[token_index].
+
 Container placement: intended to run in the scorer/worker container,
 NOT in the web/gunicorn process (PRD §7.4 constraint #289).
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,6 +52,123 @@ import numpy as np
 
 if TYPE_CHECKING:
     from core.models import ModelRegistry
+
+
+# ---------------------------------------------------------------------------
+# AC-43.2 — ReferenceDistribution (frozen per-label score distribution)
+# ---------------------------------------------------------------------------
+
+
+class ReferenceDistribution:
+    """Frozen per-label score distribution for live single-token percentile ranking.
+
+    Resolves the cutover risk (oracle §4.2, AC-43.2): live serving arrives one
+    token at a time with no same-day pool, so percentile ranks are computed
+    against this banked reference instead of a live pool.
+
+    The reference is typically banked from training (the per-label label-score
+    distributions of the training/validation set) and stored as a JSON file
+    pointed to by ScoringConfig.reference_dist_path (Principle #1 — the path
+    comes from config, never hard-coded here).
+
+    Percentile-rank formula (same as pool-based _percentile_rank):
+        rank = (count in ref with value <= score) / N_ref
+    This is the pool formula applied to the reference distribution instead of a
+    live pool.
+
+    Parity invariant (AC-43.2):
+        If reference = ReferenceDistribution.from_pool_results(score_pool(pool), labels),
+        then for any token i in the pool:
+            score_single(pool[i], reference)["label_ranks"] == score_pool(pool)[i]["label_ranks"]
+        because the reference contains the same label-score values as the pool.
+    """
+
+    def __init__(self, label_scores: dict[str, np.ndarray]) -> None:
+        """
+        Parameters
+        ----------
+        label_scores:
+            {label: array_of_scores} — one array per label.  Stored sorted
+            ascending (sorting is idempotent and enables binary-search if needed
+            in the future).
+        """
+        self._scores: dict[str, np.ndarray] = {
+            label: np.sort(np.array(scores, dtype=np.float64))
+            for label, scores in label_scores.items()
+        }
+
+    @property
+    def labels(self) -> list[str]:
+        """Labels present in this reference distribution."""
+        return list(self._scores.keys())
+
+    @property
+    def n_ref(self) -> dict[str, int]:
+        """Number of reference samples per label."""
+        return {label: int(len(arr)) for label, arr in self._scores.items()}
+
+    def percentile_rank(self, label: str, score: float) -> float:
+        """Percentile rank of a single score against the reference distribution.
+
+        rank = (count in ref with value <= score) / N_ref
+
+        Returns 0.0 when N_ref is empty (should not occur in production).
+        """
+        ref = self._scores[label]
+        n = len(ref)
+        if n == 0:
+            return 0.0
+        return float((ref <= score).sum() / n)
+
+    def to_dict(self) -> dict[str, list[float]]:
+        """Serialize to a JSON-serializable dict (list per label, sorted)."""
+        return {label: arr.tolist() for label, arr in self._scores.items()}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, list[float]]) -> "ReferenceDistribution":
+        """Deserialize from a JSON-compatible dict (the inverse of to_dict())."""
+        return cls({label: np.array(vals, dtype=np.float64) for label, vals in data.items()})
+
+    @classmethod
+    def from_pool_results(
+        cls,
+        pool_results: list[dict],
+        labels: list[str],
+    ) -> "ReferenceDistribution":
+        """Build a reference distribution from score_pool() output.
+
+        Used for parity testing (AC-43.2): constructing the reference from the
+        pool's own label scores makes score_single() reproduce score_pool() ranks.
+
+        Parameters
+        ----------
+        pool_results:
+            Output of BlendScorer.score_pool() — list of result dicts.
+        labels:
+            Label names in manifest order (same as BlendScorer.labels).
+        """
+        return cls(
+            {
+                label: np.array(
+                    [r["label_scores"][label] for r in pool_results],
+                    dtype=np.float64,
+                )
+                for label in labels
+            }
+        )
+
+    @classmethod
+    def from_file(cls, path: "str | Path") -> "ReferenceDistribution":
+        """Load from a JSON file at ScoringConfig.reference_dist_path.
+
+        The file must contain a JSON object mapping label names to lists of
+        floats (the banked per-label label-score distribution from training).
+        Keys starting with '_' are treated as metadata and skipped.
+        """
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        label_data = {k: v for k, v in data.items() if not k.startswith("_") and isinstance(v, list)}
+        return cls.from_dict(label_data)
 
 
 def _percentile_rank(scores: np.ndarray) -> np.ndarray:
@@ -221,3 +350,76 @@ class BlendScorer:
             )
 
         return results
+
+    def score_single(
+        self,
+        features: dict,
+        ref_dist: "ReferenceDistribution",
+    ) -> dict:
+        """Score ONE token against a frozen reference distribution (AC-43.2).
+
+        Implements the same rank-average blend recipe as score_pool(), but ranks
+        the token's per-label scores against the reference distribution instead
+        of a live pool.  This resolves the cutover risk (oracle §4.2): live
+        serving arrives one token at graduation with no same-day pool.
+
+        The reference distribution is loaded from ScoringConfig.reference_dist_path
+        (Principle #1 — config-driven) and banked from training data.
+
+        Parameters
+        ----------
+        features:
+            Feature dict for the single token.  Keys must cover self.feature_list;
+            missing keys default to 0.0 (same convention as score_pool()).
+        ref_dist:
+            Frozen ReferenceDistribution providing per-label score arrays for
+            percentile ranking.  Typically loaded via
+            ReferenceDistribution.from_file(config.scoring.reference_dist_path).
+
+        Returns
+        -------
+        dict:
+            {
+              "label_scores": {label: float},   # per-label seed-averaged prediction
+              "label_ranks":  {label: float},   # percentile-rank vs reference, (0, 1]
+              "blend_score":  float,             # mean of the 3 label ranks
+            }
+
+        Parity invariant (AC-43.2):
+            If ref_dist == ReferenceDistribution.from_pool_results(
+                    scorer.score_pool(features_list), scorer.labels),
+            then for any token i in the pool:
+                score_single(features_list[i], ref_dist)["label_ranks"]
+                    == score_pool(features_list)[i]["label_ranks"]
+            because ref_dist contains the same label scores as the pool, so the
+            count-based rank formula yields identical values.
+        """
+        feature_names = self._feature_list
+        X = np.array(
+            [[float(features.get(feat, 0.0)) for feat in feature_names]],
+            dtype=np.float64,
+        )  # shape (1, F)
+
+        # Step 1: per-label seed-average (same formula as score_pool)
+        label_scores_out: dict[str, float] = {}
+        for label in self._labels:
+            label_bsts = self._boosters[label]
+            preds = np.array(
+                [bst.predict(X)[0] for bst in label_bsts],
+                dtype=np.float64,
+            )  # shape (n_seeds,)
+            label_scores_out[label] = float(preds.mean())
+
+        # Step 2: percentile-rank each label score against the reference distribution
+        label_ranks_out: dict[str, float] = {}
+        for label in self._labels:
+            label_ranks_out[label] = ref_dist.percentile_rank(label, label_scores_out[label])
+
+        # Step 3: blend = mean of the 3 label ranks
+        blend_score = float(np.mean(list(label_ranks_out.values()), dtype=np.float64))
+
+        return {
+            "label_scores": label_scores_out,
+            "label_ranks": label_ranks_out,
+            "blend_score": blend_score,
+        }
