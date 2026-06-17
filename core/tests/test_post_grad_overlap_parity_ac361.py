@@ -70,7 +70,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core.tape.helius_birth_tape_source import decode_helius_notification
-from tools.helius_birth_tape_activate import load_birth_tape_fixture
 
 # Import public constants + idempotent fixture-creator from the AC-34.3 module.
 # Importing this module also runs its module-level _ensure_fixture_exists(), which
@@ -80,6 +79,7 @@ from core.tests.test_birth_tape_live_fixture_ac343 import (
     GRADUATED_BT,
     _ensure_fixture_exists,
 )
+from tools.helius_birth_tape_activate import load_birth_tape_fixture
 
 # ---------------------------------------------------------------------------
 # Constants
