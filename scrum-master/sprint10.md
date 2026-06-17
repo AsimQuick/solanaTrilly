@@ -1,9 +1,8 @@
 # Sprint 10
 
 **Phase:** planning
-**Progress:** 3/6 stories | 11/18 ACs
-**Last Updated:** 2026-06-17T14:00:00+00:00
-**Last Updated By:** dev-team
+**Progress:** 4/6 stories | 12/18 ACs
+**Last Updated:** 2026-06-17T12:32:07+00:00
 
 ## Sprint Goal
 Open P6 — the FOUNDATIONAL research-first dashboard (PRD §13, build phase P6, the last unbuilt PRD pillar). P0–P5 + P7 are closed: the VPS staging stack is live on 8002 (P0), the config core is the single source of truth (P1), detection lands graduated 'tokens' (P2), the tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + 'swaps' mirror with live↔backfill byte-parity (P3), the score-time snapshot + three-unit lock (P4), the integrity core — one vendored feature library (tape_microstructure.py), one shared deterministic extractor serving live+offline+replay, and the T0/G1/G2 golden-parity hard merge gate making live==offline BY CONSTRUCTION (P5) — the Helius program-wide birth-tape source making v3.2's 20 pre_* features live-computable (sprint-8), and the P7 scorer/serving path (sprint-9): the model-agnostic feature-contract reconciler (US-41), the ModelRegistry + 15-booster BLEND write contract (US-42), the one shared deterministic BlendScorer with the oracle §4.2 cutover risk resolved (US-43), and the 'scores in sync' scorer-parity gate against v3.2's banked golden score vectors (US-44). What remains of the PRD's THREE pillars is the THIRD — the research-first dashboard (§13), which solanaBilly never had and which the operator explicitly demanded ('the UI is terrible. I can't even see what's happening with the positions'; 'guide the modeling agents with visualizations only I can see and a machine can't'). Sprint-10 OPENS P6 and meets its offline gate ('operator sees real candles for a replayed token'): (US-48) the dashboard FOUNDATION — React + Vite served by DRF + Django Channels realtime (NOT server-rendered tables; solanaBilly's Flask/DataTables UI is IGNORED, built fresh per §14), the 'frontend' dev container (§15.1) added to BOTH compose files (Docker Rules, scoped -p solanatrilly), and a Channels consumer pushing tape/candle/position deltas from the ONE tape source (§13.4 — one source, no separate price feed to drift), deployed + smoke-tested on the VPS (P6 DoD = live on VPS, not green locally); (US-49) the token-detail / research view — a tape→candle API (1s/5s/15s/1m OHLC derived from the lake via the SAME shared US-30 extractor path / raw lake — Principle #2, never a separate price basis) + the view rendering a replayed token's real candle with buy/sell-pressure & net-flow overlay, t0/score markers, AND the exact feature vector the model saw + its score (from the US-43 BlendScorer / US-44 banked golden vectors) — THIS MEETS the P6 offline gate; (US-50) the cohort small-multiples pattern-mining wall — a grid of mini candle sparklines, groupable/sortable by outcome, score band, exit trigger, depth bucket, and time-of-day (the 'winners share this shape / rugs share this pre-entry tape' research instrument); (US-51) human annotation → labeled export (§13.3, the killer feature) — the annotations table (PRD §8: mint, author, tags[], note, created_at) + a tag panel beside the chart (free-text + categorical: 'classic rug shape', 'slow bleed', 'clean ignition', 'fakeout pop', 'organic') storing on mint, and an EXPORT to the labs as a labeled dataset (mirroring the §6.5 Feature Builder export, off the celery container per #289) — turning visual pattern-recognition into a feature/label source. PLUS the two agent-actionable sprint-9 carries: (US-46 / I1) a CLEAN re-deploy of US-43 (the 15-booster blend serving path) to the VPS solanatrilly staging stack from a clean green run, resolving the failed per-story deploy (run 27673867804) so the VPS has the scorer live BEFORE the operator-driven soak (I2); (US-47 / I4) close the AI dev-agent / ruff hook gap — G3 made the hook unforgeable for human/devcontainer paths (H2 CONFIRMED) but 4 sprint-9 lint defects (F401/I001) still occurred in AI-agent commits that bypass local pre-commit hooks; add a structural mechanism so violations are caught before the CI Lint step, making the gate as unforgeable for agents as G3 made it for humans. FIREHOSE: P6 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — ALL dashboard data comes from the EXISTING lake + ReplaySource + the US-43 BlendScorer / US-44 banked golden vectors; ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched). DEFERRED (forward_plan, NOT committed here to avoid the over-commitment the retrospectives repeatedly warn against on heavy phases): I2 the operator-driven P7-3 SOAK and I3 the ENDGAME (both operator-driven, not sprint stories); the REMAINING dashboard views (Live Positions board §13.2#1, Calibration & PnL analytics §13.2#4, Replay viewer §13.2#5, Config/model control §13.2#6, Feature Builder UI §13.2#7) — Live Positions and Calibration require P8 position/PnL data that does not exist until the trading engine lands; and the P8 trading-execution path (PRD §10), gated behind the soak/endgame. Build order: US-46 and US-47 are independent process/deploy carries (may run first / in parallel). The dashboard chain is sequential: US-48 (stack + one-feed) → US-49 (candles + token detail = the P6 gate) → US-50 (cohort wall) and US-51 (annotation) both depend on US-49 and may run in parallel after it.
@@ -217,22 +216,20 @@ Open P6 — the FOUNDATIONAL research-first dashboard (PRD §13, build phase P6,
 ---
 
 ### US-49: P6 OFFLINE GATE — token detail / research view: a tape→candle API (1s/5s/15s/1m OHLC) from the shared US-30 extractor / raw lake + the view rendering a replayed token's real candle with pressure/net-flow overlay, t0/score markers, AND the exact feature vector + score the model saw ('operator sees real candles for a replayed token', PRD §13.2#2)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-49.1:** A tape→candle API derives 1s/5s/15s/1m OHLC candles for a token from the lake via the SAME shared US-30 extractor path / raw lake — NEVER a separate price basis (Principle #2; PRD §13.2#2; the §14 'one coordinated price-basis pass' warning). The candle intervals are config-driven (Principle #1). Verified by a pytest test that, over a banked lake/replay fixture, the candle endpoint returns deterministic OHLC for each interval (run-twice byte/value-identical) and that the candle basis resolves to the shared extractor / raw lake (a structural assertion there is no candle-local price source).
   - Dev: done
 - [x] **AC-49.2:** The token-detail / research view renders a REPLAYED token's REAL candle (TradingView Lightweight Charts) with a buy/sell-pressure & net-flow overlay and t0/score markers — MEETING the P6 offline gate: 'operator sees real candles for a replayed token.' Deterministic over a banked lake/replay fixture. Verified by a pytest/component test asserting the view assembles the candle series + overlay + markers from the candle API (AC-49.1) for a banked replay token, deterministically and OFFLINE (zero firehose).
   - Dev: done
-- [ ] **AC-49.3:** The view also surfaces the EXACT feature vector the model saw + its score — sourced from the US-43 BlendScorer / the US-44 banked golden vectors (the parity-checked score, never a re-implemented one; 'scores in sync'). The displayed feature vector is the same one the shared US-30 extractor produced (Principle #2 — what the operator sees IS what the model saw). Verified by a pytest test that the view's displayed feature vector + score match the BlendScorer/golden-vector output for the banked token within the documented tolerance, run-twice identical. The token-detail tests are wired into the canonical ci.yml 'test' job via an ImportError trap on the named candle/detail functions (H1). New files carry metadata front matter.
+- [x] **AC-49.3:** The view also surfaces the EXACT feature vector the model saw + its score — sourced from the US-43 BlendScorer / the US-44 banked golden vectors (the parity-checked score, never a re-implemented one; 'scores in sync'). The displayed feature vector is the same one the shared US-30 extractor produced (Principle #2 — what the operator sees IS what the model saw). Verified by a pytest test that the view's displayed feature vector + score match the BlendScorer/golden-vector output for the banked token within the documented tolerance, run-twice identical. The token-detail tests are wired into the canonical ci.yml 'test' job via an ImportError trap on the named candle/detail functions (H1). New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-48, US-43, US-30
 
-**Dev Team Status:** in-progress
+**Dev Team Status:** not-started
 **Dev Team Notes:**
-  AC-49.3 done: Implemented `build_score_panel(feature_vector, scorer, ref_dist)` in `core/dashboard/token_detail.py` (US-43 BlendScorer path, never re-implemented). Updated `build_token_detail` to accept optional `scorer`/`ref_dist` params and return `score_panel` key (None when scorer not provided). 10 tests in `core/tests/test_token_detail_ac493.py`: H1 import trap, 2 AST structural tests, no-network-imports check, 4 parity tests against golden vectors (atol=0.0, run-twice identical), 2 integration tests (with/without scorer). All 1525 tests pass, coverage 84.57%.
-  - blocker-type: none
-
   AC-49.1 done: The implementation for AC-49.1 was already completed by the previous dev agent across two commits on this branch, and is fully wired, tested, and pushed. Local HEAD (`6443487`) matches `origin/feature/US-49-AC-49.1` — nothing more to commit or push.
   
   ## Implementation Summary — US-49 AC-49.1 (tape→candle API)
@@ -251,6 +248,21 @@ Open P6 — the FOUNDATIONAL research-first dashboard (PRD §13, build phase P6,
   ### Files (8 changed, +966 lines vs `main`)
   - **`core/dashboard/token_detail.py`** (new, 150 lines) — the assembler. `build_overlay()` derives per-candle buy/sell-pressure & net-flow from raw lake rows using the **same** mint filter, `(block_time, slot, signature)` stable sort, and `_lake_row_to_micro` normalization as `build_candles`/the US-30 extractor (Principle #2, one price basis). `build_token_detail()` joins candles (via `build_candles`, AC-49.1) + overlay + t0/score markers (`t0` = first swap block_time, `score_time` = t0 + `score_at_elapsed_s`). No network imports.
   - **`core/views.py`** — adds `token_detail_api(request, mint)` for `GET /api/token-detail/<mint>/?inter …
+  AC-49.3 done: The branch is pushed and up to date. The implementation is complete.
+  
+  ---
+  
+  **Implementation Summary — AC-49.3**
+  
+  **Files changed (3):**
+  
+  - **`core/dashboard/token_detail.py`** — Added `build_score_panel(feature_vector, scorer, ref_dist)` function that routes a pre-extracted feature vector through the US-43 BlendScorer's `score_single()` and returns `{"feature_vector": ..., "score": {...}}` (never a re-implementation). Added `FeatureExtractor` and `compute_pregrad_features` imports. Updated `build_token_detail` to accept optional `scorer`/`ref_dist` params; when provided, extracts pregrad features via `FeatureExtractor._load_lake_swaps` + `compute_pregrad_features` (the US-30 extractor path, Principle #2) and populates `score_panel` in the returned dict. Front-matter updated to include `US-49 AC-49.3`.
+  
+  - **`core/views.py`** — Front-matter updated to include `US-49 AC-49.3`. No logic changes (scorer defaults to None in web container; score_panel returns null in JSON).
+  
+  - **`core/tests/test_token_detail_ac493.py`** *(new)* — 10 tests:
+    1. `test_import_trap_build_score_panel_ac493` — H1 import trap (deleting `build_score_panel` fails collection)
+    2. `test_token_detail_imports_featur …
 
 **Tester Status:** approved
 **Tester Notes:**
