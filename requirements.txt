@@ -31,6 +31,9 @@ numpy>=1.24,<3                   # vendored tape_microstructure feature math (US
 pyyaml>=6.0,<7                   # YAML parsing (used in topology tests)
 django-simple-history>=3.7,<4    # audit trail for PipelineConfig (US-9 AC-9.2)
 
+# Scorer / ML (in-container — Docker Rules; NEVER installed on host)
+lightgbm>=4.0,<5                 # 15-booster blend scorer (US-42 AC-42.2); runs inside the solanatrilly container only
+
 # Dev / Test
 pytest>=8.0
 pytest-django>=4.8
