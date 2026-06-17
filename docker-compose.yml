@@ -1,11 +1,11 @@
 # ---
 # file: docker-compose.yml
-# stack: django+channels+celery+listener
+# stack: django+channels+celery+listener+react+vite
 # purpose: Local development services — all services containerised (Docker Rules)
 # created-by: dev-team
 # sprint: sprint-1
-# story: US-1 AC-1.1, US-1 AC-1.4, US-16 AC-16.3
-# last-updated: 2026-06-15
+# story: US-1 AC-1.1, US-1 AC-1.4, US-16 AC-16.3, US-48 AC-48.1
+# last-updated: 2026-06-17
 # ---
 #
 # Env values use ${VAR:-default} interpolation.
@@ -121,5 +121,22 @@ services:
       redis:
         condition: service_healthy
 
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    command: npm run dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      NODE_ENV: development
+      VITE_BACKEND_URL: http://web:8000
+    depends_on:
+      - web
+
 volumes:
   pgdata:
+  frontend_node_modules:
