@@ -2,25 +2,60 @@
 file: scrum-master.md
 purpose: Current sprint status board + controlled vocabulary for solanaTrilly
 owner: product-owner
-last-updated: 2026-06-16
+last-updated: 2026-06-17
 -->
 
 # solanaTrilly — Scrum Master Board
 
-> 🔮 **PO: before planning sprint-8, READ [`oracle-direction.md`](oracle-direction.md).** It sets the
-> road from P5 → the endgame (promote `trilly_pregrad_v3_2` + start the firehose). Key points it proves:
-> (1) the model we promote scores **pre-graduation** behavior, so we need a **Helius program-wide
-> birth-tape source** (per-mint Birdeye structurally cannot capture birth); (2) the dead-token
-> unsubscribe is already built (`core/tape/idle_kill.py`) but needs a **two-tier idle TTL** (a flat 5-min
-> kill violates the `idle_kill_ttl_s ≥ outcome.window_s` D4 invariant); (3) v3.2 is a **15-booster
-> rank-blend**, not the single ONNX — the serving path + `model_registry` write contract must support it.
-> All config-driven; the anti-drift parity gate (US-32) extends to the new source.
+> 🔮 **[`oracle-direction.md`](oracle-direction.md) is the ACTIVE road to the endgame** (promote
+> `trilly_pregrad_v3_2` + start the firehose) — **sprint-8 is planned directly from it.** Key points it
+> proves: (1) the model we promote scores **pre-graduation** behavior, so we need a **Helius program-wide
+> birth-tape source** (per-mint Birdeye structurally cannot capture birth) — **sprint-8 US-34**; (2) the
+> dead-token unsubscribe is already built (`core/tape/idle_kill.py`) but needs a **two-tier idle TTL** (a
+> flat 5-min kill violates the `idle_kill_ttl_s ≥ outcome.window_s` D4 invariant) — **sprint-8 US-35**;
+> (3) v3.2 is a **15-booster rank-blend**, not the single ONNX — the serving path + `model_registry` write
+> contract must support it — **deferred to sprint-9 (P7), surfaced now in [`sprint8.json`](sprint8.json)
+> `forward_plan`**. All config-driven; the anti-drift parity gate (US-32) extends to the new source
+> (**sprint-8 US-36**).
 
-## Sprint-7 — Open P5 (Lake + Extraction Contract + Vendored Math + Feature Builder + T0/G1/G2 Golden Parity, §6.4 / §7.2 / §7.6) — PLANNING
+## Sprint-8 — Open P6: Pre-graduation Birth-tape Ingestion (the gap that blocks promotion) + Two-tier Idle + Parity Extension (oracle §1–§5) — PLANNING
 - **Phase:** planning
+- **Sprint plan (source of truth):** [`sprint8.json`](sprint8.json)
+- **PRD / direction:** [`PRD.md`](PRD.md) §6.4 / §13 + [`oracle-direction.md`](oracle-direction.md) — opens **P6** by closing the architecture gap that **blocks model promotion**
+- **Why this sprint:** P0–P5 are closed — the integrity core (P5) makes live==offline **by construction** for the **Birdeye** tape. But the model the operator wants to promote (`trilly_pregrad_v3_2`) scores **pre-graduation** behavior (all 20 features are `pre_*`), and a **per-mint Birdeye `SUBSCRIBE_TXS` feed structurally cannot capture a token before its mint is known** — a *topology* problem, not a tuning one. Per [`oracle-direction.md`](oracle-direction.md) §1 this is **THE gap blocking promotion**, resolved by a **Helius program-wide `transactionSubscribe`** birth-tape source (the same single firehose solanaBilly runs 24/7), feeding the **same** P5 normalized schema + lake + extractor. Sprint-8 delivers that source (US-34), the **two-tier idle policy** that makes full-population capture affordable without violating the D4 label invariant (US-35), the **anti-drift parity gate extended** to the new source (US-36), the deferred **F5 Birdeye REST snapshot adapter** (US-37 / carry G2), **disk safety** under full-population capture (US-38), and the **process carries G3/G4** (US-39).
+- **Sprint goal:** **Open P6 — pre-graduation birth-tape ingestion.** In build order: **(1)** the **Helius program-wide birth-tape `DataSource`** behind the seam (Principle #7) — `source:"helius_live"`, additive alongside Birdeye, decoding create/buy/sell/migration into the one §6.4/§7.1 normalized schema → the **same** P5 lake + shared extractor; first live bring-up is **one** budgeted, ledgered Helius activation (Helius **9→8**) banking a real pre-grad→graduation golden fixture (US-34); **(2)** the **two-tier idle policy** — a new `tape.pre_grad_idle_kill_ttl_s` (~300 s, ungraduated kill) + the **protected** `tape.idle_kill_ttl_s` (≥ `outcome.window_s`, D4 kept), config-driven in `core/schemas.py`, `reattach:true` both (US-35); **(3)** **extend the US-32 parity gate** — post-grad overlap byte-identity vs Birdeye + pre-grad raw-truth self-consistency + a **MANIFEST** gate; "sources in sync" becomes a standing DoD line (US-36); **(4)** the deferred **F5** live Birdeye REST `SnapshotDataSource` adapter, proven offline against a banked real snapshot (US-37); **(5)** the **daily VPS→lake ship + ≤7-day retention sweep** for disk safety (US-38); **(6)** **process hardening** — make the ruff hook **unforgeable** (G3) + **prove** the F2 phase-promoter runs in the deploy sequence (G4) (US-39). **Firehose:** only US-34 spends — one budgeted Helius activation (9→8); all other gates are offline (8 Birdeye banked). **Deferred to sprint-9 (P7):** the feature-contract reconciliation against v3.2's 20 `pre_*` features + the 15-booster blend serving/`model_registry` write contract (surfaced now in `sprint8.json` `forward_plan` per oracle §4).
+
+## Stories (sprint-8 — committed scope)
+| ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
+|----|-------|----------|------|-----|--------|-----|--------|
+| US-34 | P6a — Helius program-wide birth-tape `DataSource`: pre-graduation ingestion behind the seam (oracle §1) | high | US-19, US-30, US-16 | 3 | planned | not-started | not-started |
+| US-35 | P6b — two-tier idle policy: `pre_grad_idle_kill_ttl_s` (~300 s) + the protected post-grad TTL, config-driven (oracle §2, D4) | high | US-34, US-11, US-20 | 3 | planned | not-started | not-started |
+| US-36 | Extend the US-32 T0/G2 parity gate to `helius_live` + a MANIFEST gate (oracle §3) | high | US-32, US-34 | 3 | planned | not-started | not-started |
+| US-37 | F5/G2 — the deferred live Birdeye REST `SnapshotDataSource` adapter, proven offline against a banked real snapshot | high | US-24, US-25 | 3 | planned | not-started | not-started |
+| US-38 | Daily VPS→lake ship + ≤7-day retention sweep: disk safety under full-population capture (oracle §5) | high | US-19, US-34 | 3 | planned | not-started | not-started |
+| US-39 | Process hardening — G3: make the ruff hook unforgeable + G4: prove the F2 phase-promoter runs in the deploy sequence | high | US-33 | 3 | planned | not-started | not-started |
+
+> **Scope:** sprint-8 commits **6 stories / 18 ACs** — the P6a birth-tape ingestion epic (US-34) + the P6b two-tier idle policy (US-35) + the parity-gate extension (US-36) + the deferred F5 adapter (US-37) + disk safety (US-38) + process carries G3/G4 (US-39). Source of truth: [`sprint8.json`](sprint8.json). On exit, solanaTrilly captures **every token from birth** with `live==offline` parity extended to the new source, and the remaining road to promotion is the **P7 serving path** (sprint-9; see `sprint8.json` `forward_plan`).
+
+**Build order:** **US-34 first** — the birth-tape source everything downstream eats (it carries the one budgeted Helius activation). **US-37** (F5 adapter) and **US-39** (process) are independent and may run in parallel. Then **US-35** (two-tier idle) needs US-34; **US-36** (parity extension) needs US-34 + US-32; **US-38** (disk ship/sweep) needs US-34 + US-19. The offline gates (US-36/37/38) do **not** depend on the live activation, so an aborted/short Helius window never blocks P6 exit.
+
+**GitHub Issues:** created at sprint-8 kickoff (2026-06-17), one per story, mirroring the prior convention —
+[US-34 #146](https://github.com/AsimQuick/solanaTrilly/issues/146) ·
+[US-35 #147](https://github.com/AsimQuick/solanaTrilly/issues/147) ·
+[US-36 #148](https://github.com/AsimQuick/solanaTrilly/issues/148) ·
+[US-37 #149](https://github.com/AsimQuick/solanaTrilly/issues/149) ·
+[US-38 #150](https://github.com/AsimQuick/solanaTrilly/issues/150) ·
+[US-39 #151](https://github.com/AsimQuick/solanaTrilly/issues/151).
+Source of truth remains [`sprint8.json`](sprint8.json).
+
+---
+
+## Sprint-7 — Open P5 (Lake + Extraction Contract + Vendored Math + Feature Builder + T0/G1/G2 Golden Parity, §6.4 / §7.2 / §7.6) — REVIEW COMPLETE
+- **Phase:** done
 - **Sprint plan (source of truth):** [`sprint7.json`](sprint7.json)
 - **PRD:** [`PRD.md`](PRD.md) — delivers **P5 (the integrity core, §6.4)**: parity by construction so a model's live score equals its offline score
-- **Previous sprint:** [`sprint6.json`](sprint6.json) — **closed** (review complete; **P4 score-time snapshot + units-lock delivered, Tester-approved 17/17 ACs**; one DoD item — the clean final HEAD deploy — carried as F3; project advanced to P5 — see Sprint-6 Review below + [`retrospective.md`](retrospective.md) action items F1–F5)
+- **Review outcome:** **All 6 stories / 18 ACs implemented, merged CI-green, and Tester-approved** across PRs #127–#145. The **full P5 integrity core is delivered** — `tape_microstructure.py` vendored verbatim + the G1 function-parity gate (US-28); the hashed/versioned `feature_sets` contract with the live_servable/training_only split (US-29); the **one shared deterministic extractor** serving live+offline+replay, leak-free by the causal cutoff (US-30); the one-click Feature Builder + manifest off the `celery` container (US-31); and the **T0/G1/G2 source-parity hard merge gate** (US-32). **Process hardening landed (US-33): F2 mechanized phase-promotion, F4 mechanized the ruff gate, and F3 closed the carried sprint-6 DoD VPS clause — the clean final HEAD deploy ran GREEN** (run 27654478462: 200 on 8002 at attempt 2/12, listener Up, solanaBilly untouched on 8001). Sprint goal **met.** The recurring stale-`phase` deploy trip (D2→E1→F2, three consecutive sprints) is now mechanically prevented. Project advances to **P6 (dashboard, §13)** — **PO: read [`oracle-direction.md`](oracle-direction.md) before planning sprint-8** (it sets the road P5 → promote `trilly_pregrad_v3_2` + start the firehose). See Sprint-7 Review below + [`retrospective.md`](retrospective.md) action items G1–G4.
+- **Previous sprint:** [`sprint6.json`](sprint6.json) — **closed** (review complete; **P4 score-time snapshot + units-lock delivered, Tester-approved 17/17 ACs**; one DoD item — the clean final HEAD deploy — carried as F3, **now closed in sprint-7**; project advanced to P5 — see Sprint-6 Review below + [`retrospective.md`](retrospective.md) action items F1–F5)
 - **Project state:** owned by Project Lead — `../project-state.json`
 - **Why this sprint:** P0–P4 are closed — the VPS staging stack is live on 8002, the config core (P1) is the single source of truth, P2 lands graduated `tokens`, P3's recorder captures every PumpSwap swap from t0 into the immutable `jsonl.gz` lake + the queryable `swaps` mirror with live↔backfill byte-parity, and P4 takes one on-demand score-time snapshot per token with the three-unit lock. Retrospective **F1** directs **P5 (the lake + extraction contract + vendored math + Feature Builder + T0/G1/G2 golden parity, §6.4 / §7.2 / §7.6)** as the **primary deliverable** — THE integrity core that makes live==offline **by construction** (one vendored feature library, one deterministic extractor serving live+offline+replay, a golden-parity merge gate) and fixes the evidenced solanaBilly disaster (23% live vs 78% offline precision purely from assembly drift, #358/#359/#367). Process carries: **F2** — *mechanize* phase-promotion (the stale-`phase` deploy has tripped the US-13 guard **three consecutive sprints**; a checklist has proven not to work); **F4** — *mechanize* the ruff gate (I001/E501/F401 churn, five sprints running); **F3** — confirm a clean final deploy at true HEAD closing the carried sprint-6 VPS clause. **F5** (the live Birdeye REST snapshot adapter) is **consciously deferred to sprint-8**, scheduled near where the scorer (P7) consumes it — a single REST read off the P5 critical path, kept out of sprint-7 to avoid over-commitment on the heaviest phase.
 
@@ -42,18 +77,19 @@ fixture (Helius 10→9), the gate offline-by-construction (8 Birdeye remain bank
 ## Stories (sprint-7 — committed scope)
 | ID | Title | Priority | Deps | ACs | Status | Dev | Tester |
 |----|-------|----------|------|-----|--------|-----|--------|
-| US-28 | P5 — vendor `tape_microstructure.py` verbatim (§7.2) + G1 function-parity gate (§7.6) | high | US-17 | 3 | ready | not-started | — |
-| US-29 | P5 — `feature_sets` table + deterministic hashed/versioned FeatureSet + live_servable/training_only split (§6.4.5, §8) | high | US-5, US-9 | 3 | ready | not-started | — |
-| US-30 | P5 — shared deterministic extractor: raw lake → vendored `compute_features`, one code path, leak-free cutoff (§6.4.4) | high | US-28, US-29, US-19 | 3 | ready | not-started | — |
-| US-31 | P5 — Feature Builder: one-click CSV/parquet + manifest off the `celery` container (§6.5) | high | US-30 | 3 | ready | not-started | — |
-| US-32 | P5 — T0/G2 source-parity gate: Birdeye live↔backfill byte-parity + Helius raw-truth, hard merge gate (§7.6) | high | US-28, US-30, US-19, US-20 | 3 | ready | not-started | — |
-| US-33 | Process — mechanize phase-promotion (F2) + ruff gate (F4) + clean HEAD deploy (F3) | high | US-13 | 3 | ready | not-started | — |
+| US-28 | P5 — vendor `tape_microstructure.py` verbatim (§7.2) + G1 function-parity gate (§7.6) | high | US-17 | 3 | done | done | **approved** |
+| US-29 | P5 — `feature_sets` table + deterministic hashed/versioned FeatureSet + live_servable/training_only split (§6.4.5, §8) | high | US-5, US-9 | 3 | done | done | **approved** |
+| US-30 | P5 — shared deterministic extractor: raw lake → vendored `compute_features`, one code path, leak-free cutoff (§6.4.4) | high | US-28, US-29, US-19 | 3 | done | done | **approved** |
+| US-31 | P5 — Feature Builder: one-click CSV/parquet + manifest off the `celery` container (§6.5) | high | US-30 | 3 | done | done | **approved** |
+| US-32 | P5 — T0/G2 source-parity gate: Birdeye live↔backfill byte-parity + Helius raw-truth, hard merge gate (§7.6) | high | US-28, US-30, US-19, US-20 | 3 | done | done | **approved** |
+| US-33 | Process — mechanize phase-promotion (F2) + ruff gate (F4) + clean HEAD deploy (F3) | high | US-13 | 3 | done | done | **approved** |
 
 > **Scope:** sprint-7 commits **6 stories / 18 ACs** — the full P5 integrity core (US-28…US-32) plus the
-> process-hardening carries (US-33: F2/F3/F4). Source of truth: [`sprint7.json`](sprint7.json). On P5 exit, the
-> golden-parity gate (T0/G1/G2) gates every PR by byte-identity and the Feature Builder produces the labs' CSV
-> input; the project advances to **P6 (dashboard, §13)**. **F5** (the live Birdeye REST snapshot adapter) is
-> **deferred to sprint-8**.
+> process-hardening carries (US-33: F2/F3/F4). Source of truth: [`sprint7.json`](sprint7.json). **Review
+> outcome: all 6 stories Tester-approved (18/18 ACs); P5 is delivered** — the golden-parity gate (T0/G1/G2)
+> now gates every PR by byte-identity and the Feature Builder produces the labs' CSV input. The project
+> advances to **P6 (dashboard, §13)**. **F5** (the live Birdeye REST snapshot adapter) remains **deferred to
+> sprint-8**, scheduled near where the scorer consumes it (carried as G2).
 
 **Build order:** **US-28 first** — the vendored math everything downstream eats. **US-29** (FeatureSet table) and
 **US-33** (process) are independent and may run in parallel. Then **US-30** (extractor) needs US-28 + US-29 (+ the
@@ -327,6 +363,30 @@ A story is Done only when ALL of the following hold:
 - Hard isolation from live solanaBilly preserved (every docker command scoped with `-p solanatrilly`; solanaBilly on port 8001 untouched)
 - **Status integrity enforced (retrospective B4):** no story/AC reads `status: done` while its `tester_status` is `failed`/`blocked`; stale `phase`/`dev_status` fields are normalized at review.
 - `retrospective.md` updated for sprint-3 — **named owner: Tester / scrum facilitator** (retrospective A3)
+
+## Sprint-7 Review — Summary (2026-06-17)
+**Phase:** done | **Committed scope:** US-28…US-33 (6 stories, 18 ACs) | **Goal:** **met — P5 (integrity core) delivered; process carries F2/F3/F4 all closed**
+**Full retrospective + action items (G1–G4):** [`retrospective.md`](retrospective.md)
+
+**Outcome:** **All 6 stories / 18 ACs implemented, merged CI-green, and Tester-approved** across PRs #127–#145. The **P5 integrity core (§6.4) is delivered** — the thing that makes a model's live score **equal** its offline score *by construction*, the fix for the evidenced solanaBilly disaster (23% live vs 78% offline precision purely from feature-assembly drift, #358/#359/#367). **And for the first time the three recurring process scars were closed mechanically, not by checklist:** F2 (phase-promotion automated), F4 (ruff gate mechanized), and F3 (the clean final HEAD deploy ran GREEN) — the stale-`phase` deploy trip that failed three consecutive sprints (D2→E1→F2) is now structurally prevented. The project advances to **P6 (dashboard, §13)**.
+
+**US-28 — the vendored math + the G1 function-parity gate.** `solanabilly3/src/tape_microstructure.py` is copied **verbatim** into `core/tape_microstructure.py` with the **one** sanctioned edit (`rels.ptp()`→`np.ptp(rels)` for numpy 2.x), preserving `compute_features(swaps, window_s=120, bucket_s=15) -> dict|None` and the full `tape_*` family; a metadata header documents the re-vendor rule (never hand-edit). The G1 gate runs the frozen ≈15-token golden fixture through the vendored math and asserts every feature within **1e-9** absolute, with the None-on-no-usable-swap contract verified (empty / out-of-window / zero-price / missing-price all → `None`, never a zero row) and the test wired into the canonical `ci.yml` `test` job via a compile-time `ImportError` trap (AC-21.3 pattern) so it cannot silently vanish.
+
+**US-29/30 — the extraction contract + the one shared extractor (Principle #2).** US-29 ships the `feature_sets` table (hashed config = ordered `columns[]` + `math_version`; same inputs → same SHA-256 hash, reorder or bump → different hash) with the `live_servable ⊆ columns` split (D2/D3; `tape_max_drawdown` is the designated training-only column) and a read-only admin. US-30 is the **single `FeatureExtractor`** that reads normalized swaps from the lake *and* the `swaps` mirror, orders by the stable `(block_time, slot, signature)` key, feeds the §7.1 subset to the vendored `compute_features`, and proves **byte-identical** feature dicts from the DB path and the `jsonl.gz` lake path for the same mint — the Principle #2 proof point that closes the assembly-drift class by construction. It is **leak-free by the causal cutoff** (swaps with `rel ≥ window_s` hard-rejected; boundary cases tested at `==`, `>`, `==window_s−ε`), stamps `_window_s` / `_feature_set_hash` / `_math_version`, and is **run-twice byte-identical**.
+
+**US-31/32 — the Feature Builder + the T0/G1/G2 hard merge gate.** US-31's `build_features` Celery task runs the **shared** US-30 extractor over the lake → CSV/parquet + an 8-field manifest (FeatureSet version+hash, sources, date range, cohort, row count, content hash, label def), **run-twice → byte-identical content hash**; it is registered (H2 manifest), runs off the `celery-worker` container (NEVER web/gunicorn — the #289 lesson) defined in **both** compose files, and **rejects at submission time** any label def drawing from within `[0, window_s)` (leak-free labels). US-32 is the **#1 merge gate**: G2(a) Birdeye live↔backfill byte-identity (swap-level **and** feature-level) on the banked sprint-5 golden token via an on-demand `seek_by_time` REST read (no firehose), G2(b) the Helius raw-truth cross-check over a banked fixture (100% signature coverage, 100% side parity, amount parity within tolerance), and the combined T0/G1/G2 suite trapped via `ImportError` on 5 named functions in the single canonical `ci.yml` job (H1). Coverage 88%.
+
+**US-33 — the process scars, mechanized.** **F2:** `tools/promote_sprint_phase.py` auto-promotes a stale `phase` (planning/in-progress + all stories done → `complete`) or blocks the deploy with a printed REMEDY, reproducing and closing the exact D2→E1→F2 failure (23 tests). **F4:** a `Makefile lint` target + `scripts/pre-commit.sh` + `install-hooks.sh` run `ruff check` inside the container and exit 1 on I001/E501/F401 — the churn that recurred five sprints. **F3:** the deploy workflow gained a "Verify listener container Up" step, and the final deploy (run 27654478462) confirmed **200 on 8002 (attempt 2/12 — the AC-12.3 retry-with-backoff working), listener Up, solanaBilly untouched on 8001** — closing the carried sprint-6 DoD VPS clause (re-issue of E5 / US-22 condition B), open since sprint-5.
+
+**Firehose.** **One** budgeted Helius activation spent for G2(b) — the single deliberate, time-boxed, ledgered (`ops/firehose_activation_log.md`) read that banked the durable raw-truth fixture (40 txs, 23 buy / 17 sell); **Helius 10→9**. The CI cross-check now runs **offline** against that fixture forever and never depends on a live read. The offline G1 + G2(a) gates spent **zero** activations. **8 Birdeye remain banked.**
+
+**Process notes — the irony worth recording.** The same ruff pattern (F401 AC-28.2, I001 AC-29.1, E501 AC-31.3) still surfaced *during the very sprint that mechanized the gate* — because the F4 pre-commit hook is developer-**opt-in** (must run `make install-hooks`) and CI ruff is the backstop that caught all three. Each was a one-line fix in ≤1 iteration; none reached pytest or production. The hook is built but not yet unforgeable (carried as G3). Otherwise: F2/F3 worked exactly as designed — the sprint-end deploy was clean for the first time in three sprints.
+
+**Defects:** lint-only (F401, I001, E501), each caught by CI/ruff and fixed in 1 iteration; none reached pytest or production. Coverage 88% vs. the ≥80% gate; 886 tests passing.
+
+**Carry into sprint-8 (priority order):** **G1** open **P6 (dashboard, §13)** — and per the board's standing note, **read `oracle-direction.md` before planning** (the road P5 → promote `trilly_pregrad_v3_2` + start the firehose: a Helius program-wide birth-tape source, a two-tier idle TTL, the 15-booster rank-blend serving path) · **G2** build + prove the deferred **F5** live Birdeye REST `SnapshotDataSource` adapter near where the scorer consumes it · **G3** make the F4 ruff hook **unforgeable** (auto-install or container-entrypoint) so it isn't opt-in · **G4** confirm the F2 promoter is wired into the orchestrator's actual deploy sequence (proven on the next sprint-end deploy), not just a standalone tested tool. See `retrospective.md` G1–G4.
+
+**Metrics:** 6 stories committed · **6 fully Tester-approved** (18/18 ACs) · **P5 delivered** · PRs #127–#145, CI `test` green at merge · final HEAD deploy **GREEN** (run 27654478462; 200 on 8002 at attempt 2/12, listener Up, solanaBilly untouched on 8001) — the carried F3/E5 VPS clause **closed** · **1 firehose activation** (Helius **10→9**, G2(b) raw-truth fixture banked; 8 Birdeye banked) · 3 lint defects (F401/I001/E501) caught by CI and fixed in 1 iteration each · 886 tests · coverage 88% (≥80% gate). Token/cost spend: see `../project-state.json` (Project Lead).
 
 ## Sprint-6 Review — Summary (2026-06-16)
 **Phase:** done (corrected from a stale `planning` at review) | **Committed scope:** US-23…US-27 (5 stories, 17 ACs) | **Goal:** **met — P4 (score-time snapshot + units locked) delivered**
