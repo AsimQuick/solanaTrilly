@@ -184,7 +184,7 @@
     {
       "id": "US-50",
       "title": "P6 \u2014 the cohort small-multiples pattern-mining wall: a grid of mini candle sparklines groupable/sortable by outcome, score band, exit trigger, depth bucket, and time-of-day ('winners share this shape / rugs share this pre-entry tape', PRD \u00a713.2#3)",
-      "status": "to-do",
+      "status": "in-progress",
       "priority": "medium",
       "dependencies": [
         "US-49"
@@ -193,8 +193,8 @@
         {
           "id": "50.1",
           "text": "A cohort endpoint returns a grid of mini candle sparklines for a corpus of tokens, each sparkline derived from the SAME tape\u2192candle path as US-49 (Principle #2 \u2014 no cohort-local candle basis; reuse the shared extractor / raw lake). Rendered from the EXISTING lake/replay corpus, OFFLINE (zero firehose). Verified by a pytest test that, over a banked corpus fixture, the cohort endpoint returns the expected set of sparkline series deterministically (run-twice identical).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "pending"
         },
         {
@@ -213,7 +213,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-50.1 done: **Implementation summary \u2014 AC-50.1**\n\n**Files changed (4):**\n\n- `core/dashboard/cohort_api.py` *(new)* \u2014 `build_cohort_sparklines(rows, mints, interval_s)` returns a cohort sparkline grid. Reuses `build_candles()` from `core.dashboard.candle_api` for every token (Principle #2 \u2014 same tape\u2192candle path as US-49, no cohort-local price basis). Mints absent from the lake get empty candle lists (real-missing preserved, no fabrication). No network imports; OFFLINE by construction.\n\n- `core/views.py` *(modified)* \u2014 added `cohort_api(request)` view for `GET /api/cohort/?interval_s=<int>[&mints=<comma-list>]`. Reads supported intervals from `DashboardConfig.candle_intervals_s` (Principle #1). When `mints` param is omitted, discovers all unique mints from the lake (sorted for determinism). Delegates to `build_cohort_sparklines()`.\n\n- `core/urls.py` *(modified)* \u2014 registers `path(\"api/cohort/\", views.cohort_api, name=\"cohort_api\")`.\n\n- `core/tests/test_cohort_api_ac501.py` *(new)* \u2014 **20 tests**: H1 ImportError trap (fails collection if `build_cohort_sparklines` is deleted), AST structural assertion that `cohort_api.py` imports `build_candles` from `core.dashboard.candle_api` (Principle #2 proo \u2026",
       "tester_status": "approved",
       "tester_notes": "Requirements approved. AC-50.1: cohort endpoint returning sparkline grid from the same tape\u2192candle path as US-49 is a concrete reuse requirement, verifiable by pytest determinism test over a banked corpus fixture. AC-50.2: all five grouping/sort dimensions are named; the degradation rule ('omitted/empty, never a crash or fabricated value') is precisely stated and testable (pytest asserts non-None/non-crash for missing exit-trigger field); config-driven boundary aligns with Principle #1. AC-50.3: ImportError trap on named cohort function, consistent with the standing H1 gate pattern. The 'run-twice identical' requirement across all three ACs is clear and consistent with established parity conventions. All 3 ACs are testable and independently verifiable."
     },
@@ -268,5 +268,5 @@
     ]
   },
   "build_order": "US-46 (I1 clean US-43 redeploy) and US-47 (I4 AI-agent ruff gate) are independent process/deploy carries and may run FIRST / in parallel. The dashboard chain is SEQUENTIAL: US-48 (the React+Vite + DRF + Channels stack + the frontend dev container in both compose files + the ONE-tape-feed consumer) -> US-49 (the tape->candle API + the token-detail/research view = the P6 OFFLINE GATE 'operator sees real candles for a replayed token'). After US-49, US-50 (the cohort pattern-mining wall) and US-51 (human annotation -> labeled export) both depend ONLY on US-49 and may run in parallel. Every dashboard AC is independently verifiable OFFLINE/replay against the existing lake + ReplaySource + the US-43/US-44 banked artifacts \u2014 ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked). P6 is offline/replay-driven by construction.",
-  "last_updated": "2026-06-17T12:32:07+00:00"
+  "last_updated": "2026-06-17T12:41:17+00:00"
 }
