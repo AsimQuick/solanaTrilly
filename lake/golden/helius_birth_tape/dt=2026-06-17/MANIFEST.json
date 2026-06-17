@@ -1,0 +1,13 @@
+{
+  "content_hash": "213553075636fe659e628a74a05ebae652b0e69bd4ccace3890b28c6e0ea2f01",
+  "dataset_id": "helius_birth_tape_pregrad_golden_dt2026-06-17",
+  "date_range": {
+    "end": "2026-06-17",
+    "start": "2026-06-17"
+  },
+  "mint_cohort": [
+    "6SdsCkVYLUUz9gbrpFxRJE2QCjHmvAMWK8Nsh9MZLh2b"
+  ],
+  "row_count": 6,
+  "source": "helius_live"
+}
