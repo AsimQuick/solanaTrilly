@@ -71,7 +71,7 @@ def test_normalized_swap_has_all_required_fields():
 # ---------------------------------------------------------------------------
 
 def test_valid_sources_vocabulary():
-    assert VALID_SOURCES == {"birdeye_live", "birdeye_backfill", "helius_verify"}
+    assert VALID_SOURCES == {"birdeye_live", "birdeye_backfill", "helius_verify", "helius_live"}
 
 
 def test_valid_phases_vocabulary():

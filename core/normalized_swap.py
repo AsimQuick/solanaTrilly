@@ -1,16 +1,16 @@
 # ---
 # module: core.normalized_swap
-# sprint: sprint-5
-# story: US-17 AC-17.3
-# status: implemented
+# sprint: sprint-8
+# story: US-34 AC-34.1
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-17
 # dependencies: dataclasses, typing, core.encoders
 # ---
 """NormalizedSwap — the one schema the vendored feature math will eat (PRD §7.1).
 
 This is the single canonical representation of a recorded PumpSwap swap.
-All tape sources (birdeye_live, birdeye_backfill, helius_verify) produce
+All tape sources (birdeye_live, birdeye_backfill, helius_verify, helius_live) produce
 NormalizedSwap instances; all downstream consumers (feature assembly, scorer,
 lake writer, DB writer) read NormalizedSwap instances.
 
@@ -23,8 +23,8 @@ from typing import Optional
 
 from core.encoders import JsonSafeEncoder
 
-# Constrained vocabularies (PRD §7.1, AC-17.3)
-VALID_SOURCES = frozenset({"birdeye_live", "birdeye_backfill", "helius_verify"})
+# Constrained vocabularies (PRD §7.1, AC-17.3, AC-34.1)
+VALID_SOURCES = frozenset({"birdeye_live", "birdeye_backfill", "helius_verify", "helius_live"})
 VALID_PHASES = frozenset({"pre", "post"})
 VALID_SIDES = frozenset({"buy", "sell"})
 
@@ -58,7 +58,7 @@ class NormalizedSwap:
     quote_mint: str
 
     # Provenance
-    source: str         # "birdeye_live" | "birdeye_backfill" | "helius_verify"
+    source: str         # "birdeye_live" | "birdeye_backfill" | "helius_verify" | "helius_live"
     phase: str          # "pre" | "post"
 
     def __post_init__(self) -> None:
