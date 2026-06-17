@@ -80,6 +80,11 @@ class ScoringConfig(BaseModel):
     # §5.2 invariant: capture_buffer_s >= 3 (enforced here + in cross-section validator)
     capture_buffer_s: int = Field(default=4, ge=3)
     gate: Literal["adaptive_topk"] = "adaptive_topk"
+    # AC-43.2: path to the frozen reference distribution JSON file used for
+    # live single-token percentile ranking (resolves the cutover risk: no same-day
+    # pool at graduation).  None means pool-based scoring only (no live single-token
+    # path).  Principle #1 — the path is config-driven, never hard-coded in scorer.py.
+    reference_dist_path: Optional[str] = None
 
 
 class OutcomeConfig(BaseModel):
