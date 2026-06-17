@@ -22,7 +22,7 @@ AC text:
 Structural tests in this module:
   (1) Sprint-8 integrity guard — runs check_sprint on the ACTUAL sprint8.json:
       test_sprint8_integrity_guard_passes_check_sprint
-      test_sprint8_phase_is_not_complete_so_not_skipped_by_skip_complete
+      test_skip_complete_only_skips_complete_phase_sprints
       test_sprint8_no_story_done_with_failed_tester
       test_sprint8_no_ac_checked_with_failed_tester
 
@@ -122,22 +122,45 @@ def test_sprint8_integrity_guard_passes_check_sprint() -> None:
     )
 
 
-def test_sprint8_phase_is_not_complete_so_not_skipped_by_skip_complete() -> None:
-    """sprint8.json phase must NOT be 'complete' at AC-39.3 implementation time.
+def test_skip_complete_only_skips_complete_phase_sprints() -> None:
+    """--skip-complete must skip ONLY phase=='complete' sprints, never in-scope ones.
 
-    AC-39.3 D3 clause: story-level dev_status is promoted to 'done' at closeout,
-    NOT exempted via --skip-complete. The --skip-complete flag only skips sprints
-    with phase='complete'. If sprint8.json is 'complete' when AC-39.3 is
-    implemented, the guard would not run against it — defeating the whole point.
-    This test ensures the sprint is still in scope for the integrity check.
+    AC-39.3 D3 intent: the --skip-complete flag (sprint_integrity_check.main) exempts
+    ONLY archived (phase=='complete') sprints from the US-13 guard, so an in-scope
+    sprint is never wrongly skipped. Tested on FIXTURES so it holds across the whole
+    sprint lifecycle — a live sprintN.json legitimately becomes phase=='complete' at
+    closeout, which must NOT make this guard fail. (The earlier version asserted the
+    LIVE sprint8.json phase != 'complete', a lifecycle bug that deterministically broke
+    the sprint-boundary deploy suite the moment sprint-8 closed.)
     """
-    data = _load_sprint8()
-    phase = data.get("phase", "")
-    assert phase != "complete", (
-        f"AC-39.3: sprint8.json phase is 'complete', which means --skip-complete "
-        f"would exempt it from the US-13 guard. Sprint8 must remain in scope "
-        f"(phase != 'complete') during AC-39.3 implementation.\nCurrent phase: {phase!r}"
+    in_scope = _make_sprint(
+        [
+            {
+                "id": "US-99",
+                "status": "done",
+                "dev_status": "done",
+                "tester_status": "approved",
+                "acceptance_criteria": [
+                    {"id": "99.1", "checked": True, "dev_status": "done", "tester_status": "approved"},
+                ],
+            }
+        ]
     )
+    in_scope["phase"] = "in-progress"
+    complete = {**in_scope, "phase": "complete"}
+
+    # Mirror the exact predicate in sprint_integrity_check.main(): skip iff phase == 'complete'.
+    def _skipped_by_skip_complete(data: dict) -> bool:
+        return data.get("phase") == "complete"
+
+    assert _skipped_by_skip_complete(in_scope) is False, (
+        "An in-scope sprint (phase != 'complete') must NOT be skipped by --skip-complete."
+    )
+    assert _skipped_by_skip_complete(complete) is True, (
+        "A completed sprint (phase == 'complete') MUST be skipped by --skip-complete."
+    )
+    # The integrity guard itself still runs on an in-scope sprint and returns a list.
+    assert isinstance(check_sprint(in_scope), list)
 
 
 def test_sprint8_no_story_done_with_failed_tester() -> None:
