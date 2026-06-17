@@ -1,16 +1,18 @@
 # ---
 # module: core.views
 # sprint: pre-sprint, sprint-10
-# story: setup, US-48 AC-48.3, US-49 AC-49.1, US-49 AC-49.2, US-49 AC-49.3
+# story: setup, US-48 AC-48.3, US-49 AC-49.1, US-49 AC-49.2, US-49 AC-49.3, US-50 AC-50.1
 # status: implemented
 # created-by: project-lead
 # last-updated: 2026-06-17
-# dependencies: django, core.dashboard.candle_api, core.dashboard.token_detail, core.tape.lake_reader,
+# dependencies: django, core.dashboard.candle_api, core.dashboard.cohort_api,
+#               core.dashboard.token_detail, core.tape.lake_reader,
 #               core.schemas, core.resolver
 # ---
 from django.http import HttpResponse, JsonResponse
 
 from core.dashboard.candle_api import build_candles
+from core.dashboard.cohort_api import build_cohort_sparklines
 from core.dashboard.token_detail import build_token_detail
 from core.schemas import DashboardConfig
 from core.tape.lake_reader import LakeReader
@@ -175,3 +177,87 @@ def token_detail_api(request, mint: str):
     detail = build_token_detail(rows, mint, interval_s, score_at_elapsed_s)
 
     return JsonResponse(detail)
+
+
+def cohort_api(request):
+    """Cohort sparkline API: mini candle sparklines for a corpus of tokens (AC-50.1).
+
+    GET /api/cohort/?interval_s=<int>[&mints=<mint1>,<mint2>,...]
+
+    Principle #2 — ONE price basis: sparklines are derived via build_cohort_sparklines()
+    which reuses build_candles() (the shared US-49 tape→candle path / raw lake).
+    There is NO cohort-local price basis.
+
+    Principle #1 — config-driven intervals: the supported interval set comes from
+    DashboardConfig.candle_intervals_s (get_active_config()) — never literals here.
+
+    Query params:
+        interval_s (int, required): candle interval in seconds.
+                   Must be in the config-driven supported-intervals set.
+        mints      (str, optional): comma-separated list of mint addresses.
+                   When omitted, all unique mints found in the lake are used.
+
+    Response (200):
+        {
+          "interval_s": <int>,
+          "count":      <int>,
+          "sparklines": [
+            {"mint": str, "candles": [{"t", "open", "high", "low", "close", "vol", "interval_s"}, ...]},
+            ...
+          ]
+        }
+
+    Response (400): invalid/unsupported interval_s.
+    """
+    # 1. Resolve supported intervals from config (Principle #1 — no literals).
+    try:
+        from core.resolver import get_active_config  # noqa: PLC0415
+        config = get_active_config()
+        dash: DashboardConfig = config.dashboard if config is not None else DashboardConfig()
+    except Exception:
+        dash = DashboardConfig()
+    supported: list[int] = dash.candle_intervals_s
+
+    # 2. Parse and validate interval_s.
+    raw_interval = request.GET.get("interval_s", "")
+    if not raw_interval:
+        return JsonResponse(
+            {"error": f"interval_s is required; supported values: {supported}"},
+            status=400,
+        )
+    try:
+        interval_s = int(raw_interval)
+    except ValueError:
+        return JsonResponse(
+            {"error": f"interval_s must be an integer; supported values: {supported}"},
+            status=400,
+        )
+    if interval_s not in supported:
+        return JsonResponse(
+            {"error": f"interval_s={interval_s} not in supported set {supported}"},
+            status=400,
+        )
+
+    # 3. Read raw lake rows — the SAME raw lake as candle_api (Principle #2).
+    reader = LakeReader()
+    rows = list(reader.iter_rows())
+
+    # 4. Resolve the mint corpus: explicit list from query param, or all unique
+    #    mints in the lake (sorted for determinism).
+    raw_mints = request.GET.get("mints", "")
+    if raw_mints:
+        mints = [m.strip() for m in raw_mints.split(",") if m.strip()]
+    else:
+        seen: set[str] = set()
+        mints = []
+        for r in rows:
+            m = r.get("mint", "")
+            if m and m not in seen:
+                seen.add(m)
+                mints.append(m)
+        mints.sort()
+
+    # 5. Build sparklines — reuses the shared build_candles path (Principle #2).
+    result = build_cohort_sparklines(rows, mints, interval_s)
+
+    return JsonResponse(result)
