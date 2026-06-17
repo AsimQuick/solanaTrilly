@@ -26,12 +26,11 @@ from __future__ import annotations
 import gzip
 import json
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from core.tape.manifest import build_manifest, compute_content_hash, write_manifest
-
 
 # ---------------------------------------------------------------------------
 # Result type
