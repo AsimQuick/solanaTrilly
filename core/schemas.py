@@ -1,7 +1,7 @@
 # ---
 # module: core.schemas
 # sprint: sprint-3, sprint-8
-# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1
+# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -68,6 +68,8 @@ class TapeConfig(BaseModel):
     birdeye_interval_s: int = Field(default=15, gt=0)
     # US-38 AC-38.1: ship window — how many trailing days to ship per beat run (≤7)
     lake_ship_window_days: int = Field(default=1, gt=0, le=7)
+    # US-38 AC-38.2: retention window — partitions older than this many days are expired (≤7)
+    lake_retention_days: int = Field(default=7, gt=0, le=7)
 
 
 class ScoringConfig(BaseModel):
