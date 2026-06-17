@@ -1,11 +1,11 @@
 # ---
 # module: core.feature_extractor
-# sprint: sprint-7
-# story: US-30 AC-30.1, AC-30.2, AC-30.3
+# sprint: sprint-7, sprint-9
+# story: US-30 AC-30.1, AC-30.2, AC-30.3, US-41 AC-41.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
-# dependencies: core.tape_microstructure, core.models
+# dependencies: core.tape_microstructure, core.pregrad_features, core.models
 # ---
 """FeatureExtractor — ONE deterministic code path for live and offline features.
 
@@ -38,6 +38,7 @@ the entire lake.
 """
 from __future__ import annotations
 
+from core.pregrad_features import compute_pregrad_features
 from core.tape_microstructure import compute_features
 
 
@@ -144,6 +145,70 @@ class FeatureExtractor:
             return None
         return {
             **features,
+            "_feature_set_hash": self._feature_set.hash,
+            "_math_version": self._feature_set.math_version,
+        }
+
+    # ------------------------------------------------------------------
+    # Pre-graduation (pre_*) buyer-cohort feature extractors (US-41 AC-41.2)
+    # ------------------------------------------------------------------
+
+    def extract_pregrad_from_lake(
+        self,
+        mint: str,
+        rows: list[dict],
+        *,
+        deployer: str | None = None,
+    ) -> dict | None:
+        """Extract the 20 pre_* buyer-cohort features from pre-graduation lake rows.
+
+        Reuses the same _load_lake_swaps adapter as extract_from_lake, then
+        delegates to compute_pregrad_features (which selects only rel < 0 swaps).
+
+        Args:
+            mint:     Token mint address to filter.
+            rows:     Raw lake rows (same format as extract_from_lake accepts).
+            deployer: Optional deployer wallet for pre_deployer_* features.
+
+        Returns:
+            Dict of 20 pre_* features with feature-set stamps, or None if no
+            pre-graduation swaps are present for *mint*.
+        """
+        swaps = self._load_lake_swaps(mint, rows)
+        result = compute_pregrad_features(swaps, deployer=deployer)
+        if result is None:
+            return None
+        return {
+            **result,
+            "_feature_set_hash": self._feature_set.hash,
+            "_math_version": self._feature_set.math_version,
+        }
+
+    def extract_pregrad_from_db(
+        self,
+        mint: str,
+        *,
+        deployer: str | None = None,
+    ) -> dict | None:
+        """Extract the 20 pre_* buyer-cohort features from pre-graduation DB rows.
+
+        Reuses the same _load_db_swaps adapter as extract_from_db, then
+        delegates to compute_pregrad_features (which selects only rel < 0 swaps).
+
+        Args:
+            mint:     Token mint address.
+            deployer: Optional deployer wallet for pre_deployer_* features.
+
+        Returns:
+            Dict of 20 pre_* features with feature-set stamps, or None if no
+            pre-graduation swaps exist in the DB for *mint*.
+        """
+        swaps = self._load_db_swaps(mint)
+        result = compute_pregrad_features(swaps, deployer=deployer)
+        if result is None:
+            return None
+        return {
+            **result,
             "_feature_set_hash": self._feature_set.hash,
             "_math_version": self._feature_set.math_version,
         }
