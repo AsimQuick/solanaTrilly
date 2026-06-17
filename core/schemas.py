@@ -1,10 +1,10 @@
 # ---
 # module: core.schemas
-# sprint: sprint-3
-# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4
+# sprint: sprint-3, sprint-8
+# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-17
 # dependencies: pydantic>=2.0
 # ---
 """Pydantic v2 schema for the PipelineConfig tunable sections (PRD §5.1, §5.2).
@@ -47,11 +47,22 @@ class DetectionConfig(BaseModel):
 
 
 class TapeConfig(BaseModel):
-    """Tape recorder section: AMM programs, TTL, and Birdeye polling rate."""
+    """Tape recorder section: AMM programs, TTL, and Birdeye polling rate.
+
+    Two-tier idle policy (US-35 AC-35.1, oracle §2, PRD §5.2/D4):
+      pre_grad_idle_kill_ttl_s — aggressive kill for UNgraduated tokens (~300 s
+          default); exempt from the ≥ outcome.window_s floor because pre-grad
+          tokens carry no label obligation.  The recorder snaps to the protected
+          TTL at the graduation instant.
+      idle_kill_ttl_s — protected post-grad TTL; MUST stay ≥ outcome.window_s
+          (the D4 'never truncate a label' invariant, enforced in the cross-
+          section validator).
+    """
 
     amm_programs: list[str] = Field(
         default_factory=lambda: ["pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"]
     )
+    pre_grad_idle_kill_ttl_s: int = Field(default=300, gt=0)
     idle_kill_ttl_s: int = Field(gt=0)
     reattach: bool = True
     birdeye_interval_s: int = Field(default=15, gt=0)
