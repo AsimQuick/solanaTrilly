@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_idle_kill_ac202
-# sprint: sprint-5
-# story: US-20 AC-20.2
-# status: implemented
+# sprint: sprint-5, sprint-8
+# story: US-20 AC-20.2, US-35 AC-35.2
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-16
+# last-updated: 2026-06-17
 # dependencies: core.tape.idle_kill, core.tape.recorder, core.resolver,
 #               core.models, core.clock, core.datasource, asyncio, datetime, pytest
 # ---
@@ -81,6 +81,10 @@ def _tape_section(idle_kill_ttl_s: int) -> dict:
     return {
         "amm_programs": ["pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"],
         "idle_kill_ttl_s": idle_kill_ttl_s,
+        # AC-35.2: set equal to idle_kill_ttl_s so that both tiers fire at the
+        # same threshold — preserves all existing test semantics (no mark_graduated
+        # calls in these tests, so mints are "ungrad" and use pre_grad TTL).
+        "pre_grad_idle_kill_ttl_s": idle_kill_ttl_s,
         "reattach": True,
         "birdeye_interval_s": 15,
     }
