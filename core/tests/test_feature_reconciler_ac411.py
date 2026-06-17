@@ -58,15 +58,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Wiring guard — H1 ImportError trap
-# ---------------------------------------------------------------------------
-
-from core.feature_reconciler import (  # noqa: E402
+from core.feature_reconciler import (
     ReconcileResult,
     parse_lgbm_feature_names,
     reconcile_feature_contract,
 )
+
+# ---------------------------------------------------------------------------
+# Wiring guard — H1 ImportError trap
+# ---------------------------------------------------------------------------
+# The import block above IS the trap: if core.feature_reconciler is missing
+# or its names are renamed, pytest collection fails immediately (H1 contract).
 
 
 def test_reconcile_contract_importable():
