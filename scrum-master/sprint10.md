@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 4/6 stories | 14/18 ACs
-**Last Updated:** 2026-06-17T13:00:00+00:00
+**Last Updated:** 2026-06-17T12:56:36+00:00
 
 ## Sprint Goal
 Open P6 — the FOUNDATIONAL research-first dashboard (PRD §13, build phase P6, the last unbuilt PRD pillar). P0–P5 + P7 are closed: the VPS staging stack is live on 8002 (P0), the config core is the single source of truth (P1), detection lands graduated 'tokens' (P2), the tape recorder captures every PumpSwap swap from t0 into the immutable jsonl.gz lake + 'swaps' mirror with live↔backfill byte-parity (P3), the score-time snapshot + three-unit lock (P4), the integrity core — one vendored feature library (tape_microstructure.py), one shared deterministic extractor serving live+offline+replay, and the T0/G1/G2 golden-parity hard merge gate making live==offline BY CONSTRUCTION (P5) — the Helius program-wide birth-tape source making v3.2's 20 pre_* features live-computable (sprint-8), and the P7 scorer/serving path (sprint-9): the model-agnostic feature-contract reconciler (US-41), the ModelRegistry + 15-booster BLEND write contract (US-42), the one shared deterministic BlendScorer with the oracle §4.2 cutover risk resolved (US-43), and the 'scores in sync' scorer-parity gate against v3.2's banked golden score vectors (US-44). What remains of the PRD's THREE pillars is the THIRD — the research-first dashboard (§13), which solanaBilly never had and which the operator explicitly demanded ('the UI is terrible. I can't even see what's happening with the positions'; 'guide the modeling agents with visualizations only I can see and a machine can't'). Sprint-10 OPENS P6 and meets its offline gate ('operator sees real candles for a replayed token'): (US-48) the dashboard FOUNDATION — React + Vite served by DRF + Django Channels realtime (NOT server-rendered tables; solanaBilly's Flask/DataTables UI is IGNORED, built fresh per §14), the 'frontend' dev container (§15.1) added to BOTH compose files (Docker Rules, scoped -p solanatrilly), and a Channels consumer pushing tape/candle/position deltas from the ONE tape source (§13.4 — one source, no separate price feed to drift), deployed + smoke-tested on the VPS (P6 DoD = live on VPS, not green locally); (US-49) the token-detail / research view — a tape→candle API (1s/5s/15s/1m OHLC derived from the lake via the SAME shared US-30 extractor path / raw lake — Principle #2, never a separate price basis) + the view rendering a replayed token's real candle with buy/sell-pressure & net-flow overlay, t0/score markers, AND the exact feature vector the model saw + its score (from the US-43 BlendScorer / US-44 banked golden vectors) — THIS MEETS the P6 offline gate; (US-50) the cohort small-multiples pattern-mining wall — a grid of mini candle sparklines, groupable/sortable by outcome, score band, exit trigger, depth bucket, and time-of-day (the 'winners share this shape / rugs share this pre-entry tape' research instrument); (US-51) human annotation → labeled export (§13.3, the killer feature) — the annotations table (PRD §8: mint, author, tags[], note, created_at) + a tag panel beside the chart (free-text + categorical: 'classic rug shape', 'slow bleed', 'clean ignition', 'fakeout pop', 'organic') storing on mint, and an EXPORT to the labs as a labeled dataset (mirroring the §6.5 Feature Builder export, off the celery container per #289) — turning visual pattern-recognition into a feature/label source. PLUS the two agent-actionable sprint-9 carries: (US-46 / I1) a CLEAN re-deploy of US-43 (the 15-booster blend serving path) to the VPS solanatrilly staging stack from a clean green run, resolving the failed per-story deploy (run 27673867804) so the VPS has the scorer live BEFORE the operator-driven soak (I2); (US-47 / I4) close the AI dev-agent / ruff hook gap — G3 made the hook unforgeable for human/devcontainer paths (H2 CONFIRMED) but 4 sprint-9 lint defects (F401/I001) still occurred in AI-agent commits that bypass local pre-commit hooks; add a structural mechanism so violations are caught before the CI Lint step, making the gate as unforgeable for agents as G3 made it for humans. FIREHOSE: P6 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — ALL dashboard data comes from the EXISTING lake + ReplaySource + the US-43 BlendScorer / US-44 banked golden vectors; ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched). DEFERRED (forward_plan, NOT committed here to avoid the over-commitment the retrospectives repeatedly warn against on heavy phases): I2 the operator-driven P7-3 SOAK and I3 the ENDGAME (both operator-driven, not sprint stories); the REMAINING dashboard views (Live Positions board §13.2#1, Calibration & PnL analytics §13.2#4, Replay viewer §13.2#5, Config/model control §13.2#6, Feature Builder UI §13.2#7) — Live Positions and Calibration require P8 position/PnL data that does not exist until the trading engine lands; and the P8 trading-execution path (PRD §10), gated behind the soak/endgame. Build order: US-46 and US-47 are independent process/deploy carries (may run first / in parallel). The dashboard chain is sequential: US-48 (stack + one-feed) → US-49 (candles + token detail = the P6 gate) → US-50 (cohort wall) and US-51 (annotation) both depend on US-49 and may run in parallel after it.
@@ -283,44 +283,8 @@ Open P6 — the FOUNDATIONAL research-first dashboard (PRD §13, build phase P6,
 
 **Dependencies:** US-49
 
-**Dev Team Status:** in-progress
+**Dev Team Status:** not-started
 **Dev Team Notes:**
-  AC-50.2 done: **Implementation summary — AC-50.2**
-
-  **Files changed (4):**
-
-  - `core/schemas.py` — Added `CohortGroupingConfig` BaseModel before `DashboardConfig` with three
-    config-driven threshold fields: `score_band_thresholds` ([0.3, 0.7]), `depth_bucket_thresholds`
-    ([50.0, 200.0, 1000.0]), and `time_of_day_hour_boundaries` ([6, 12, 18]). Added
-    `cohort_grouping: CohortGroupingConfig` field to `DashboardConfig`. Updated front-matter to
-    include `US-50 AC-50.2`.
-
-  - `core/dashboard/cohort_grouping.py` *(new)* — Five-dimension grouping/sorting logic.
-    `assign_group_key(entry, group_by, cfg)` returns the group key for an entry under any of the
-    five VALID_GROUP_KEYS (outcome/score_band/exit_trigger/depth_bucket/time_of_day). All bucket
-    boundaries come exclusively from `CohortGroupingConfig` — zero numeric literals for thresholds
-    (verified by AST test). `apply_grouping(entries, group_by, sort_by, cfg)` partitions entries into
-    groups (non-None keys lexicographically first, None last) and sorts within groups when sort_by is
-    provided (None keys last). `derive_meta_from_rows(mint, rows)` derives t0/depth from lake rows;
-    outcome/score/exit_trigger are returned as None (H4 — real-missing, never fabricated). Full H4
-    compliance: all unavailable fields return None, no crash, no fabrication.
-
-  - `core/views.py` *(modified)* — Added import of `apply_grouping`, `derive_meta_from_rows`,
-    `VALID_GROUP_KEYS` from `core.dashboard.cohort_grouping`. Extended `cohort_api` view with step 6:
-    reads optional `group_by` and `sort_by` query params, validates them against VALID_GROUP_KEYS
-    (returns 400 on invalid key), derives metadata for each sparkline entry via
-    `derive_meta_from_rows`, and applies `apply_grouping()` enriching the response with
-    `group_by`/`sort_by`/`groups` fields. Config resolved from `get_active_config().dashboard.cohort_grouping`.
-
-  - `core/tests/test_cohort_grouping_ac502.py` *(new)* — **32 tests** covering: H1 import traps (2),
-    AST no-literals check (1), VALID_GROUP_KEYS constant (1), assign_group_key per dimension (10 tests
-    including boundary values and H4 missing-field tests), full partition correctness over the 4-token
-    banked corpus for all 5 grouping dimensions (5 tests), sort correctness + None-last ordering (2),
-    determinism run-twice (1), derive_meta_from_rows (3), config-driven threshold proofs (2), error
-    cases (2), structural invariants (2). All 32 pass.
-
-  - blocker-type: none
-
   AC-50.1 done: **Implementation summary — AC-50.1**
   
   **Files changed (4):**
@@ -332,6 +296,17 @@ Open P6 — the FOUNDATIONAL research-first dashboard (PRD §13, build phase P6,
   - `core/urls.py` *(modified)* — registers `path("api/cohort/", views.cohort_api, name="cohort_api")`.
   
   - `core/tests/test_cohort_api_ac501.py` *(new)* — **20 tests**: H1 ImportError trap (fails collection if `build_cohort_sparklines` is deleted), AST structural assertion that `cohort_api.py` imports `build_candles` from `core.dashboard.candle_api` (Principle #2 proo …
+  AC-50.2 done: All good. The implementation is complete and pushed to `feature/US-50-AC-50.2`.
+  
+  ---
+  
+  **Implementation summary — AC-50.2**
+  
+  **Files changed (4):**
+  
+  - `core/schemas.py` — Added `CohortGroupingConfig` model with three config-driven threshold fields: `score_band_thresholds` (default [0.3, 0.7]), `depth_bucket_thresholds` (default [50.0, 200.0, 1000.0]), `time_of_day_hour_boundaries` (default [6, 12, 18]). Added `cohort_grouping: CohortGroupingConfig` field to `DashboardConfig`. All bucket boundaries are Pydantic field defaults — no literals in grouping code (Principle #1).
+  
+  - `core/dashboard/cohort_grouping.py` *(new)* — Five-dimension grouping/sorting module. `VALID_GROUP_KEYS = {"outcome", "score_band", "exit_trigger", "depth_bucket", "time_of_day"}`. `assign_group_key(entry, group_by, cfg)` returns the group key or `None` for any unavailable field without crashing (H4). `apply_grouping(entries, group_by, sort_by, cfg)` partitions into groups (non-None keys lexicographically first, None last) and sorts within groups. `derive_meta_from_rows(mint, rows)` derives `t0`/`depth` from raw lake rows; `outcome`/`score`/`exit_trigger` are always `None` (not available offline — real-missing, n …
 
 **Tester Status:** approved
 **Tester Notes:**
