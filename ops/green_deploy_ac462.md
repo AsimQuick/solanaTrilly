@@ -4,7 +4,7 @@
 # purpose: AC-46.2 — Record of the green re-deploy of the US-43 blend serving path
 # story: US-46 AC-46.2
 # sprint: sprint-10
-# status: pending-run
+# status: green
 # created-by: dev-team
 # last-updated: 2026-06-17
 # ---
@@ -48,8 +48,7 @@ The deploy uses the US-40 unified workflow_call gate:
 
 ## Green Run Record
 
-<!-- To be filled by orchestrator after merge to main triggers the deploy -->
-GREEN_RUN_ID: PENDING
-GREEN_RUN_URL: PENDING
-GREEN_RUN_CONCLUSION: PENDING
-DEPLOY_TIMESTAMP: PENDING
+GREEN_RUN_ID: 27680808876
+GREEN_RUN_URL: https://github.com/AsimQuick/solanaTrilly/actions/runs/27680808876
+GREEN_RUN_CONCLUSION: success
+DEPLOY_TIMESTAMP: 2026-06-17T09:56:12Z
