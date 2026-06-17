@@ -7,6 +7,7 @@
     "core.tasks.birdeye_graduation_sweep",
     "core.tasks.build_features",
     "core.tasks.ship_lake_partitions",
-    "core.tasks.sweep_vps_lake_partitions"
+    "core.tasks.sweep_vps_lake_partitions",
+    "core.tasks.score_token"
   ]
 }
