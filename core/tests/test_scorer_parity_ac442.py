@@ -209,10 +209,8 @@ def test_scorer_parity_gate_importable_ac442() -> None:
     Module-level imports above constitute the primary trap; this test is the
     human-readable layer confirming both symbols resolve to callables.
     """
-    from core.scorer import BlendScorer as _BS, ReferenceDistribution as _RD
-
-    assert callable(_BS)
-    assert callable(_RD)
+    assert callable(BlendScorer)
+    assert callable(ReferenceDistribution)
 
 
 # ---------------------------------------------------------------------------
