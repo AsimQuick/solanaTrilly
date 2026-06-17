@@ -64,6 +64,26 @@ then build against it forever.
 | 2026-06-15 | dev-team | Birdeye SUBSCRIBE_TXS | First firehose spend (US-22 AC-22.2, retrospective D4): bank a real graduated pump.fun token's PumpSwap swap tape as the durable golden fixture the offline replay/parity suite runs against forever. | 3.7 min (≤ 30 min box) | 9 Birdeye / 10 Helius | `lake/golden/birdeye_subscribe_txs/dt=2026-06-15/E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump_pumpswap_golden.jsonl.gz` — 40 real PumpSwap (`source=pump_amm`) swaps for mint `E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump` (SPCX, a graduated pump.fun token), captured live, banked raw (immutable truth, §6.4.1). 23 buy / 17 sell, 40 distinct signatures, ~186 s of tape. |
 | 2026-06-16 | dev-team (operator) | Birdeye SUBSCRIBE_TXS | US-22 AC-22.3 end-to-end live proof: real PumpSwap swaps flow Birdeye SUBSCRIBE_TXS → BirdeyeSwapSource → map_birdeye_swap → TapeRecorder → `swaps` rows + jsonl.gz on the VPS `listener` container (`-p solanatrilly`). Proves the live recorder path that the offline US-21 replay/parity suite mirrors. | ≤ 150 s box | 8 Birdeye / 10 Helius | `swaps` table on VPS: 8 real `source=pump_amm` swaps for mint `H9L9apxE8RREZZgTaNLmGeUfCYJQfHBwQxuXzvPNpump` (graduated pump.fun token), recorded live (signer=owner, base/quote reserves NULL per §3.3/§7.1) + the AC-22.2 golden fixture remains the durable offline replay anchor. |
 | 2026-06-17 | dev-team | Helius Enhanced TX | US-32 AC-32.2 G2(b) raw-truth spot-check (§7.6): the project's ONE budgeted Helius activation. Fetched Helius Enhanced Transactions for the 40 Birdeye golden signatures (mint `E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump`), confirmed 40/40 coverage and 100% side-parity via pool-flow detection (pool account `DZxWcyPpTyr2NTfmEN2xAUSCb77t1ZLpkg63PbpbKmbC`). Banked as slim raw fixture. CI cross-check (`test_g2b_raw_truth_ac322.py`) runs OFFLINE forever — P5 gate never depends on a live Helius read. | 2s (≤ 30 min box) | 8 Birdeye / 9 Helius | `lake/golden/helius_decoded_txs/dt=2026-06-16/E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump_helius_g2b_raw.jsonl.gz` — 40 Helius-decoded PumpSwap txs (23 buy / 17 sell), token-transfer + native-transfer + account-change fields, raw = immutable truth (§6.4.1). |
+| 2026-06-17 | dev-team | Helius transactionSubscribe (program-wide) — INFRASTRUCTURE DELIVERY; live window PENDING | US-34 AC-34.3 birth-tape first live bring-up infrastructure: banked deterministic synthetic golden fixture and wired the offline CI gate. Live program-wide WS window budgeted for a 20-min box when opened; carries to next sprint per AC if aborted. Budget NOT consumed until the live window opens. | N/A — offline infrastructure delivery | 8 Birdeye / 9 Helius (unchanged — no live activation yet) | `lake/golden/helius_birth_tape/dt=2026-06-17/helius_birth_tape_pregrad_golden.jsonl.gz` — 6 deterministic synthetic Helius transactionNotification rows (3 pre-grad trades + 1 migrate + 2 post-grad trades) for mint `6SdsCkVYLUUz9gbrpFxRJE2QCjHmvAMWK8Nsh9MZLh2b` (sha256-derived, AC-34.3 golden anchor). CI gate (`test_birth_tape_live_fixture_ac343.py`) runs OFFLINE forever against this fixture — never needs a live read. |
+
+### Activation detail — 2026-06-17 Helius transactionSubscribe infrastructure (AC-34.3)
+
+- **Status:** Offline infrastructure delivered; live WS window PENDING (carries per AC).
+- **What was delivered:**
+  - `tools/helius_birth_tape_activate.py` — deliberate, time-boxed Helius transactionSubscribe
+    activation tool with `bank_notifications()` + `load_birth_tape_fixture()` pure helpers.
+  - `lake/golden/helius_birth_tape/dt=2026-06-17/helius_birth_tape_pregrad_golden.jsonl.gz` —
+    deterministic synthetic golden fixture: 6 Helius transactionNotification rows (3 pre-grad
+    TradeEvent buys/sells + 1 Migrate + 2 post-grad TradeEvent buys/sells) for
+    mint `6SdsCkVYLUUz9gbrpFxRJE2QCjHmvAMWK8Nsh9MZLh2b` (sha256-derived from seed
+    `helius_birth_tape_golden_mint_ac343`), graduation anchor `GRADUATED_BT=1_750_100_100`.
+  - `core/tests/test_birth_tape_live_fixture_ac343.py` — 11 offline tests that run against the
+    golden fixture; CI gate is OFFLINE by construction and never blocks on a live read.
+- **Budget:** No Helius activation consumed.  Budget remains **8 Birdeye / 9 Helius**.
+  The `Helius 9→8` decrement occurs when `connect_and_capture()` is invoked for the first time.
+- **Live window plan:** 20-min time-box, program-wide `transactionSubscribe` on
+  `6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P`.  Requires a graduating token within the
+  window.  Per AC-34.3: if the window is aborted/short the offline gates still gate the merge.
 
 ### Activation detail — 2026-06-17 Helius Enhanced TX (G2(b) AC-32.2)
 
