@@ -1,10 +1,10 @@
 # ---
 # module: core.models
-# sprint: sprint-7, sprint-9
+# sprint: sprint-7, sprint-9, sprint-10
 # story: US-5 AC-5.2, US-9 AC-9.1, US-9 AC-9.2, US-9 AC-9.3, US-10 AC-10.4,
 #        US-14 AC-14.1, US-14 AC-14.2, US-17 AC-17.1, US-17 AC-17.2,
 #        US-23 AC-23.1, US-29 AC-29.1, US-29 AC-29.2, US-29 AC-29.3,
-#        US-42 AC-42.1, US-43 AC-43.1
+#        US-42 AC-42.1, US-43 AC-43.1, US-51 AC-51.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -338,3 +338,22 @@ class ModelRegistry(models.Model):
     class Meta:
         app_label = "core"
         db_table = "model_registry"
+
+
+class Annotation(models.Model):
+    """Human annotation on a token (PRD §8, §13.3, US-51 AC-51.1).
+
+    A SEPARATE store keyed on mint — NEVER writes back into the raw lake (§6.4.1).
+    Multiple annotations per mint are retained (append-only by design).
+    tags uses JsonSafeEncoder for JSONB-safe storage.
+    """
+
+    mint = models.CharField(max_length=64, db_index=True)
+    author = models.CharField(max_length=128)
+    tags = models.JSONField(default=list, encoder=JsonSafeEncoder)
+    note = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "core"
+        db_table = "annotations"

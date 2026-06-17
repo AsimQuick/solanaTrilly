@@ -2,7 +2,7 @@
 # module: core.schemas
 # sprint: sprint-3, sprint-8, sprint-10
 # story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2;
-#        US-48 AC-48.2; US-49 AC-49.1; US-50 AC-50.2
+#        US-48 AC-48.2; US-49 AC-49.1; US-50 AC-50.2; US-51 AC-51.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -120,6 +120,25 @@ class CohortGroupingConfig(BaseModel):
     )
 
 
+class AnnotationConfig(BaseModel):
+    """Annotation tag panel config (AC-51.1, Principle #1).
+
+    categorical_tags: the operator-visible categorical tag set displayed in the
+      tag panel beside the chart. Config-driven so the operator can extend or
+      rename tags without touching code.
+    """
+
+    categorical_tags: list[str] = Field(
+        default_factory=lambda: [
+            "classic rug shape",
+            "slow bleed",
+            "clean ignition",
+            "fakeout pop",
+            "organic",
+        ]
+    )
+
+
 class DashboardConfig(BaseModel):
     """Dashboard realtime WebSocket section (PRD §13.4, AC-48.2, AC-49.1).
 
@@ -130,6 +149,9 @@ class DashboardConfig(BaseModel):
     candle_intervals_s (AC-49.1): the four supported tape→candle API intervals
     (1s/5s/15s/1m) served by the candle endpoint.  Config-driven so the operator
     can tune the set without touching code (Principle #1).
+
+    annotation (AC-51.1): categorical tag set for the annotation tag panel.
+    Config-driven so the operator can extend or rename tags without touching code.
     """
 
     ws_channel_prefix: str = "tape"
@@ -138,6 +160,7 @@ class DashboardConfig(BaseModel):
     candle_interval_s: int = Field(default=15, gt=0)
     candle_intervals_s: list[int] = Field(default_factory=lambda: [1, 5, 15, 60])
     cohort_grouping: CohortGroupingConfig = Field(default_factory=CohortGroupingConfig)
+    annotation: AnnotationConfig = Field(default_factory=AnnotationConfig)
 
 
 class TradingConfig(BaseModel):

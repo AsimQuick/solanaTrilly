@@ -1,16 +1,23 @@
 # ---
 # module: core.views
 # sprint: pre-sprint, sprint-10
-# story: setup, US-48 AC-48.3, US-49 AC-49.1, US-49 AC-49.2, US-49 AC-49.3, US-50 AC-50.1, US-50 AC-50.2, US-50 AC-50.3
+# story: setup, US-48 AC-48.3, US-49 AC-49.1, US-49 AC-49.2, US-49 AC-49.3,
+#        US-50 AC-50.1, US-50 AC-50.2, US-50 AC-50.3, US-51 AC-51.1
 # status: implemented
 # created-by: project-lead
 # last-updated: 2026-06-17
 # dependencies: django, core.dashboard.candle_api, core.dashboard.cohort_api,
 #               core.dashboard.cohort_wall, core.dashboard.token_detail, core.tape.lake_reader,
-#               core.schemas, core.resolver, core.dashboard.cohort_grouping
+#               core.schemas, core.resolver, core.dashboard.cohort_grouping,
+#               core.dashboard.annotation_api
 # ---
-from django.http import HttpResponse, JsonResponse
+import json
 
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+
+from core.dashboard.annotation_api import get_annotations, save_annotation
 from core.dashboard.candle_api import build_candles
 from core.dashboard.cohort_grouping import VALID_GROUP_KEYS
 from core.dashboard.cohort_wall import build_cohort_wall
@@ -285,3 +292,90 @@ def cohort_api(request):
     result = build_cohort_wall(rows, mints, interval_s, group_by=raw_group_by, sort_by=raw_sort_by, cfg=grouping_cfg)
 
     return JsonResponse(result)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def annotation_list(request, mint: str):
+    """List all annotations for *mint* (AC-51.1).
+
+    GET /api/annotations/<mint>/
+
+    Returns all annotations for the given mint, ordered by created_at ascending.
+    Never reads from or mutates the raw lake.
+
+    Response (200):
+        [
+          {
+            "mint": str,
+            "author": str,
+            "tags": [str, ...],
+            "note": str,
+            "created_at": str (ISO-8601)
+          },
+          ...
+        ]
+    """
+    annotations = get_annotations(mint)
+    data = [
+        {
+            "mint": a.mint,
+            "author": a.author,
+            "tags": a.tags,
+            "note": a.note,
+            "created_at": a.created_at.isoformat(),
+        }
+        for a in annotations
+    ]
+    return JsonResponse(data, safe=False)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def annotation_create(request, mint: str):
+    """Create an annotation for *mint* (AC-51.1).
+
+    POST /api/annotations/<mint>/create/
+    Body (JSON): {"author": str, "tags": [str, ...], "note": str}
+
+    Creates a new annotation keyed on mint. NEVER writes to the raw lake (§6.4.1).
+    Multiple annotations per mint are allowed and retained (append-only).
+
+    Response (201):
+        {
+          "mint": str,
+          "author": str,
+          "tags": [str, ...],
+          "note": str,
+          "created_at": str (ISO-8601)
+        }
+
+    Response (400): missing required fields or invalid JSON.
+    """
+    try:
+        body = json.loads(request.body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return JsonResponse({"error": f"Invalid JSON body: {exc}"}, status=400)
+
+    author = body.get("author", "").strip()
+    if not author:
+        return JsonResponse({"error": "author is required"}, status=400)
+
+    tags = body.get("tags", [])
+    if not isinstance(tags, list):
+        return JsonResponse({"error": "tags must be a list"}, status=400)
+
+    note = body.get("note", "")
+
+    annotation = save_annotation(mint=mint, author=author, tags=tags, note=note)
+
+    return JsonResponse(
+        {
+            "mint": annotation.mint,
+            "author": annotation.author,
+            "tags": annotation.tags,
+            "note": annotation.note,
+            "created_at": annotation.created_at.isoformat(),
+        },
+        status=201,
+    )
