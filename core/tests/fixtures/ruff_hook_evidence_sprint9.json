@@ -1,0 +1,110 @@
+{
+  "schema": "ruff_hook_evidence/v1",
+  "sprint": "sprint-9",
+  "observation_date": "2026-06-17",
+  "referenced_by": "US-45 AC-45.1",
+  "sprint_start_commit": "5d6e578",
+  "sprint_9_first_commits": [
+    {
+      "sha": "cb990e7",
+      "story": "US-40",
+      "ac": "40.1",
+      "subject": "AC-40.1: Diagnose WHY deploy.yml inline 'Run tests with coverage' step fails (exit 1)"
+    },
+    {
+      "sha": "ab65e8f",
+      "story": "US-40",
+      "ac": "40.2",
+      "subject": "AC-40.2: structural test verifying H1 single-canonical-test-job invariant"
+    },
+    {
+      "sha": "15acdaa",
+      "story": "US-40",
+      "ac": "40.3",
+      "subject": "AC-40.3: structural test verifying deliberate boundary-deploy"
+    },
+    {
+      "sha": "eee132f",
+      "story": "US-41",
+      "ac": "41.1",
+      "subject": "AC-41.1: reconciliation utility compares P5 FeatureSet against v3.2 meta.json"
+    },
+    {
+      "sha": "a8e1836",
+      "story": "US-41",
+      "ac": "41.2",
+      "subject": "AC-41.2: live_servable[] coverage — all 20 v3.2 pre_* features computed live"
+    },
+    {
+      "sha": "7e9c932",
+      "story": "US-41",
+      "ac": "41.3",
+      "subject": "AC-41.3: promote_model.py hard gate + H1 ImportError trap"
+    },
+    {
+      "sha": "7f73b66",
+      "story": "US-42",
+      "ac": "42.1",
+      "subject": "AC-42.1: ModelRegistry table + at-most-one-active discipline + 30 tests"
+    },
+    {
+      "sha": "332b9fe",
+      "story": "US-42",
+      "ac": "42.2",
+      "subject": "AC-42.2: promote_model.py accepts 15-booster BLEND + feature-order gate"
+    },
+    {
+      "sha": "b2aabcf",
+      "story": "US-42",
+      "ac": "42.3",
+      "subject": "AC-42.3: No silent auto-promote / no silent trading auto-start"
+    },
+    {
+      "sha": "d7b7fc8",
+      "story": "US-43",
+      "ac": "43.1",
+      "subject": "AC-43.1: shared deterministic 15-booster rank-average blend scorer (BlendScorer)"
+    },
+    {
+      "sha": "2c8b117",
+      "story": "US-43",
+      "ac": "43.2",
+      "subject": "AC-43.2: deterministic live single-token scoring against frozen reference distribution"
+    },
+    {
+      "sha": "068a6df",
+      "story": "US-43",
+      "ac": "43.3",
+      "subject": "AC-43.3: scorer seam wiring — score_token task, replay-testable serving path, H1 guard"
+    },
+    {
+      "sha": "1b5e62d",
+      "story": "US-44",
+      "ac": "44.1",
+      "subject": "AC-44.1: bank v3.2 golden score vectors + MANIFEST + fixture integrity gate"
+    },
+    {
+      "sha": "dfa49c7",
+      "story": "US-44",
+      "ac": "44.2",
+      "subject": "AC-44.2: serving path reproduces v3.2's golden score vectors within documented tolerance"
+    },
+    {
+      "sha": "e88dc48",
+      "story": "US-44",
+      "ac": "44.3",
+      "subject": "AC-44.3: fold scorer-parity into combined parity suite via ImportError trap ('scores in sync' HARD MERGE GATE)"
+    }
+  ],
+  "ci_auto_install_step_name": "Auto-install git hooks (AC-39.1)",
+  "ci_auto_install_command": "bash scripts/install-hooks.sh",
+  "mechanism": "ci.yml 'test' job runs 'bash scripts/install-hooks.sh' BEFORE the 'Lint' step ('ruff check .') on every CI run. This ensures the hook is installed in CI regardless of the developer's local .git/hooks/ state. The devcontainer postCreateCommand mirrors this for local development.",
+  "ruff_defects_in_sprint9": [],
+  "observation": "All 15 sprint-9 implementation commits (US-40 through US-44, first commits of sprint-9) passed the CI 'Lint' step (ruff check .) without any I001/E501/F401 defect. No ruff CI failure in sprint-9 was attributable to a missing local hook. The G3 unforgeable ruff gate (AC-39.1) stopped the seven-sprint I001/E501/F401 recurrence: the CI auto-install step fires install-hooks.sh before every ruff check, making the gate independent of local developer hook state.",
+  "verdict": "CONFIRMED",
+  "verdict_detail": "G3 unforgeable ruff gate stopped the recurrence. Sprint-9's first commits (US-40 through US-44, 15 implementation commits) all passed ruff CI with zero I001/E501/F401 defects. The auto-install mechanism (devcontainer postCreateCommand + CI install-hooks.sh step) fired on every CI run, independently of local .git/hooks/ state.",
+  "evidence_type": "retrospective_observation",
+  "observer": "dev-team",
+  "story": "US-45",
+  "ac": "45.1"
+}
