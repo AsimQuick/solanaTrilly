@@ -1,8 +1,9 @@
 # ---
 # file: deploy.yml
 # stack: django
-# purpose: CD pipeline — on push to main runs hardened CI, builds/pushes web image to GHCR,
-#          then deploys to VPS staging stack (-p solanatrilly, port 8002) and smoke-tests it
+# purpose: CD pipeline — on DELIBERATE dispatch (gitops orchestrator, per sprint boundary)
+#          runs hardened CI, builds/pushes web image to GHCR, then deploys to the VPS staging
+#          stack (-p solanatrilly, port 8002) and smoke-tests it. (No push:main trigger — see `on:`.)
 # sprint: sprint-4, sprint-10
 # story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3
 # created-by: dev-team
@@ -17,8 +18,12 @@
 name: Deploy
 
 on:
-  push:
-    branches: [main]
+  # NO push trigger by design (operator request 2026-06-17). Deploys are dispatched
+  # DELIBERATELY by the gitops orchestrator (handle_deploy) once per sprint boundary.
+  # A push:[main] trigger fired a full deploy on EVERY commit to main — including the
+  # orchestrator's per-AC "Mark AC done" bookkeeping commits — producing dozens of
+  # redundant and failed (red) deploy runs cluttering main. Do NOT re-add `push:` here;
+  # for a manual deploy use workflow_dispatch (Actions tab -> Run workflow).
   workflow_dispatch:
 
 permissions:
