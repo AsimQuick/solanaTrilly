@@ -33,6 +33,8 @@ django-simple-history>=3.7,<4    # audit trail for PipelineConfig (US-9 AC-9.2)
 
 # Scorer / ML (in-container — Docker Rules; NEVER installed on host)
 lightgbm>=4.0,<5                 # 15-booster blend scorer (US-42 AC-42.2); runs inside the solanatrilly container only
+pandas>=2.0,<3                   # golden score vector fixture I/O (AC-44.1), scorer parity gate (AC-44.2)
+pyarrow>=12.0,<19                # parquet backend for pandas (golden_scores.parquet fixture + scorer parity)
 
 # Dev / Test
 pytest>=8.0

@@ -1,0 +1,8 @@
+{
+  "content_hash": "16735b5a414ada7c375f09fff27116947f49fa18eb3e1a0f190c6240662bf8cb",
+  "dataset_id": "golden_scores_v3_2",
+  "feature_input_fixture": "core/tests/fixtures/scorer_feature_fixture_ac431.json",
+  "model_name": "trilly_pregrad_v3.2",
+  "model_version": "trilly_pregrad_v3_2",
+  "row_count": 5
+}
