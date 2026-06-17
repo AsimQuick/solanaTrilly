@@ -1,7 +1,7 @@
 # ---
 # module: core.schemas
-# sprint: sprint-3, sprint-8
-# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2
+# sprint: sprint-3, sprint-8, sprint-10
+# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2; US-48 AC-48.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -94,6 +94,20 @@ class OutcomeConfig(BaseModel):
     label_def: dict = Field(default_factory=dict)
 
 
+class DashboardConfig(BaseModel):
+    """Dashboard realtime WebSocket section (PRD §13.4, AC-48.2).
+
+    All names and cadence are Principle #1 config-driven — no literals anywhere
+    in the consumer code.  The consumer reads this section via get_active_config()
+    and NEVER hard-codes channel prefixes, topic names, or candle intervals.
+    """
+
+    ws_channel_prefix: str = "tape"
+    candle_topic: str = "candle_delta"
+    position_topic: str = "position_delta"
+    candle_interval_s: int = Field(default=15, gt=0)
+
+
 class TradingConfig(BaseModel):
     """Trading section: position sizing, gate, and risk controls (PRD §10)."""
 
@@ -122,6 +136,7 @@ class PipelineConfigSchema(BaseModel):
     scoring: ScoringConfig
     outcome: OutcomeConfig
     trading: TradingConfig
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
 
     # Optional feature-contract fields (FK stubs — populated in P5/P7).
     # When provided, validate_feature_contract() enforces the subset invariant.
