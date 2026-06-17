@@ -1,11 +1,12 @@
 # ---
 # module: core.schemas
 # sprint: sprint-3, sprint-8, sprint-10
-# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2; US-48 AC-48.2; US-49 AC-49.1
+# story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2;
+#        US-48 AC-48.2; US-49 AC-49.1; US-50 AC-50.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
-# dependencies: pydantic>=2.0
+# dependencies: pydantic>=2.0, core.schemas.CohortGroupingConfig
 # ---
 """Pydantic v2 schema for the PipelineConfig tunable sections (PRD §5.1, §5.2).
 
@@ -94,6 +95,31 @@ class OutcomeConfig(BaseModel):
     label_def: dict = Field(default_factory=dict)
 
 
+class CohortGroupingConfig(BaseModel):
+    """Cohort wall grouping/sorting config (AC-50.2, Principle #1).
+
+    All bucket boundaries are config-driven — no literals in grouping code.
+
+    score_band_thresholds: boundaries that partition scores [0,1] into named
+      bands. N thresholds → N+1 bands. Default: [0.3, 0.7] → low/mid/high.
+
+    depth_bucket_thresholds: SOL-volume boundaries for depth bucketing.
+      Default: [50.0, 200.0, 1000.0] → xs/s/m/l.
+
+    time_of_day_hour_boundaries: UTC hour boundaries (0–23) splitting the day
+      into named periods. Default: [6, 12, 18] → night/morning/afternoon/evening.
+    """
+    score_band_thresholds: list[float] = Field(
+        default_factory=lambda: [0.3, 0.7]
+    )
+    depth_bucket_thresholds: list[float] = Field(
+        default_factory=lambda: [50.0, 200.0, 1000.0]
+    )
+    time_of_day_hour_boundaries: list[int] = Field(
+        default_factory=lambda: [6, 12, 18]
+    )
+
+
 class DashboardConfig(BaseModel):
     """Dashboard realtime WebSocket section (PRD §13.4, AC-48.2, AC-49.1).
 
@@ -111,6 +137,7 @@ class DashboardConfig(BaseModel):
     position_topic: str = "position_delta"
     candle_interval_s: int = Field(default=15, gt=0)
     candle_intervals_s: list[int] = Field(default_factory=lambda: [1, 5, 15, 60])
+    cohort_grouping: CohortGroupingConfig = Field(default_factory=CohortGroupingConfig)
 
 
 class TradingConfig(BaseModel):

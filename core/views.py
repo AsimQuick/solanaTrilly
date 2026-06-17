@@ -1,18 +1,19 @@
 # ---
 # module: core.views
 # sprint: pre-sprint, sprint-10
-# story: setup, US-48 AC-48.3, US-49 AC-49.1, US-49 AC-49.2, US-49 AC-49.3, US-50 AC-50.1
+# story: setup, US-48 AC-48.3, US-49 AC-49.1, US-49 AC-49.2, US-49 AC-49.3, US-50 AC-50.1, US-50 AC-50.2
 # status: implemented
 # created-by: project-lead
 # last-updated: 2026-06-17
 # dependencies: django, core.dashboard.candle_api, core.dashboard.cohort_api,
 #               core.dashboard.token_detail, core.tape.lake_reader,
-#               core.schemas, core.resolver
+#               core.schemas, core.resolver, core.dashboard.cohort_grouping
 # ---
 from django.http import HttpResponse, JsonResponse
 
 from core.dashboard.candle_api import build_candles
 from core.dashboard.cohort_api import build_cohort_sparklines
+from core.dashboard.cohort_grouping import VALID_GROUP_KEYS, apply_grouping, derive_meta_from_rows
 from core.dashboard.token_detail import build_token_detail
 from core.schemas import DashboardConfig
 from core.tape.lake_reader import LakeReader
@@ -259,5 +260,40 @@ def cohort_api(request):
 
     # 5. Build sparklines — reuses the shared build_candles path (Principle #2).
     result = build_cohort_sparklines(rows, mints, interval_s)
+
+    # 6. Optional grouping/sorting (AC-50.2 — Principle #1: keys from config)
+    raw_group_by = request.GET.get("group_by", "").strip() or None
+    raw_sort_by = request.GET.get("sort_by", "").strip() or None
+
+    if raw_group_by is not None and raw_group_by not in VALID_GROUP_KEYS:
+        return JsonResponse(
+            {"error": f"group_by={raw_group_by!r} not valid; must be one of {sorted(VALID_GROUP_KEYS)}"},
+            status=400,
+        )
+    if raw_sort_by is not None and raw_sort_by not in VALID_GROUP_KEYS:
+        return JsonResponse(
+            {"error": f"sort_by={raw_sort_by!r} not valid; must be one of {sorted(VALID_GROUP_KEYS)}"},
+            status=400,
+        )
+
+    if raw_group_by or raw_sort_by:
+        # Build entries with derived metadata for grouping
+        try:
+            from core.resolver import get_active_config  # noqa: PLC0415
+            config_obj = get_active_config()
+            grouping_cfg = config_obj.dashboard.cohort_grouping if config_obj is not None else None
+        except Exception:
+            grouping_cfg = None
+
+        entries = []
+        for sparkline in result["sparklines"]:
+            mint_meta = derive_meta_from_rows(sparkline["mint"], rows)
+            entries.append({
+                "mint": sparkline["mint"],
+                "candles": sparkline["candles"],
+                "meta": mint_meta,
+            })
+        grouped = apply_grouping(entries, raw_group_by, raw_sort_by, grouping_cfg)
+        result.update(grouped)
 
     return JsonResponse(result)
