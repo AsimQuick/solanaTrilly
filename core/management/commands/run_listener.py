@@ -1,7 +1,7 @@
 # ---
 # module: core.management.commands.run_listener
 # sprint: sprint-4, sprint-5, sprint-8
-# story: US-16 AC-16.3, US-22 AC-22.1, US-22 AC-22.3, US-34 AC-34.2
+# story: US-16 AC-16.3, US-22 AC-22.1, US-22 AC-22.3, US-34 AC-34.2, US-37 AC-37.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
@@ -9,8 +9,9 @@
 #               core.tape.birdeye_swap_source, core.tape.mapped_source,
 #               core.tape.bounded_source, core.tape.birdeye_swap_mapper,
 #               core.tape.helius_birth_tape_source,
+#               core.tape.birdeye_snapshot_source,
 #               core.tape.recorder, core.tape.lake_writer, core.tape.swap_writer,
-#               core.clock
+#               core.snapshot_fetcher, core.clock
 # ---
 """run_listener — entry point for the dedicated listener container.
 
@@ -59,6 +60,8 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from core.clock import WallClock
+from core.snapshot_fetcher import SnapshotFetcher
+from core.tape.birdeye_snapshot_source import BirdeyeSnapshotSource
 from core.tape.birdeye_swap_mapper import map_birdeye_swap
 from core.tape.birdeye_swap_source import BirdeyeSwapSource
 from core.tape.bounded_source import BoundedSource
@@ -193,6 +196,32 @@ def build_birth_tape_recorder(
         lake_writer=LakeWriter(lake_base_dir),
         swap_writer=SwapWriter(),
     )
+
+
+def build_snapshot_fetcher(
+    api_key: str,
+    *,
+    holder_limit: int = 20,
+) -> SnapshotFetcher:
+    """Build a fully-wired SnapshotFetcher for on-demand score-time snapshots.
+
+    AC-37.3 — the ONLY place where BirdeyeSnapshotSource is instantiated
+    (Principle #7 / US-2 static-analysis guard).  Wiring chain:
+
+        BirdeyeSnapshotSource(api_key, holder_limit)
+          -> SnapshotFetcher(source=..., clock=WallClock())
+
+    Feature/snapshot capture only — no modeling runs on the VPS (AC-37.3).
+    The concrete source lives ONLY here; the core SnapshotFetcher imports only
+    the abstract SnapshotDataSource seam (never BirdeyeSnapshotSource).
+
+    Args:
+        api_key:       Birdeye API key (X-API-KEY header).
+        holder_limit:  Number of top holders to fetch per snapshot (default 20).
+    """
+    source = BirdeyeSnapshotSource(api_key=api_key, holder_limit=holder_limit)
+    clock = WallClock()
+    return SnapshotFetcher(source=source, clock=clock)
 
 
 # ---------------------------------------------------------------------------
