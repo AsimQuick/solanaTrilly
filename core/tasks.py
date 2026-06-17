@@ -1,11 +1,12 @@
 # ---
 # module: core.tasks
-# sprint: sprint-7, sprint-8, sprint-9
-# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1, AC-31.2, AC-31.3; US-38 AC-38.1, AC-38.2, AC-38.3; US-43 AC-43.3
+# sprint: sprint-7, sprint-8, sprint-9, sprint-10
+# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1/31.2/31.3; US-38 AC-38.1/38.2/38.3; US-43 AC-43.3; US-51 AC-51.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-17
-# dependencies: celery, core.detection.birdeye_sweep, core.feature_builder, core.models, core.scorer
+# dependencies: celery, core.detection.birdeye_sweep, core.feature_builder, core.models,
+#               core.scorer, core.dashboard.annotation_export
 # ---
 """Core Celery tasks — autodiscovered by the Celery worker on startup."""
 from celery import shared_task
@@ -289,3 +290,38 @@ def score_token(mint, features, ref_dist_data=None):
             result = scorer.score_pool([features])[0]
 
     return {"mint": mint, "score": result}
+
+
+@shared_task(name="core.tasks.export_annotations")
+def export_annotations(mint_corpus=None, output_path=None, *, dataset_id="annotation_export"):
+    """Export labeled annotation dataset (annotations joined to corpus on mint) (AC-51.2, PRD §13.3).
+
+    Runs on the dedicated celery-worker container — NEVER on web/gunicorn (#289).
+    Joins Annotation rows to the supplied mint corpus, producing a CSV labeled
+    dataset + MANIFEST following the §6.5 Feature Builder / US-36 export pattern.
+
+    scoring_enabled and trading_enabled are NEVER touched by this task.
+
+    Args:
+        mint_corpus: List of mint address strings to include.  When None, all
+            distinctly annotated mints from the Annotation table are used.
+        output_path: Destination CSV file path.  Defaults to
+            /tmp/annotation_export.csv.
+        dataset_id: Unique identifier placed in the MANIFEST dataset_id field.
+            Defaults to 'annotation_export'.
+
+    Returns:
+        {"path": str, "manifest": dict, "manifest_path": str, "row_count": int}
+    """
+    from core.dashboard.annotation_export import build_annotation_export
+    from core.models import Annotation
+
+    if mint_corpus is None:
+        mint_corpus = list(
+            Annotation.objects.values_list("mint", flat=True).distinct().order_by()
+        )
+
+    if output_path is None:
+        output_path = "/tmp/annotation_export.csv"
+
+    return build_annotation_export(mint_corpus, output_path, dataset_id=dataset_id)
