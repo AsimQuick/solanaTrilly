@@ -7,7 +7,6 @@
 
 .git
 .gitignore
-.github
 .venv
 venv
 __pycache__
