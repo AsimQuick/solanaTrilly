@@ -1,8 +1,8 @@
 # Sprint 12
 
 **Phase:** planning
-**Progress:** 2/6 stories | 8/18 ACs
-**Last Updated:** 2026-06-18T10:26:02+00:00
+**Progress:** 3/6 stories | 9/18 ACs
+**Last Updated:** 2026-06-18T10:37:46+00:00
 
 ## Sprint Goal
 OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatrilly_copytrade_SPEC.md, provided 2026-06-17) — stand up the Copy-Trade pipeline as a FIRST-CLASS TRADING SIBLING to the prediction/model pipeline, driven by a JSON list of ~10 wallets instead of a model, delivered END-TO-END THROUGH OBSERVE (PAPER) MODE this sprint. Sprint-11 closed the P6 dashboard VPS deploy gap and delivered all THREE PRD pillars DoD-done at the dashboard layer; the project is NOT complete because the Copy-Trade Dashboard v1 SPEC is committed scope and is NOT YET BUILT (zero copytrade code in the repo). This sprint builds the SPEC's non-negotiables: a §5-ISOLATED copytrade_engine — its OWN copytrade.* config namespace, its OWN copytrade_-prefixed DB tables, and its OWN Helius subscription to WALLET addresses (NOT the token firehose) — that must NOT clash with or share mutable state with the existing firehose/model pipeline (both pipelines run concurrently, each with its own ON/OFF, positions, PnL, limits); the correctness-critical copy-BUY trigger (copy a watched wallet ONLY when it BUYS a pump.fun token STILL ON THE BONDING CURVE / PRE-graduation — first-buy-only, dedupe-token-across-wallets, NEVER mirror their sells); the position lifecycle with OUR configurable exits (TP / SL / near-curve-completion / max-hold; tight SL deliberate); the cohort FRESH-START lifecycle (a new cohort JSON wipes the old cohort ENTIRELY — settle open positions, purge old copytrade_* records; exactly one active cohort, no cross-cohort history in v1); and the new 'Copy Trade' dashboard tab (JSON upload, ON/OFF, Observe/Live mode, SOL size + TP%/SL% overrides, and the KEY per-wallet PnL table) plus its click-to-download export (include copytrade_positions). OBSERVE (paper) IS THE DEFAULT AND THE SAFETY GATE: in observe mode the engine runs the FULL logic (detect → 'buy' → manage → 'sell' → record PnL) placing NO real orders (books fills at the live price). CRITICAL SCOPING DECISION (verified against the codebase, NOT in the SPEC): the SPEC §0 assumes 'you already have working buy/sell execution' — you DO NOT. No PumpSwap order-execution path exists (TradingConfig has flags only; the only buy/sell code is tape RECORDING, not order placement); the P8 trading-execution path (PRD §10) is still DEFERRED. Therefore LIVE (real-order) copy-trade execution is OUT OF SCOPE this sprint — it depends on the P8 execution path and the operator's deliberate post-soak Live flip; the Live toggle is surfaced but INERT/GUARDED until P8 lands. Observe-complete is exactly the SPEC's default and its validation arbiter ('offline edges have repeatedly failed live in this project; the observe soak is the arbiter'), so an observe-complete v1 is the correct, non-over-committed first sprint of the epic. FIREHOSE: this sprint is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — observe mode books paper fills against existing price/tape data and the wallet-subscription is exercised by a schema-faithful synthetic replay stream behind the DataSource seam; ZERO firehose activation (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched — the LIVE Helius wallet-subscription will spend budget when LIVE is built later, so its activation ledger is planned BEFORE that, not now). Honor the §1 NON-goals explicitly: NO per-wallet manual controls, NO cross-cohort history, NO candle charts / TA in the copy-trade tab, NO funder logic / auto-retuning / per-position manual exits — do NOT add scope. Build order: US-58 (config namespace + tables, the §5-isolated foundation) FIRST; then US-59 (the isolated engine worker + Helius wallet-subscription seam) and US-60 (the copy-BUY trigger logic) may run in PARALLEL after US-58; US-61 (observe-mode position lifecycle + OUR exits) depends on US-60; US-62 (cohort fresh-start lifecycle + ON/OFF) depends on US-58/US-61; US-63 (the 'Copy Trade' tab + export) depends on US-58/US-61/US-62 and the US-48 React frontend.
@@ -179,14 +179,15 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
 ---
 
 ### US-60: The correctness-critical copy-BUY trigger (SPEC §3): copy a watched wallet ONLY when it BUYS a pump.fun token STILL ON THE BONDING CURVE (PRE-graduation) — first-buy-only, dedupe-token-across-wallets, under max_concurrent_positions; NEVER on sells/adds/transfers — offline replay-gated
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-60.1:** The BUY-COPY trigger predicate fires ONLY when ALL of SPEC §3's conditions hold: (1) the tx is a SWAP where the watched wallet is the BUYER (acquiring the token, spending SOL) — NOT a sell, transfer, or passive party; (2) the token is a pump.fun token (mint/program check); (3) the token is STILL ON THE BONDING CURVE (PRE-graduation) — NOT already migrated to PumpSwap/Raydium (this is the edge: a buy on an already-graduated token is the WRONG signal and must be skipped). Verified by a pytest test with explicit REJECT cases: a sell, a transfer, a non-pumpfun token, and a post-graduation buy each produce NO trigger; a valid pre-graduation curve buy triggers.
   - Dev: done
 - [x] **AC-60.2:** Multiplicity controls (SPEC §3 #4/#5/#6, config-driven): copy_first_buy_only — only the wallet's FIRST buy of a token in this cohort session triggers (later adds do not); dedupe_token_across_wallets — if we already hold/are opening this token, do NOT open a second position, but RECORD the additional triggering wallet and attribute the position to the FIRST triggering wallet (for PnL); max_concurrent_positions — ignore new triggers beyond the cap. Verified by a pytest test: a second buy by the same wallet is ignored; two different wallets buying the same token open ONE position attributed to the first (the second is recorded); a trigger over the cap is ignored.
   - Dev: done
-- [ ] **AC-60.3:** The trigger path is offline-gated by a DETERMINISTIC synthetic wallet-tx replay (schema-faithful, behind the US-59 DataSource seam): replaying the same stream twice yields identical trigger decisions and identical opened-position rows. We NEVER copy the wallet's sells/adds — only the entry signal (mirror_wallet_sells stays False). Verified run-twice-identical; zero firehose. New files carry metadata front matter.
+- [x] **AC-60.3:** The trigger path is offline-gated by a DETERMINISTIC synthetic wallet-tx replay (schema-faithful, behind the US-59 DataSource seam): replaying the same stream twice yields identical trigger decisions and identical opened-position rows. We NEVER copy the wallet's sells/adds — only the entry signal (mirror_wallet_sells stays False). Verified run-twice-identical; zero firehose. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-58
 
@@ -222,6 +223,21 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   |---|---|
   | `copytrade/multiplicity.py` | **New** — Pure-function module (no I/O, no ORM). Exports `TriggerDecision` (frozen dataclass: `action`, `reason`), `MultiplicityState` (mutable dataclass with `.new()` factory), and `apply_multiplicity_controls(event, state, config)`. Applies SPEC §3 controls in order: #4 `copy_first_buy_only` → #5 `dedupe_token_across_wallets` → #6 `max_concurrent_positions`. Returns action `"open"` / `"skip_first_buy"` / `"record_attribution"` / `"skip_cap"`. Mutates state in-place (records seen wallet+token pairs, open mints, position count, additional attribution wallets). |
   | `copytrade/tests/test_multiplicity_ac602.py` | **New** — 25 pure-unit tests, zero DB access, zero firehose. Covers all three AC-required scenarios (second same-wallet buy → `skip_first_buy`; two wallets same token → one `open` + one `record_attribution`; over-cap trigger → `ski …
+  AC-60.3 done: Pushed to `feature/US-60-AC-60.3`. Here is the implementation summary:
+  
+  ---
+  
+  ## Implementation Summary — US-60 AC-60.3
+  
+  **Branch:** `feature/US-60-AC-60.3`
+  **Commit:** `48fe9fd` `[US-60] AC-60.3: deterministic synthetic wallet-tx replay gate for trigger pipeline`
+  
+  ### Files changed
+  
+  | File | Change |
+  |---|---|
+  | `copytrade/trigger_pipeline.py` | **New** — `OpenedPositionRecord` (frozen dataclass: cohort_id, mint, trigger_wallet, entry_ts), `TriggerResult` (frozen dataclass: event, predicate_passed, decision, opened_position), and `run_trigger_pipeline()` async function. Wires the full path: `WalletSubscriptionConsumer` → `should_copy_buy` → `apply_multiplicity_controls` → records `OpenedPositionRecord` on `action=="open"`. No concrete source import (Principle #7), no `datetime.now()`/`time.time()` (US-2 guard), zero ORM. |
+  | `copytrade/tests/test_trigger_pipeline_ac603.py` | **New** — 14 tests, zero firehose. AST guards (no concrete source import, no direct time calls); run-twice-identical determinism (same `FIXTURE_STREAM` + `VirtualClock(T0)` → identical `TriggerResult` sequences AND identical `OpenedPositionRecord` sets); `mirror_wallet_sells=False` invariant (sells/transfers pr …
 
 **Tester Status:** approved
 **Tester Notes:**
