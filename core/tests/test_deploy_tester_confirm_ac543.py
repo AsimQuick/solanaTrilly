@@ -30,9 +30,12 @@ The 27681451880-class regression pattern:
 Reproducibility fix (from AC-54.1/AC-54.2):
   - 'docker image prune -f' before every pull (AC-53.2) — reclaims dangling image
     layers before each deploy so disk exhaustion cannot recur across runs.
-  - 'push: branches: [main]' restored to deploy.yml on: block (US-52/AC-52.1) — so
-    per-merge deploys fire, making reproducibility observable.
   All nine regression-guard invariants (AC-54.2) pin these fixes in place.
+
+Note: deploys are workflow_dispatch-only (operator decision 2026-06-18). The push
+trigger was intentionally removed because a push-to-main trigger fired a full ~5-min
+VPS deploy on every commit (including sprint-state commits), wasting GitHub Actions
+minutes. The orchestrator dispatches one deploy per sprint boundary.
 
 VPS conditions confirmed by Tester from the actual green deploy run:
   1. HTTP 200 on port 8002 (/health/) with AC-12.3 retry-with-backoff.
@@ -54,9 +57,9 @@ Tests in this module:
       The record references 'web', 'frontend', 'listener', 'celery' (conditions 2-5).
   test_tester_confirm_record_documents_solanabilly_isolation
       The record references '8001' (condition 6: solanaBilly UNTOUCHED on port 8001).
-  test_per_merge_trigger_ensures_reproducibility
-      deploy.yml on: block includes 'push: branches: [main]' so per-merge runs fire —
-      without this trigger, reproducibility across both run types cannot be observed.
+  test_deploy_is_dispatch_only
+      deploy.yml on: block has NO push trigger — deploys are workflow_dispatch-only
+      (operator decision 2026-06-18; push-to-main wasted Actions minutes).
   test_disk_exhaustion_fix_prevents_j4_regression
       'docker image prune -f' is in the Deploy-to-VPS SSH command — this is the structural
       fix that prevents the deliberate-run-green → per-merge-run-ENOSPC pattern (J4).
@@ -280,32 +283,24 @@ def test_tester_confirm_record_documents_solanabilly_isolation() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_per_merge_trigger_ensures_reproducibility() -> None:
-    """deploy.yml on: block must include 'push: branches: [main]' to enable per-merge runs.
+def test_deploy_is_dispatch_only() -> None:
+    """deploy.yml on: block must have NO push trigger — deploys are workflow_dispatch-only.
 
-    AC-54.3 requires reproducibility across BOTH a deliberate HEAD run AND a subsequent
-    per-merge run. If 'push: branches: [main]' is absent from the deploy.yml 'on:' block,
-    per-merge deploys do not fire automatically — making it impossible to observe or
-    confirm the J4 regression is absent.
+    Operator decision (2026-06-18): the push trigger was intentionally removed.
+    A push-to-main trigger fired a full ~5-min VPS deploy on every commit to main
+    (including many sprint-state commits), wasting GitHub Actions minutes. Deploys
+    now fire ONLY via workflow_dispatch — the orchestrator dispatches one deploy per
+    sprint boundary.
 
-    INVARIANT-9 (AC-54.2) pins this. This test adds a second guard specifically scoped
-    to AC-54.3's reproducibility requirement: the trigger must be present so the
-    Tester can observe both run types from the actual deploy history.
-
-    Removal of the push trigger would:
-    - Silently disable per-merge deploys (deploys only fire on manual dispatch)
-    - Make the J4 regression class unobservable (cannot confirm it is absent)
-    - Violate the AC-54.3 reproducibility requirement
+    Regression: re-adding the push trigger resumes per-commit Actions waste.
     """
     on_block = _on_block()
-    push_block = on_block.get("push", {}) or {}
-    branches = push_block.get("branches", []) or []
-    assert "main" in branches, (
-        "AC-54.3: deploy.yml 'on:' block must include 'push: branches: [main]' so "
-        "per-merge deploys fire automatically (prerequisite for observing reproducibility "
-        "across both deliberate HEAD and per-merge run types). "
-        f"Current on: block: {on_block}. "
-        "Without this trigger, the J4 regression class cannot be confirmed absent."
+    assert "push" not in on_block, (
+        "deploy is dispatch-only; do not re-add the push trigger "
+        "(operator decision 2026-06-18 — a push-to-main trigger wastes Actions "
+        "minutes by deploying on every commit). Deploys fire only via "
+        "workflow_dispatch, dispatched once per sprint boundary. "
+        f"Current on: block: {on_block}"
     )
 
 

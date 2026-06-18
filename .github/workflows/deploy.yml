@@ -1,7 +1,7 @@
 # ---
 # file: deploy.yml
 # stack: django
-# purpose: CD pipeline — triggers on push to main and on manual dispatch; runs hardened CI,
+# purpose: CD pipeline — DELIBERATE deploys only (workflow_dispatch); runs hardened CI,
 #          builds/pushes web image to GHCR, then deploys to the VPS staging stack
 #          (-p solanatrilly, port 8002) and smoke-tests it.
 # sprint: sprint-4, sprint-10, sprint-11, sprint-12, sprint-13
@@ -21,9 +21,13 @@
 
 name: Deploy
 
+# ⚠️ DEPLOYS ARE DELIBERATE — workflow_dispatch ONLY. Do NOT add a `push:` trigger.
+# A push trigger fires a full ~5-min VPS deploy on EVERY commit to main — including the
+# orchestrator's many "[US-XX] Mark AC done" sprint-state commits and every PR-merge — which
+# burns GitHub Actions minutes and produces red noise. The gitops orchestrator dispatches a
+# single deliberate deploy at each sprint boundary (handle_deploy). This invariant is enforced
+# by core/tests/test_deploy_dispatch_only_guard.py — re-adding `push:` will FAIL CI.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -45,8 +45,10 @@ Invariants pinned (named by AC-54.2):
                hardcoded invalid 22-byte key that caused Daphne HTTP 400.
   INVARIANT-8  VPS disk-exhaustion fix (AC-53.2 / J4+J2)
                'docker image prune -f' present in the Deploy-to-VPS SSH command before pull.
-  INVARIANT-9  Per-merge push trigger restored (US-52/AC-52.1)
-               deploy.yml on: block includes push: branches: [main] so per-merge deploys fire.
+  INVARIANT-9  No push trigger — deploys are workflow_dispatch-only (operator decision 2026-06-18)
+               deploy.yml on: block must NOT include a push trigger. A push-to-main trigger
+               fired a full ~5-min VPS deploy on every commit, wasting Actions minutes; the
+               orchestrator dispatches one deploy per sprint boundary instead.
 
 Tests in this module:
   test_invariant_remove_orphans_in_up_command
@@ -65,8 +67,8 @@ Tests in this module:
       INVARIANT-7: WS key evaluates to 24-char/16-byte RFC-6455 valid key.
   test_invariant_disk_exhaustion_fix
       INVARIANT-8: 'docker image prune -f' present in VPS SSH command before pull.
-  test_invariant_push_trigger_main
-      INVARIANT-9: push: branches: [main] in deploy.yml on: block.
+  test_invariant_no_push_trigger
+      INVARIANT-9: NO push trigger in deploy.yml on: block (workflow_dispatch-only).
   test_all_regression_guard_invariants_pass
       COMPOUND: all nine invariants pass simultaneously (removes any one → fails loudly).
 """
@@ -495,32 +497,24 @@ def test_invariant_disk_exhaustion_fix() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_invariant_push_trigger_main() -> None:
-    """INVARIANT-9: deploy.yml on: block must include push: branches: [main].
+def test_invariant_no_push_trigger() -> None:
+    """INVARIANT-9: deploy.yml on: block must have NO push trigger (workflow_dispatch-only).
 
-    US-52/AC-52.1: the push trigger was removed from deploy.yml during sprint-10,
-    disabling automatic per-merge deploys. The J4 regression pattern (green deliberate
-    run → failed per-merge run) can only RECUR if per-merge runs actually fire.
-    Without the push trigger, only workflow_dispatch runs are possible — the J4 class
-    of regression becomes undetectable in CI.
+    Operator decision (2026-06-18): the push trigger was intentionally removed.
+    A push-to-main trigger fired a full ~5-min VPS deploy on every commit to main
+    (including many sprint-state commits), wasting GitHub Actions minutes. Deploys
+    now fire ONLY via workflow_dispatch — the orchestrator dispatches one deploy per
+    sprint boundary.
 
-    Regression: removing the push trigger disables per-merge deploys, masking any
-    future J4-class regression (green deliberate → broken per-merge).
+    Regression: re-adding the push trigger resumes per-commit Actions waste.
     """
     on_block = _on_block()
-    assert "push" in on_block, (
-        "AC-54.2 INVARIANT-9 VIOLATED: deploy.yml on: block does not contain a 'push' trigger. "
-        "US-52/AC-52.1 restored this trigger after it was removed in sprint-10. "
-        "Without it, per-merge deploys do not fire and the J4-class regression "
-        "(green deliberate run → failed per-merge run) cannot be detected automatically. "
+    assert "push" not in on_block, (
+        "deploy is dispatch-only; do not re-add the push trigger "
+        "(operator decision 2026-06-18 — a push-to-main trigger wastes Actions "
+        "minutes by deploying on every commit). Deploys fire only via "
+        "workflow_dispatch, dispatched once per sprint boundary. "
         f"Current on: block: {on_block}"
-    )
-    push_block = on_block.get("push") or {}
-    branches = push_block.get("branches") or []
-    assert "main" in branches, (
-        "AC-54.2 INVARIANT-9 VIOLATED: deploy.yml push trigger does not include 'main'. "
-        "Per-merge deploys on the main branch must be enabled to detect J4-class regressions. "
-        f"Current push.branches: {branches}"
     )
 
 
@@ -541,7 +535,6 @@ def test_all_regression_guard_invariants_pass() -> None:
     """
     content = _deploy_text()
     script = _vps_step_script()
-    on_block = _on_block()
     steps = _deploy_job_steps()
     data = _deploy_data()
     jobs = data.get("jobs", {})
@@ -664,19 +657,9 @@ def test_all_regression_guard_invariants_pass() -> None:
             "(AC-53.2 / J4+J2 — disk exhaustion fix)"
         )
 
-    # INVARIANT-9: push trigger
-    if "push" not in on_block:
-        failures.append(
-            "INVARIANT-9 MISSING: push trigger absent from deploy.yml on: block "
-            "(US-52/AC-52.1 — per-merge deploys disabled; J4 class undetectable)"
-        )
-    else:
-        branches = (on_block.get("push") or {}).get("branches") or []
-        if "main" not in branches:
-            failures.append(
-                f"INVARIANT-9 MISSING: 'main' not in push branches (current: {branches}) "
-                "(US-52/AC-52.1)"
-            )
+    # INVARIANT-9 (push trigger) intentionally NOT checked: deploys are
+    # workflow_dispatch-only (operator decision 2026-06-18). Re-adding a push
+    # trigger wastes Actions minutes by deploying on every commit.
 
     assert not failures, (
         "AC-54.2 REGRESSION GUARD FAILED — the following deploy invariants are missing or violated. "
