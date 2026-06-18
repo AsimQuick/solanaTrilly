@@ -4,10 +4,10 @@
 # purpose: CD pipeline — on DELIBERATE dispatch (gitops orchestrator, per sprint boundary)
 #          runs hardened CI, builds/pushes web image to GHCR, then deploys to the VPS staging
 #          stack (-p solanatrilly, port 8002) and smoke-tests it. (No push:main trigger — see `on:`.)
-# sprint: sprint-4, sprint-10
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3
+# sprint: sprint-4, sprint-10, sprint-11
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1
 # created-by: dev-team
-# last-updated: 2026-06-17
+# last-updated: 2026-06-18
 # ---
 #
 # GHCR auth uses the built-in GITHUB_TOKEN with packages:write — no extra secrets required.
@@ -147,7 +147,7 @@ jobs:
           host = os.environ["VPS_HOST"]
           port = 8002
           path = "/ws/tape/smoke_test/"
-          key = base64.b64encode(b"solanatrilly_ac483_key").decode()
+          key = base64.b64encode(os.urandom(16)).decode()
           request = (
               f"GET {path} HTTP/1.1\r\n"
               f"Host: {host}:{port}\r\n"
