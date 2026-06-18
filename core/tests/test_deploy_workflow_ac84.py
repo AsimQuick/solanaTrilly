@@ -1,7 +1,7 @@
 # ---
 # module: core.tests.test_deploy_workflow_ac84
 # sprint: sprint-3, sprint-11
-# story: US-8 AC-8.4 US-52 AC-52.3
+# story: US-8 AC-8.4 US-52 AC-52.3 US-53 AC-53.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-18
@@ -170,24 +170,45 @@ def test_no_force_recreate_in_deploy_yml() -> None:
 
 
 def test_no_docker_prune_in_deploy_yml() -> None:
-    """deploy.yml must not contain any 'docker ... prune' command (AC-8.4).
+    """deploy.yml must not contain dangerous 'docker ... prune' commands (AC-8.4 / AC-53.2).
 
-    Prune commands (system prune, container prune, network prune, image prune)
-    remove resources across ALL Docker projects on the host, not just
-    solanatrilly. They would destroy solanaBilly's networks and stopped
-    containers. They are banned from deploy.yml per PRD §15.3.
+    Destructive prune commands (system prune, container prune, network prune,
+    image prune --all) remove resources across ALL Docker projects on the host,
+    not just solanatrilly. They could destroy solanaBilly's networks, stopped
+    containers, and all cached images.
+
+    AC-53.2 EXEMPTION — 'docker image prune -f' (dangling images, without --all/-a) IS ALLOWED:
+      Dangling images are untagged layers unreferenced by any running container. They
+      accumulate from prior deploy runs and cause ENOSPC disk exhaustion during
+      docker compose pull (root cause of run 27683660493, AC-53.1). Pruning them with
+      -f (no --all) is safe: tagged images like solanaBilly's :latest are never removed
+      because they are named references, not dangling layers.
+
+    Banned: docker system prune, docker container prune, docker network prune,
+            docker image prune --all, docker image prune -a
+    Allowed: docker image prune -f (without --all / -a)
     """
     data = _load_deploy()
     scripts = _all_run_scripts(data)
 
     prune_re = re.compile(r"\bdocker\b.*\bprune\b")
-    match = prune_re.search(scripts)
-    assert match is None, (
-        "AC-8.4: 'docker ... prune' found in deploy.yml run scripts.\n"
-        f"Matched text: {match.group(0)!r}\n\n"
-        "PRD §15.3 / CLAUDE.md Docker Rules: prune commands are Forbidden — "
-        "they affect ALL Docker resources on the host, not just -p solanatrilly."
-    )
+
+    for match in prune_re.finditer(scripts):
+        matched = match.group(0).strip()
+        # Safe exemption: 'docker image prune -f' without --all or -a
+        is_safe_image_prune = bool(
+            re.search(r"\bdocker\s+image\s+prune\b", matched)
+        ) and not bool(re.search(r"\b--all\b|\s-a\b", matched))
+        assert is_safe_image_prune, (
+            "AC-8.4: dangerous 'docker ... prune' found in deploy.yml run scripts.\n"
+            f"Matched text: {matched!r}\n\n"
+            "PRD §15.3 / CLAUDE.md Docker Rules: destructive prune commands are Forbidden —\n"
+            "they affect ALL Docker resources on the host, not just -p solanatrilly.\n\n"
+            "Only 'docker image prune -f' (without --all/-a) is permitted as an exemption\n"
+            "to prevent VPS disk exhaustion (AC-53.2 / run 27683660493).\n"
+            "Detected form is not the safe exemption — remove it or replace with the\n"
+            "allowed 'docker image prune -f' form."
+        )
 
 
 def test_no_volume_removal_in_deploy_yml() -> None:
