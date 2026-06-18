@@ -5,7 +5,7 @@
 #          builds/pushes web image to GHCR, then deploys to the VPS staging stack
 #          (-p solanatrilly, port 8002) and smoke-tests it.
 # sprint: sprint-4, sprint-10, sprint-11
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1 AC-52.3 US-53 AC-53.2 AC-53.3
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1 AC-52.3 US-53 AC-53.2 AC-53.3 US-54 AC-54.1
 # created-by: dev-team
 # last-updated: 2026-06-18
 # ac-53.2-fix: docker image prune -f before docker compose pull to prevent ENOSPC on VPS
