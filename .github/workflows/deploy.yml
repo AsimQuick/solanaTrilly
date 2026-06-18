@@ -386,7 +386,7 @@ jobs:
           echo "AC-68.3 — verifying shared trading apparatus imports in the live web container"
           printf '%s\n' "$VPS_SSH_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
-          ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key "${VPS_USER}@${VPS_HOST}" 'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml exec -T web python3 -c "from trading.execution_core import ExecutionCore; from trading.tape_settler import simulate_tape_exit; from trading.exit_engine import evaluate_exit_rules; from trading.position_closer import settle_paper_position; from copytrade.position_opener import open_live_position; print('"'"'AC-68.3: shared apparatus imports OK (ExecutionCore, simulate_tape_exit, evaluate_exit_rules, settle_paper_position, open_live_position)'"'"')"'
+          ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key "${VPS_USER}@${VPS_HOST}" 'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml exec -T web python3 -c "import django; django.setup(); from trading.execution_core import ExecutionCore; from trading.tape_settler import simulate_tape_exit; from trading.exit_engine import evaluate_exit_rules; from trading.position_closer import settle_paper_position; from copytrade.position_opener import open_live_position; print('"'"'AC-68.3: shared apparatus imports OK (ExecutionCore, simulate_tape_exit, evaluate_exit_rules, settle_paper_position, open_live_position)'"'"')"'
           rc=$?
           rm -f /tmp/deploy_key
           if [ "$rc" != "0" ]; then
