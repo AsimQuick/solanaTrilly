@@ -1,0 +1,47 @@
+{
+  "_comment": "Pinned fixture for AC-65.2 — PumpSwap AMM constant-product quote + fee math. All integer values in on-chain units (lamports / base token units). Expected results computed offline with integer arithmetic and pinned here.",
+
+  "global_config": {
+    "_note": "lp_fee=0.25% (25 bps) + protocol_fee=0.05% (5 bps) + creator_fee=0.00% (0 bps) = total 0.30% (30 bps). These are the canonical PumpSwap GlobalConfig defaults read from pinned fixture values, NOT from a live RPC call.",
+    "lp_fee_basis_points": 25,
+    "protocol_fee_basis_points": 5,
+    "coin_creator_fee_basis_points": 0,
+    "total_fee_basis_points": 30
+  },
+
+  "pool_reserve_fixture": {
+    "_note": "Representative graduated-token pool: 1 trillion base units (1M tokens at 6 decimals) and 85 billion lamports (85 SOL). Spot price = 85e9 / 1e12 = 0.085 lamports per base unit.",
+    "base_reserve": 1000000000000,
+    "quote_reserve": 85000000000
+  },
+
+  "spot_price_fixture": {
+    "_note": "quote_reserve / base_reserve = 85_000_000_000 / 1_000_000_000_000 = 0.085 (lamports per base unit, exact float)",
+    "expected_price": 0.085
+  },
+
+  "buy_fixture": {
+    "_note": "BUY 1_000_000_000 base units (1000 tokens). sol_in_pre_fee = 1e9 * 85e9 // (1e12 - 1e9) = 85e18 // 999e9 = 85_085_085. sol_in_with_fee = 85_085_085 * 10030 // 10000 = 85_340_340. Fee is ON TOP.",
+    "base_amount_out": 1000000000,
+    "sol_in_pre_fee": 85085085,
+    "sol_in_with_fee": 85340340
+  },
+
+  "sell_fixture": {
+    "_note": "SELL 1_000_000_000 base units (1000 tokens). sol_out_pre_fee = 1e9 * 85e9 // (1e12 + 1e9) = 85e18 // 1001e9 = 84_915_084. sol_out_after_fee = 84_915_084 * 9970 // 10000 = 84_660_338. Fee is DEDUCTED.",
+    "base_amount_in": 1000000000,
+    "sol_out_pre_fee": 84915084,
+    "sol_out_after_fee": 84660338
+  },
+
+  "zero_reserve_guard_cases": {
+    "_note": "All of these must raise ZeroReserveError (H4). Never silently proceed to division.",
+    "cases": [
+      {"label": "base_reserve=0, quote_reserve=normal", "base_reserve": 0, "quote_reserve": 85000000000},
+      {"label": "base_reserve=normal, quote_reserve=0", "base_reserve": 1000000000000, "quote_reserve": 0},
+      {"label": "base_reserve=0, quote_reserve=0", "base_reserve": 0, "quote_reserve": 0},
+      {"label": "base_reserve=None, quote_reserve=normal", "base_reserve": null, "quote_reserve": 85000000000},
+      {"label": "base_reserve=normal, quote_reserve=None", "base_reserve": 1000000000000, "quote_reserve": null}
+    ]
+  }
+}
