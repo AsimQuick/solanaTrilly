@@ -7,14 +7,16 @@
 //   view=cohort; the token-detail view loads when view=token (default) with ?mint=.
 //   The config/model control operator skin loads when view=control (US-56 AC-56.3).
 //   The Feature Builder UI loads when view=features (US-57 AC-57.1).
+//   The Copy Trade tab loads when view=copytrade (US-63 AC-63.2).
 // created-by: dev-team
 // sprint: sprint-11
-// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1
+// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1, US-63 AC-63.2
 // last-updated: 2026-06-18
 // ---
 
 import CohortWall from './CohortWall.jsx'
 import ConfigControl from './ConfigControl.jsx'
+import CopyTradeTab from './CopyTradeTab.jsx'
 import FeatureBuilder from './FeatureBuilder.jsx'
 import TokenDetail from './TokenDetail.jsx'
 
@@ -41,6 +43,8 @@ function App() {
         <ConfigControl />
       ) : view === 'features' ? (
         <FeatureBuilder />
+      ) : view === 'copytrade' ? (
+        <CopyTradeTab />
       ) : mint ? (
         <TokenDetail mint={mint} intervalS={intervalS} />
       ) : (
@@ -48,7 +52,8 @@ function App() {
           Pass <code>?mint=&lt;address&gt;</code> to view a replayed token, or{' '}
           <code>?view=cohort</code> to open the cohort pattern-mining wall, or{' '}
           <code>?view=control</code> to open the config &amp; model control panel, or{' '}
-          <code>?view=features</code> to open the Feature Builder (§6.5 export).
+          <code>?view=features</code> to open the Feature Builder (§6.5 export), or{' '}
+          <code>?view=copytrade</code> to open the Copy Trade tab.
         </p>
       )}
     </div>
