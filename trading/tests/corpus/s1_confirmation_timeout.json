@@ -1,0 +1,21 @@
+{
+  "_comment": "§12 S1 real-failure fixture — banked as T3 regression corpus (AC-65.3)",
+  "scenario": "s1_confirmation_timeout",
+  "failure_kind": "confirmation_timeout_synthetic_fallback",
+  "pr_references": ["#317"],
+  "description": "getTransaction returned null for all 30 polling attempts (~60s) after a Jito-routed buy. The tx was eventually confirmed via getSignatureStatuses fallback which returned confirmationStatus=finalized with err=null. A synthetic SendResult is returned so the Position row can be created and tokens are not orphaned. Without this fallback, Jito txs that land after the getTransaction window create orphan positions.",
+  "tx_signature": "5JitoExampleSignatureLateConfirmation11111111111111111111111",
+  "get_transaction_null_retries": 30,
+  "signature_status_response": {
+    "confirmationStatus": "finalized",
+    "err": null,
+    "slot": 123456789
+  },
+  "expected_result": {
+    "confirmed": true,
+    "synthetic": true,
+    "meta_err": null
+  },
+  "expected_action": "create_position_row_with_synthetic_confirmation",
+  "notes": "Jito-routed txs can land on-chain before the Solana RPC indexes them in getTransaction. The getSignatureStatuses endpoint is faster to reflect. Never abandon a Position because getTransaction times out — always fall back to signatures check."
+}

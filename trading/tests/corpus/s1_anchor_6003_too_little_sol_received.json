@@ -1,0 +1,15 @@
+{
+  "_comment": "§12 S1 real-failure fixture — banked as T3 regression corpus (AC-65.3)",
+  "scenario": "s1_anchor_6003_too_little_sol_received",
+  "failure_kind": "anchor_error_sell_slippage",
+  "pr_references": ["#288"],
+  "description": "Sell tx included in block but inner instruction reverted with Anchor error 6003 (TooLittleSolReceived). Pool price dropped below min_quote_amount_out between simulation and submission. The sell attempt must be retried with a wider slippage tier (NORMAL→LOSS→PANIC escalation).",
+  "input_meta_err": {"InstructionError": [0, {"Custom": 6003}]},
+  "expected_decoded": {
+    "anchor_name": "TooLittleSolReceived",
+    "custom_code": 6003,
+    "instruction_index": 0
+  },
+  "expected_action": "retry_sell_with_wider_slippage",
+  "notes": "Sell-side slippage exceeded. Next attempt should use a wider slippage tier. On PANIC tier [9900 bps] failure, escalate to emergency market sell."
+}
