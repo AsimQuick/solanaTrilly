@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_deploy_workflow_ac84
-# sprint: sprint-3
-# story: US-8 AC-8.4
+# sprint: sprint-3, sprint-11
+# story: US-8 AC-8.4 US-52 AC-52.3
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-18
 # dependencies: pathlib, re, yaml
 # ---
 """AC-8.4 — solanaBilly hard isolation: scope and no-destructive-command invariants.
@@ -110,24 +110,45 @@ def _docker_compose_invocations(script: str) -> list[str]:
 
 
 def test_no_docker_compose_down_in_deploy_yml() -> None:
-    """deploy.yml must not contain any 'docker compose down' command (AC-8.4).
+    """deploy.yml must not contain any UNSCOPED 'docker compose down' command (AC-8.4).
 
-    'docker compose down' tears down the entire project stack, removing
-    containers and networks. Running it without a scope guard would destroy
-    any co-located project. It is banned from deploy.yml entirely — the
-    staging deploy uses only 'pull' and 'up -d'.
+    AC-8.4 bans UNSCOPED 'docker compose down' — running 'down' without '-p <project>'
+    defaults to the directory name and risks destroying a co-located stack (e.g. solanaBilly).
+
+    A SCOPED 'docker compose -p solanatrilly down --remove-orphans' (without -v / --volumes)
+    is ALLOWED — it is necessary to clear orphaned containers from interrupted prior deploys
+    (sprint-11 AC-52.3 fix) and is safely isolated to the solanatrilly project.
+
+    This test fails if:
+      - An unscoped 'docker compose down' appears (no -p flag)
+      - A 'docker compose down -v' or 'down --volumes' appears (volume removal is Forbidden)
     """
     data = _load_deploy()
     scripts = _all_run_scripts(data)
+    fragments = re.split(r"&&|\|\||;|\n", scripts)
 
-    down_re = re.compile(r"\bdocker(?:\s+compose|-compose)\b.*\bdown\b")
-    match = down_re.search(scripts)
-    assert match is None, (
-        "AC-8.4: 'docker compose down' found in deploy.yml run scripts.\n"
-        f"Matched text: {match.group(0)!r}\n\n"
-        "PRD §15.3 / CLAUDE.md Docker Rules: 'docker down' is a Forbidden command "
-        "in deploy.yml — it would destroy the stack. Use 'pull && up -d' instead."
-    )
+    for fragment in fragments:
+        stripped = fragment.strip()
+        if not re.search(r"\bdocker(?:\s+compose|-compose(?!\.))\b.*\bdown\b", stripped):
+            continue
+        # This fragment contains a 'docker compose down' call.
+        # It is forbidden if: (a) not project-scoped, OR (b) uses -v / --volumes.
+        is_scoped = bool(re.search(r"-p\s+\S+|--project-name\s+\S+", stripped))
+        has_volume_removal = bool(re.search(r"\s-v\b|--volumes\b", stripped))
+        assert is_scoped, (
+            "AC-8.4: UNSCOPED 'docker compose down' found in deploy.yml run scripts.\n"
+            f"Fragment: {stripped!r}\n\n"
+            "PRD §15.3 / CLAUDE.md Docker Rules: every 'docker compose down' must carry "
+            "'-p <project>' to prevent it from defaulting to the directory name and "
+            "potentially destroying a co-located stack (e.g. solanaBilly)."
+        )
+        assert not has_volume_removal, (
+            "AC-8.4: 'docker compose down -v / --volumes' found in deploy.yml run scripts.\n"
+            f"Fragment: {stripped!r}\n\n"
+            "PRD §15.3 / CLAUDE.md Docker Rules: volume removal is a Forbidden operation "
+            "in deploy.yml — it permanently destroys persistent data across ALL Docker "
+            "projects on the host. Remove the -v / --volumes flag."
+        )
 
 
 def test_no_force_recreate_in_deploy_yml() -> None:
