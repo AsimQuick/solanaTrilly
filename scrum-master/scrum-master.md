@@ -2,7 +2,7 @@
 file: scrum-master.md
 purpose: Current sprint status board + controlled vocabulary for solanaTrilly
 owner: product-owner
-last-updated: 2026-06-18 (sprint-13 PLANNED — OPEN P8: the shared PumpSwap trading-execution chain + exit engine + tape settler + T2 replay gate + Live Positions board, observe/paper behind the replay gate; ZERO capital, ZERO real orders, ZERO firehose)
+last-updated: 2026-06-18 (sprint-14 PLANNED — FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE: M2 pre-deploy built-image import smoke (US-71) + the last two PRD §13.2 dashboard views (US-72 Calibration & PnL, US-73 Replay viewer overlay) + status-integrity-at-the-source (US-74); M1/US-70 deploy gate ALREADY CLOSED on main via PR #296; ZERO capital, ZERO real orders, ZERO firehose)
 -->
 
 # solanaTrilly — Scrum Master Board
@@ -57,7 +57,36 @@ last-updated: 2026-06-18 (sprint-13 PLANNED — OPEN P8: the shared PumpSwap tra
 > last unbuilt PRD pillar, and closes the two agent-actionable sprint-9 carries (**I1** clean US-43
 > redeploy, **I4** the AI-agent ruff gate). See **[`sprint10.json`](sprint10.json)**.
 
-## Sprint-13 — OPEN P8 (PRD §10/§11): build the SHARED PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders) — the shared execution apparatus BOTH the prediction pipeline and copy-trade consume — PLANNED
+## Sprint-14 — FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE: M2 recurrence guard (built-image import smoke) + the last two PRD §13.2 dashboard views + status-integrity-at-the-source — PLANNED
+- **Phase:** in-progress (US-70 recorded DONE before kickoff — see banner; open stories US-71/72/73/74 not started)
+- **Sprint plan (source of truth):** [`sprint14.json`](sprint14.json)
+- **Why this sprint:** With **M1/US-70 (the sprint-13 VPS deploy gate) already CLOSED on `main` via PR #296** (the AC-68.3 in-container import failure root-caused to a faulty smoke-test harness missing `django.setup()`, NOT a prod-image/wiring/dependency/migration gap — see banner), sprint-13's P8 trading-execution chain is delivered and the deploy path is GREEN at kickoff. What remains is the **last agent-buildable PRD/SPEC scope**: a recurrence guard so the exact `AppRegistryNotReady` import-layer class that cost sprint-13 surfaces PRE-VPS, the **last two PRD §13.2 dashboard views** now unblocked by the P8 `Position`/PnL rows (views #1/#2/#3 shipped sprints 10–13; #6/#7 shipped sprint-11), and closing the recurring status-integrity board artifact **at its source**. After this sprint, ALL agent-buildable PRD pillars + the copy-trade SPEC are complete — what remains is the **operator-driven Cutover/soak/endgame** (§16), not sprint stories.
+- **Sprint goal:** (1) **M2 (US-71)** — a pre-deploy in-container import smoke against the **BUILT staging image** (not the test venv) that **itself initialises Django** (mirroring the PR #296 fix) + pin it in the deploy regression guard; (2) **M5 (US-72/US-73)** — Calibration & PnL analytics (§13.2#4) and the Replay viewer position-open/close overlay (§13.2#5), both reading **shared `Position` / replay-sandbox / recorded-tape rows** (NO new PnL/candle math, NO live Birdeye, zero firehose); (3) **US-74** — harden the US-13 guard to forbid `phase:complete` while any story is failed/blocked + flag `dev_status:not-started` on all-ACs-done stories, add a mechanical phase/dev_status promotion tool before the sprint-end deploy, and normalize `sprint13.json` to its true final DONE state. **SAFETY GATE (non-negotiable, unchanged):** `trading_enabled` DEFAULT False, ZERO real orders / ZERO capital, the live RPC/Sender boundary ported but NEVER invoked (AST-guarded); §5 copy-trade isolation PRESERVED. **OFFLINE/replay-driven by construction → ZERO firehose** (8 Birdeye + 8 Helius remain banked). CUTOVER / LIVE CAPITAL (§16) + the prediction SOAK/ENDGAME remain OPERATOR-DRIVEN — OUT OF SCOPE; the Copy-Trade v2 NON-goals (SPEC §1) remain DEFERRED.
+
+## Stories (sprint-14 — committed scope)
+| ID | Title | Priority | Deps | ACs | Status |
+|----|-------|----------|------|-----|--------|
+| US-70 | M1 KEYSTONE: close the sprint-13 VPS deploy gate — root-cause + fix the AC-68.3 in-container import failure, re-deploy green, confirm US-68.3 + US-69.3 (DELIVERED on main via PR #296) | high | US-64, US-68, US-69 | 3 | **done** |
+| US-71 | M2: pre-deploy in-container import smoke against the BUILT image (not the test venv) that ITSELF initialises Django + pin it in the deploy regression guard | high | US-70 | 3 | planned |
+| US-72 | M5: Calibration & PnL analytics dashboard view (PRD §13.2#4) over the shared `Position` rows — win-rate by score band, realized PnL by exit trigger, score-vs-actual scatter, calibration curve | medium | US-67, US-69, US-70, US-48 | 3 | planned |
+| US-73 | M5: Replay viewer position-open/close overlay (PRD §13.2#5) — render a replay run_id's sandbox Positions on the historical candles | medium | US-67, US-69, US-70, US-49 | 3 | planned |
+| US-74 | Close the recurring status-integrity artifact (A5/B4/C4/D2/D3) AT THE SOURCE: harden the US-13 guard + mechanical phase/dev_status promotion + normalize sprint13.json | medium | US-13 | 3 | planned |
+
+> **Scope:** sprint-14 commits **5 stories / 15 ACs** (US-70 already DELIVERED on `main` via PR #296 and recorded DONE; 4 open stories / 12 open ACs). Source of truth: [`sprint14.json`](sprint14.json). **Firehose: OFFLINE/replay-driven by construction — ZERO activation (8 Birdeye + 8 Helius remain banked);** every open AC is verifiable offline (built-image import smoke, API tests over banked `Position`/replay-sandbox/tape fixtures, frontend wiring checks, guard fixtures). **SAFETY GATE (non-negotiable):** `trading_enabled` DEFAULT False, NO real orders / NO capital; the live RPC/Sender send boundary ported but NEVER invoked; the no-auto-start AST guard (US-11 pattern) stays GREEN. **§5 copy-trade isolation PRESERVED** (copy-trade keeps its own engine/config/ON-OFF; only the execution+settlement CHASSIS is shared). **Parity by construction (Principle #2):** the new views read EXISTING shared `Position` / replay-sandbox / recorded-tape rows — NO new PnL/price/candle math, NO second source, NO re-implemented score. **Deferred to the `forward_plan`:** the operator-driven **Cutover / LIVE capital** (§16); the operator-driven prediction **soak/endgame** (I2/I3/K2/K3/M3/M4); the Copy-Trade v2 NON-goals (SPEC §1).
+
+**Build order:** **US-70** (M1 keystone) is **already DELIVERED on `main` via PR #296** (recorded DONE) — it closed the sprint-13 VPS deploy gate every other story's VPS clause depends on, so the deploy path is GREEN at kickoff; Dev/Tester treat its ACs as already-satisfied (empty branch → `verify_ac_already_satisfied`), do NOT modify app code. **US-71** (M2: the built-image pre-deploy import smoke that itself initialises Django + the extended deploy regression guard) runs **first** of the open stories — root cause is now known, so the guard pins the right invariant. **US-72** (Calibration & PnL view) and **US-73** (Replay viewer overlay) depend on the green deploy path (US-70) + the US-48 frontend (and the US-49 candle component for US-73); they are independent of each other and may run **in parallel**. **US-74** (status-integrity at the source) depends only on US-13 and may run anytime; its AC-74.3 normalizes `sprint13.json` to its true final DONE state now that US-70 has closed the gate. **ZERO firehose this sprint;** LIVE capital + the prediction soak/endgame remain the operator-driven Cutover (§16) — OUT OF SCOPE.
+
+> **GitHub Issues:** created at sprint-14 planning (2026-06-18), one per story —
+> [US-70 #291](https://github.com/AsimQuick/solanaTrilly/issues/291) (CLOSED — delivered via PR #296) ·
+> [US-71 #292](https://github.com/AsimQuick/solanaTrilly/issues/292) ·
+> [US-72 #293](https://github.com/AsimQuick/solanaTrilly/issues/293) ·
+> [US-73 #294](https://github.com/AsimQuick/solanaTrilly/issues/294) ·
+> [US-74 #295](https://github.com/AsimQuick/solanaTrilly/issues/295).
+> Source of truth remains [`sprint14.json`](sprint14.json).
+
+---
+
+## Sprint-13 — OPEN P8 (PRD §10/§11): build the SHARED PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders) — the shared execution apparatus BOTH the prediction pipeline and copy-trade consume — DELIVERED (board normalization pending US-74 AC-74.3)
 - **Phase:** planning
 - **Sprint plan (source of truth):** [`sprint13.json`](sprint13.json)
 - **Why this sprint:** Sprint-12 delivered the Copy-Trade epic **observe-complete**, but the product is **NOT feature-complete**: the remaining backlog is the **P8 trading-execution path (PRD §10/§11)** — the SHARED execution apparatus for BOTH the prediction pipeline AND copy-trade. This is retrospective action item **L1** and sprint-12 `forward_plan` item #1, and it is the **keystone blocker** for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. The SPEC §0 assumed a buy/sell apparatus that does **not** exist; this sprint **builds it** — but per the PRD, P8 is **observe/paper, behind the replay gate**, NOT live capital.
