@@ -1,10 +1,10 @@
 # ---
 # module: tools.sprint_integrity_check
 # sprint: sprint-4
-# story: US-13 AC-13.1 AC-13.2 AC-13.3
+# story: US-13 AC-13.1 AC-13.2 AC-13.3 US-74 AC-74.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-19
 # dependencies: json, sys, argparse, pathlib
 # ---
 
@@ -18,6 +18,8 @@ _FAIL_STATUSES = {"failed", "fail", "blocked"}
 _INCOMPLETE_DEV_STATUSES = {"not-started", "in-progress"}
 # Sprint phase values that indicate work is not finished
 _INCOMPLETE_PHASES = {"planning", "in-progress"}
+# Sprint phase values that indicate work is fully closed (AC-74.1)
+_TERMINAL_PHASES = {"complete", "done"}
 
 
 def check_sprint(data: dict) -> list[str]:
@@ -66,6 +68,17 @@ def check_sprint(data: dict) -> list[str]:
             violations.append(
                 f"Sprint phase='{phase}' but all stories have status='done' (stale)"
             )
+
+    # AC-74.1: terminal phase (complete/done) while any story tester_status is failed/blocked
+    if phase in _TERMINAL_PHASES:
+        for story in stories:
+            story_id = story.get("id", "<unknown>")
+            story_tester = story.get("tester_status", "")
+            if story_tester in _FAIL_STATUSES:
+                violations.append(
+                    f"Sprint phase='{phase}' but story {story_id} has "
+                    f"tester_status='{story_tester}' (terminal phase with failing story)"
+                )
 
     return violations
 
