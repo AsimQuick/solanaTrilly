@@ -1,0 +1,78 @@
+{
+  "_comment": "Pinned fixture for AC-65.1 — PumpSwap instruction builder deterministic tests. Static values derived from vendored IDL; PDA hex values computed by the reference implementation at first run and pinned here.",
+  "static_program_ids": {
+    "pump_amm_b58": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+    "token_program_b58": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "token_2022_program_b58": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "system_program_b58": "11111111111111111111111111111111",
+    "ata_program_b58": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+    "fee_program_b58": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"
+  },
+  "discriminators": {
+    "buy_hex": "66063d1201daebea",
+    "sell_hex": "33e685a4017f83ad"
+  },
+  "buy_account_structure": [
+    {"index": 0,  "name": "pool",                               "writable": true,  "signer": false},
+    {"index": 1,  "name": "user",                               "writable": true,  "signer": true},
+    {"index": 2,  "name": "global_config",                      "writable": false, "signer": false},
+    {"index": 3,  "name": "base_mint",                          "writable": false, "signer": false},
+    {"index": 4,  "name": "quote_mint",                         "writable": false, "signer": false},
+    {"index": 5,  "name": "user_base_token_account",            "writable": true,  "signer": false},
+    {"index": 6,  "name": "user_quote_token_account",           "writable": true,  "signer": false},
+    {"index": 7,  "name": "pool_base_token_account",            "writable": true,  "signer": false},
+    {"index": 8,  "name": "pool_quote_token_account",           "writable": true,  "signer": false},
+    {"index": 9,  "name": "protocol_fee_recipient",             "writable": false, "signer": false},
+    {"index": 10, "name": "protocol_fee_recipient_token_account","writable": true,  "signer": false},
+    {"index": 11, "name": "base_token_program",                 "writable": false, "signer": false},
+    {"index": 12, "name": "quote_token_program",                "writable": false, "signer": false},
+    {"index": 13, "name": "system_program",                     "writable": false, "signer": false},
+    {"index": 14, "name": "associated_token_program",           "writable": false, "signer": false},
+    {"index": 15, "name": "event_authority",                    "writable": false, "signer": false},
+    {"index": 16, "name": "program",                            "writable": false, "signer": false},
+    {"index": 17, "name": "coin_creator_vault_ata",             "writable": true,  "signer": false},
+    {"index": 18, "name": "coin_creator_vault_authority",       "writable": false, "signer": false},
+    {"index": 19, "name": "global_volume_accumulator",          "writable": false, "signer": false},
+    {"index": 20, "name": "user_volume_accumulator",            "writable": true,  "signer": false},
+    {"index": 21, "name": "fee_config",                         "writable": false, "signer": false},
+    {"index": 22, "name": "fee_program",                        "writable": false, "signer": false}
+  ],
+  "sell_account_structure": [
+    {"index": 0,  "name": "pool",                               "writable": true,  "signer": false},
+    {"index": 1,  "name": "user",                               "writable": true,  "signer": true},
+    {"index": 2,  "name": "global_config",                      "writable": false, "signer": false},
+    {"index": 3,  "name": "base_mint",                          "writable": false, "signer": false},
+    {"index": 4,  "name": "quote_mint",                         "writable": false, "signer": false},
+    {"index": 5,  "name": "user_base_token_account",            "writable": true,  "signer": false},
+    {"index": 6,  "name": "user_quote_token_account",           "writable": true,  "signer": false},
+    {"index": 7,  "name": "pool_base_token_account",            "writable": true,  "signer": false},
+    {"index": 8,  "name": "pool_quote_token_account",           "writable": true,  "signer": false},
+    {"index": 9,  "name": "protocol_fee_recipient",             "writable": false, "signer": false},
+    {"index": 10, "name": "protocol_fee_recipient_token_account","writable": true,  "signer": false},
+    {"index": 11, "name": "base_token_program",                 "writable": false, "signer": false},
+    {"index": 12, "name": "quote_token_program",                "writable": false, "signer": false},
+    {"index": 13, "name": "system_program",                     "writable": false, "signer": false},
+    {"index": 14, "name": "associated_token_program",           "writable": false, "signer": false},
+    {"index": 15, "name": "event_authority",                    "writable": false, "signer": false},
+    {"index": 16, "name": "program",                            "writable": false, "signer": false},
+    {"index": 17, "name": "coin_creator_vault_ata",             "writable": true,  "signer": false},
+    {"index": 18, "name": "coin_creator_vault_authority",       "writable": false, "signer": false},
+    {"index": 19, "name": "fee_config",                         "writable": false, "signer": false},
+    {"index": 20, "name": "fee_program",                        "writable": false, "signer": false}
+  ],
+  "sell_omitted_vs_buy": ["global_volume_accumulator", "user_volume_accumulator"],
+  "args_encoding": {
+    "buy": {
+      "base_amount_out_field": "u64_le_8_bytes",
+      "max_quote_amount_in_field": "u64_le_8_bytes",
+      "track_volume_field": "option_bool_borsh",
+      "example_none_track_volume_hex": "00",
+      "example_some_true_track_volume_hex": "0101",
+      "example_some_false_track_volume_hex": "0100"
+    },
+    "sell": {
+      "base_amount_in_field": "u64_le_8_bytes",
+      "min_quote_amount_out_field": "u64_le_8_bytes"
+    }
+  }
+}
