@@ -1,7 +1,7 @@
 # ---
 # module: core.control_api
 # sprint: sprint-11
-# story: US-56 AC-56.1
+# story: US-56 AC-56.1 AC-56.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-18
@@ -14,11 +14,11 @@ registry math — reads and diffs existing rows only (Principle #1/#2).
 """
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 
 from core.models import ModelRegistry, PipelineConfig
-from core.resolver import get_active_model
+from core.resolver import activate_config, activate_model, get_active_model
 
 # ---------------------------------------------------------------------------
 # Serializers (read-only)
@@ -298,3 +298,41 @@ def registry_diff_view(request):
         )
 
     return Response(compute_model_diff(active, candidate))
+
+
+# ---------------------------------------------------------------------------
+# Operator-GATED activate actions (AC-56.2)
+# Delegate exclusively to the existing audited activate_config() / activate_model()
+# paths (US-9 / US-42). Never write config/registry rows directly, never touch
+# firehose_active / scoring_enabled / trading_enabled.
+# ---------------------------------------------------------------------------
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminUser])
+def config_activate_view(request, pk):
+    """POST /api/control/config/<int:pk>/activate/ — operator-gated config activation.
+
+    Delegates to activate_config() (US-9 audited path). At-most-one-active
+    discipline and cache invalidation are handled there.
+    """
+    try:
+        config = activate_config(pk)
+    except PipelineConfig.DoesNotExist:
+        return Response({"detail": "Not found."}, status=404)
+    return Response(PipelineConfigSerializer(config).data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminUser])
+def registry_activate_view(request, pk):
+    """POST /api/control/registry/<int:pk>/activate/ — operator-gated model activation.
+
+    Delegates to activate_model() (US-42 audited path). At-most-one-active
+    discipline is handled there.
+    """
+    try:
+        model = activate_model(pk)
+    except ModelRegistry.DoesNotExist:
+        return Response({"detail": "Not found."}, status=404)
+    return Response(ModelRegistrySerializer(model).data)
