@@ -1,8 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 1/6 stories | 5/18 ACs
-**Last Updated:** 2026-06-18T14:47:33+00:00
+**Progress:** 2/6 stories | 6/18 ACs
+**Last Updated:** 2026-06-18T15:10:18+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -120,14 +120,15 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 ---
 
 ### US-65: PumpSwap buy/sell instruction builder + AMM quote/fee math (§10.1), ported behind trading_enabled, replay/unit-gated, NO live send
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-65.1:** A PumpSwap buy/sell instruction builder ports the §10.1 account lists VERBATIM from the vendored IDL: BUY 23 accounts in order, SELL 21 (OMITS the two volume accumulators), correct discriminators + args (buy base_amount_out:u64, max_quote_amount_in:u64, track_volume:OptionBool; sell base_amount_in:u64, min_quote_amount_out:u64); pool/creator PDA derivation (deterministic, no indexer) + runtime-derived event_authority (never hardcoded). Verified by deterministic unit tests asserting account order/writability/signer flags + discriminators + PDA derivation against pinned fixtures. NO mainnet send.
   - Dev: done
 - [x] **AC-65.2:** The AMM quote (PumpSwap constant-product) + fee math (Principle #4 coordinated pass): pool-reserve constant-product entry-price / tokens-out / sol-out with the 0.25%/0.30% creator-fee read from pinned GlobalConfig fixture values (not a live RPC call — offline constraint; buy fee on top, sell fee deducted); EVERY zero-reserve guard preserved (H4 — guard zero before division, never silent). Verified by unit tests against pinned pool-reserve + fee fixtures, including zero/null-reserve guard cases.
   - Dev: done
-- [ ] **AC-65.3:** The execution body is gated behind trading_enabled (DEFAULT False); the live RPC/Sender send path is a clearly-isolated boundary NEVER invoked in observe/paper or tests (chainstacklabs manual_buy/sell_pumpswap.py port reference; Sender->RPC fallback + circuit-breaker + ghost-buy-verify + Anchor-decode structure ported but not executed against mainnet — Cutover-gated). Verified by an AST/guard test that no test or observe/paper path reaches a real send; the §12 S1 real-failure fixtures are banked as named fixture files in the T3 regression corpus directory. New files carry metadata front matter. Zero firehose.
+- [x] **AC-65.3:** The execution body is gated behind trading_enabled (DEFAULT False); the live RPC/Sender send path is a clearly-isolated boundary NEVER invoked in observe/paper or tests (chainstacklabs manual_buy/sell_pumpswap.py port reference; Sender->RPC fallback + circuit-breaker + ghost-buy-verify + Anchor-decode structure ported but not executed against mainnet — Cutover-gated). Verified by an AST/guard test that no test or observe/paper path reaches a real send; the §12 S1 real-failure fixtures are banked as named fixture files in the T3 regression corpus directory. New files carry metadata front matter. Zero firehose.
+  - Dev: done
 
 **Dependencies:** US-64
 
@@ -159,6 +160,19 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
   | `trading/tests/test_amm_quote_ac652.py` | 41 offline/deterministic unit tests across 5 sections: AmmFees, spot\_price, quote\_buy, quote\_sell, fixture integrity — including pinned-value assertions, fee-on-top/fee-deducted directional checks, and all H4 zero/None guard cases |
   
   **Test results:** 41/41 new tests pass; 2263/2263 total pass (no regressions). Zero firehose — all offline integer arithmetic against pinned fixtures. Pushed to `feature/US-65-AC-65.2`.
+  AC-65.3 done: Pushed successfully. AC-65.3 is complete.
+  
+  ## Implementation Summary — US-65 AC-65.3
+  
+  The previous dev agent's partial work was substantially complete; I verified it against the AC, fixed lint failures that would have broken CI, and confirmed the full DoD before committing.
+  
+  **Files changed (11):**
+  
+  | File | Role |
+  |------|------|
+  | `trading/sender.py` (new) | The **sole live RPC/Sender send boundary** — Cutover-gated. `Sender` (Sender→RPC fallback for sells, never buys), `CircuitBreaker` (sliding-window 5xx tripping), `verify_ghost_buy` (ATA-balance ghost-buy detection), `decode_anchor_error` (6002/6003/6023 + generic meta.err). All `requests` imports are **deferred inside methods** so the module imports cleanly without network deps and is never wired in observe/paper. |
+  | `trading/execution_core.py` (mod) | `execute_buy`/`execute_sell` gate on `trading_enabled` (DEFAULT False) **and** `sender is None` before any Sender call; Sender injected as `Any` so this module has **zero import dependency** on `trading.sender`. |
+  | `trading/tests/corpus/*.json` (8 new) | §12 S1 real-failure fixtures banked as the **T3 regression corpus**, covering the complete PRD §6 S1 PR set (#288/#301/#303 …
 
 **Tester Status:** approved
 **Tester Notes:**
