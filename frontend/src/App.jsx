@@ -10,9 +10,10 @@
 //   The Copy Trade tab loads when view=copytrade (US-63 AC-63.2).
 //   The Live Positions board loads when view=positions (US-69 AC-69.2).
 //   The Calibration & PnL analytics view loads when view=calibration (US-72 AC-72.2).
+//   The Replay viewer position-open/close overlay loads when view=replay (US-73 AC-73.2).
 // created-by: dev-team
 // sprint: sprint-14
-// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1, US-63 AC-63.2, US-69 AC-69.2, US-72 AC-72.2
+// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1, US-63 AC-63.2, US-69 AC-69.2, US-72 AC-72.2, US-73 AC-73.2
 // last-updated: 2026-06-19
 // ---
 
@@ -22,6 +23,7 @@ import ConfigControl from './ConfigControl.jsx'
 import CopyTradeTab from './CopyTradeTab.jsx'
 import FeatureBuilder from './FeatureBuilder.jsx'
 import LivePositions from './LivePositions.jsx'
+import ReplayViewer from './ReplayViewer.jsx'
 import TokenDetail from './TokenDetail.jsx'
 
 // Read a named query param from the current URL.
@@ -37,6 +39,7 @@ function App() {
   const intervalS = parseInt(getQueryParam('interval_s', '15'), 10)
   const groupBy = getQueryParam('group_by', null)
   const sortBy = getQueryParam('sort_by', null)
+  const runId = getQueryParam('run_id', null)
 
   return (
     <div id="solanatrilly-app" style={{ background: '#0f1117', minHeight: '100vh', padding: '16px' }}>
@@ -53,6 +56,8 @@ function App() {
         <LivePositions />
       ) : view === 'calibration' ? (
         <CalibrationPnL />
+      ) : view === 'replay' ? (
+        <ReplayViewer runId={runId} />
       ) : mint ? (
         <TokenDetail mint={mint} intervalS={intervalS} />
       ) : (
@@ -63,7 +68,8 @@ function App() {
           <code>?view=features</code> to open the Feature Builder (§6.5 export), or{' '}
           <code>?view=copytrade</code> to open the Copy Trade tab, or{' '}
           <code>?view=positions</code> to open the Live Positions board, or{' '}
-          <code>?view=calibration</code> to open the Calibration &amp; PnL analytics view.
+          <code>?view=calibration</code> to open the Calibration &amp; PnL analytics view, or{' '}
+          <code>?view=replay</code> to open the Replay viewer position-open/close overlay.
         </p>
       )}
     </div>
