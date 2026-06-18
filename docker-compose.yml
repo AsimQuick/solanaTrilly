@@ -4,8 +4,8 @@
 # purpose: Local development services — all services containerised (Docker Rules)
 # created-by: dev-team
 # sprint: sprint-1
-# story: US-1 AC-1.1, US-1 AC-1.4, US-16 AC-16.3, US-48 AC-48.1
-# last-updated: 2026-06-17
+# story: US-1 AC-1.1, US-1 AC-1.4, US-16 AC-16.3, US-48 AC-48.1, US-59 AC-59.1
+# last-updated: 2026-06-18
 # ---
 #
 # Env values use ${VAR:-default} interpolation.
@@ -114,6 +114,23 @@ services:
       SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-key-change-me}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
+      HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  copytrade_engine:
+    build: .
+    command: python manage.py run_copytrade_engine
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@db:5432/app}
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-key-change-me}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       HELIUS_API_KEY: ${HELIUS_API_KEY:-}
     depends_on:
       db:
