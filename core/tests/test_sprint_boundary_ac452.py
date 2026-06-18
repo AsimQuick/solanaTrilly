@@ -309,7 +309,8 @@ def test_promoter_promotes_stale_sprint_phase_to_complete() -> None:
 
     AC-45.2: the promoter auto-promotes OR blocks with REMEDY. Proves the core
     promotion logic works as expected for the sprint-9 scenario: if all sprint-9
-    stories reach status='done', a stale phase='planning' is promoted to 'complete'.
+    stories reach status='done', a stale phase='planning' is promoted to 'done'
+    (AC-74.2 updated the closeout target from 'complete' to 'done').
     """
     # Simulate sprint9 at closeout — all stories done, phase still stale
     stale_sprint9 = {
@@ -321,12 +322,12 @@ def test_promoter_promotes_stale_sprint_phase_to_complete() -> None:
         ],
     }
     updated, promoted_to = promote_sprint_phase(stale_sprint9)
-    assert promoted_to == "complete", (
-        "AC-45.2: promoter must promote phase 'planning' → 'complete' when all stories are done; "
+    assert promoted_to == "done", (
+        "AC-45.2/AC-74.2: promoter must promote phase 'planning' → 'done' when all stories are done; "
         f"got promoted_to={promoted_to!r}"
     )
-    assert updated["phase"] == "complete", (
-        f"AC-45.2: updated dict must have phase='complete'; got {updated['phase']!r}"
+    assert updated["phase"] == "done", (
+        f"AC-45.2/AC-74.2: updated dict must have phase='done'; got {updated['phase']!r}"
     )
 
 
