@@ -389,3 +389,25 @@ def test_direct_copytrade_position_creation_has_null_shared_position_id():
 
     # No shared Position row should have been written
     assert Position.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_close_position_tolerates_stale_shared_position_id():
+    """close_position must not raise when shared_position_id points to a missing row.
+
+    Defensive AC-68.1 branch: if the linked shared trading.Position has been
+    deleted out from under the CopytradePosition (stale link), close_position
+    settles the copytrade row as normal and silently skips the shared-row
+    settlement instead of raising Position.DoesNotExist.
+    """
+    ct_pos = open_observe_position(_ct_record(), _ENTRY_PRICE, _ct_config())
+    # Delete the linked shared row to simulate a stale link.
+    Position.objects.filter(pk=ct_pos.shared_position_id).delete()
+    assert Position.objects.count() == 0
+
+    closed = close_position(ct_pos, CopytradePosition.EXIT_TP, _EXIT_PRICE_TP, _T1)
+
+    # The copytrade row still settles correctly despite the missing shared row.
+    assert closed.status == CopytradePosition.STATUS_CLOSED
+    assert closed.exit_reason == CopytradePosition.EXIT_TP
+    assert Position.objects.count() == 0
