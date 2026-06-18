@@ -1,20 +1,23 @@
 # ---
 # module: copytrade.models
 # sprint: sprint-12
-# story: US-58 AC-58.1
+# story: US-58 AC-58.1, US-58 AC-58.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-18
 # dependencies: django, copytrade.schemas, pydantic
 # ---
-"""Django model for the copytrade.* config store (SPEC §2, §5, §7).
+"""Django models for the copytrade §5-isolated namespace (SPEC §2, §5, §7, §9).
 
-CopyTradeSettings is a singleton (pk=1) row that holds the live copy-trade
-config. It is ENTIRELY SEPARATE from PipelineConfig / PipelineState — §5
-isolation: no shared mutable state, no FK into the raw lake or core tables.
+CopyTradeSettings is a singleton config row.  The four copytrade_-prefixed
+tables (cohort / wallets / positions / pnl_by_wallet) hold all copy-trade
+domain data.
 
-All writes are validated through CopyTradeConfig (Pydantic v2) at save time,
-mirroring the US-10 write-path-gate pattern used by PipelineConfig.clean().
+§5 ISOLATION: NONE of these models declare a ForeignKey into the raw lake
+(RawEvent, Token) or the firehose control plane (PipelineConfig, PipelineState).
+All inter-table references within the copytrade namespace use CharField cohort_id
+(string key) to avoid Django cascade semantics complicating the US-62 fresh-start
+purge.
 """
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -22,6 +25,7 @@ from django.db import models
 from pydantic import ValidationError as PydanticValidationError
 
 from copytrade.schemas import CopyTradeConfig
+from core.encoders import JsonSafeEncoder
 
 
 class CopyTradeSettings(models.Model):
@@ -116,3 +120,155 @@ class CopyTradeSettings(models.Model):
             active_cohort_id=self.active_cohort_id,
             engine_on=self.engine_on,
         )
+
+
+# ---------------------------------------------------------------------------
+# AC-58.2 — The four copytrade_-prefixed domain tables (SPEC §9)
+# ---------------------------------------------------------------------------
+
+
+class CopytradeCohort(models.Model):
+    """One row per uploaded cohort (SPEC §2 / §9).
+
+    cohort_id is the user-supplied string identifier from leaderboard.json (e.g.
+    'whale-ct-2026-06-17-v1').  Exactly one row may have active=True at a time;
+    the US-62 fresh-start lifecycle manages this invariant.
+
+    trade_config stores the raw SPEC §2 trade_config dict as JSONB so the cohort
+    JSON is reproduced faithfully.  The canonical typed version lives in
+    CopyTradeSettings; this is the audit record.
+    """
+
+    cohort_id = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField()
+    description = models.TextField(blank=True, default="")
+    trade_config = models.JSONField(default=dict, encoder=JsonSafeEncoder)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    active = models.BooleanField(default=False)
+
+    class Meta:
+        app_label = "copytrade"
+        db_table = "copytrade_cohort"
+
+    def __str__(self) -> str:
+        return f"CopytradeCohort({self.cohort_id}, active={self.active})"
+
+
+class CopytradeWallet(models.Model):
+    """One row per wallet in the active cohort (SPEC §2 / §9).
+
+    cohort_id is a VARCHAR reference to CopytradeCohort.cohort_id — no FK so
+    that the US-62 purge can DELETE ... WHERE cohort_id=X without Django cascade
+    semantics interfering.  rank / precision / median_lead_min are informational
+    fields from the leaderboard JSON.
+    """
+
+    cohort_id = models.CharField(max_length=255, db_index=True)
+    address = models.CharField(max_length=64)
+    rank = models.IntegerField(null=True, blank=True)
+    precision = models.FloatField(null=True, blank=True)
+    median_lead_min = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        app_label = "copytrade"
+        db_table = "copytrade_wallets"
+        indexes = [
+            models.Index(fields=["cohort_id", "address"], name="ct_wallet_cohort_addr_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"CopytradeWallet({self.address[:8]}… cohort={self.cohort_id})"
+
+
+class CopytradePosition(models.Model):
+    """One row per copy-trade position opened by the engine (SPEC §4 / §9).
+
+    status is open|closed.  mode mirrors CopyTradeSettings.mode at entry time so
+    position history is self-contained.  exit fields are null until the position
+    closes.  cohort_id is a VARCHAR reference (no FK) for the same reason as
+    CopytradeWallet.
+    """
+
+    STATUS_OPEN = "open"
+    STATUS_CLOSED = "closed"
+    STATUS_CHOICES = [
+        (STATUS_OPEN, "Open"),
+        (STATUS_CLOSED, "Closed"),
+    ]
+
+    MODE_OBSERVE = "observe"
+    MODE_LIVE = "live"
+    MODE_CHOICES = [
+        (MODE_OBSERVE, "Observe"),
+        (MODE_LIVE, "Live"),
+    ]
+
+    EXIT_TP = "TP"
+    EXIT_SL = "SL"
+    EXIT_CURVE = "CURVE"
+    EXIT_TIMER = "TIMER"
+    EXIT_REASON_CHOICES = [
+        (EXIT_TP, "Take Profit"),
+        (EXIT_SL, "Stop Loss"),
+        (EXIT_CURVE, "Curve Completion"),
+        (EXIT_TIMER, "Max Hold Timer"),
+    ]
+
+    cohort_id = models.CharField(max_length=255, db_index=True)
+    mint = models.CharField(max_length=64, db_index=True)
+    trigger_wallet = models.CharField(max_length=64)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_OPEN)
+    mode = models.CharField(max_length=10, choices=MODE_CHOICES, default=MODE_OBSERVE)
+
+    entry_ts = models.DateTimeField(null=True, blank=True)
+    entry_price = models.FloatField(null=True, blank=True)
+    sol_in = models.FloatField(null=True, blank=True)
+
+    exit_ts = models.DateTimeField(null=True, blank=True)
+    exit_price = models.FloatField(null=True, blank=True)
+    sol_out = models.FloatField(null=True, blank=True)
+    exit_reason = models.CharField(max_length=10, choices=EXIT_REASON_CHOICES, null=True, blank=True)
+
+    realized_pnl_sol = models.FloatField(null=True, blank=True)
+    realized_pnl_pct = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        app_label = "copytrade"
+        db_table = "copytrade_positions"
+        indexes = [
+            models.Index(fields=["cohort_id", "status"], name="ct_pos_cohort_status_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"CopytradePosition({self.mint[:8]}… {self.status} cohort={self.cohort_id})"
+
+
+class CopytradePnlByWallet(models.Model):
+    """Per-wallet PnL rollup for the active cohort (SPEC §9, application-level rollup).
+
+    This is a regular Django-managed table populated by the engine (US-61) after
+    each position closes.  One row per (cohort_id, address) pair; upserted on
+    every position close.
+
+    Implementation choice (AC-58.2): application-level rollup rather than a DB
+    view, so migrations stay simple and the rollup can be tested without DDL
+    view creation.
+    """
+
+    cohort_id = models.CharField(max_length=255, db_index=True)
+    address = models.CharField(max_length=64)
+    n_trades = models.IntegerField(default=0)
+    win_rate = models.FloatField(default=0.0)
+    total_pnl_sol = models.FloatField(default=0.0)
+    avg_hold_s = models.FloatField(default=0.0)
+
+    class Meta:
+        app_label = "copytrade"
+        db_table = "copytrade_pnl_by_wallet"
+        unique_together = [("cohort_id", "address")]
+        indexes = [
+            models.Index(fields=["cohort_id", "address"], name="ct_pnl_cohort_addr_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"CopytradePnlByWallet({self.address[:8]}… cohort={self.cohort_id})"
