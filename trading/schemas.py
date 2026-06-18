@@ -1,8 +1,8 @@
 # ---
 # module: trading.schemas
 # sprint: sprint-13
-# story: US-64 AC-64.1
-# status: implemented
+# story: US-64 AC-64.1, US-66 AC-66.1
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-18
 # dependencies: pydantic>=2.0
@@ -63,6 +63,7 @@ class TradingConfig(BaseModel):
     rug_pull_drop_pct: float = Field(default=50.0, gt=0, le=100)
     next_poll_guard_s: int = Field(default=10, ge=0)
     auto_sell_timer_s: int = Field(default=300, gt=0)
+    stale_timeout_s: int = Field(default=1800, gt=0)
 
     # --- Trailing stop parameters ---
     trailing_pct: float = Field(default=20.0, gt=0, le=100)

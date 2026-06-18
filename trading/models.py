@@ -1,8 +1,8 @@
 # ---
 # module: trading.models
 # sprint: sprint-13
-# story: US-64 AC-64.1, US-64 AC-64.2
-# status: implemented
+# story: US-64 AC-64.1, US-64 AC-64.2, US-66 AC-66.1
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-18
 # dependencies: django, trading.schemas, pydantic, core.encoders
@@ -76,6 +76,7 @@ class TradingSettings(models.Model):
     rug_pull_drop_pct = models.FloatField(default=50.0)
     next_poll_guard_s = models.IntegerField(default=10)
     auto_sell_timer_s = models.IntegerField(default=300)
+    stale_timeout_s = models.IntegerField(default=1800)
 
     # --- Trailing stop parameters ---
     trailing_pct = models.FloatField(default=20.0)
@@ -115,6 +116,7 @@ class TradingSettings(models.Model):
                 rug_pull_drop_pct=self.rug_pull_drop_pct,
                 next_poll_guard_s=self.next_poll_guard_s,
                 auto_sell_timer_s=self.auto_sell_timer_s,
+                stale_timeout_s=self.stale_timeout_s,
                 trailing_pct=self.trailing_pct,
                 trailing_arm_multiple=self.trailing_arm_multiple,
                 trailing_grace_s=self.trailing_grace_s,
@@ -154,6 +156,7 @@ class TradingSettings(models.Model):
             rug_pull_drop_pct=self.rug_pull_drop_pct,
             next_poll_guard_s=self.next_poll_guard_s,
             auto_sell_timer_s=self.auto_sell_timer_s,
+            stale_timeout_s=self.stale_timeout_s,
             trailing_pct=self.trailing_pct,
             trailing_arm_multiple=self.trailing_arm_multiple,
             trailing_grace_s=self.trailing_grace_s,
