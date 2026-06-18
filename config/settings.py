@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "simple_history",
     "core",
+    "copytrade",
 ]
 
 # The MIDDLEWARE stack runs on EVERY request (top-down) and response (bottom-up).
