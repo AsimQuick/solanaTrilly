@@ -1,8 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 3/6 stories | 9/18 ACs
-**Last Updated:** 2026-06-18T16:07:09+00:00
+**Progress:** 3/6 stories | 10/18 ACs
+**Last Updated:** 2026-06-18T16:24:53+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -253,16 +253,34 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 ---
 
 ### US-67: The T2 full-pipeline replay harness + the replay sandbox schema + T3 regression corpus (§11) — the P8 OFFLINE GATE
-**Status:** draft | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-67.1:** A T2 full-pipeline replay harness ('a day in 30s') replays whole days end-to-end through the REAL serving + exit + settler core (clock-injected, DataSource=Replay) and writes the identical artifacts a live run would — Predictions/Positions/PnL — into an ISOLATED replay sandbox schema (§11.3), never the live tables. Verified by a deterministic replay over a banked multi-token tape day from solanatrills/lake/tapes/ producing expected sandbox Position/PnL rows pinned as named golden fixture files (run-twice-identical output; a replay output diff against the golden file is a first-class CI failure).
+- [x] **AC-67.1:** A T2 full-pipeline replay harness ('a day in 30s') replays whole days end-to-end through the REAL serving + exit + settler core (clock-injected, DataSource=Replay) and writes the identical artifacts a live run would — Predictions/Positions/PnL — into an ISOLATED replay sandbox schema (§11.3), never the live tables. Verified by a deterministic replay over a banked multi-token tape day from solanatrills/lake/tapes/ producing expected sandbox Position/PnL rows pinned as named golden fixture files (run-twice-identical output; a replay output diff against the golden file is a first-class CI failure).
+  - Dev: done
 - [ ] **AC-67.2:** T0+T1+T2 wired as the promotion gate (§11.2): the PnL the labs quote and the PnL replay produces AGREE exactly (any gap is a parity/leak bug; the labs-side PnL reference used in the parity assertion is a static pinned golden value in the test fixture, not dynamically recomputed at test time — a dynamically-recomputed reference cannot catch regressions). T3 regression corpus: a frozen tape-settled cohort in CI fails if a PR flips a verdict (the #404 file+test-dropped-together class can't hide a flip). Verified by the T3 corpus test in the canonical ci.yml 'test' job + a parity-agreement assertion.
 - [ ] **AC-67.3:** The replay sandbox is isolated (separate replay schema; no replay path writes live tables, §11.3) — verified by a guard test asserting at the ORM/transaction level that no replay write touches live-schema tables. The harness runs OFFLINE (zero firehose; replay/backfill DataSource only). New files carry metadata front matter.
 
 **Dependencies:** US-65, US-66
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-67.1 done: AC-67.1 is implemented and pushed to `feature/US-67-AC-67.1`.
+  
+  ---
+  
+  ## Implementation Summary
+  
+  **AC-67.1: T2 full-pipeline replay harness ('a day in 30s')**
+  
+  ### Files changed (6)
+  
+  | File | Role |
+  |------|------|
+  | `trading/models.py` | Added `ReplayPosition` model — `db_table='trading_replay_positions'` (never `'trading_positions'`); fields: `replay_run_id`, `mint`, `score`, `enterable`, `unentered_reason`, `entry_ts/price/size_sol`, and all settlement fields (`exit_trigger`, `realized_pnl_pct`, `peak_pct`, `held_s`, `flow_usd`, `exit_price`, `peak_price_abs`) |
+  | `trading/migrations/0004_replay_position.py` | Creates `trading_replay_positions` table with compound index on `(replay_run_id, mint)` |
+  | `trading/replay_harness.py` | `DayReplayHarness` class: injectable `predictor`, `config`, `score_threshold`, `score_delay_s`, `size_sol`, `sol_usd`; `run(tape, replay_run_id, now)` iterates mints in sorted order (deterministic), scores via predictor, calls `simulate_tape_exit`, writes `ReplayPosition` rows to sandbox, returns serialisable result dicts; no top-level live imports (Principle #7) |
+  | `trading/tests/fixtures/replay_tape_day_ac671.json` | Banked 5-token tape day extracted f …
 
 **Tester Status:** approved
 **Tester Notes:**
