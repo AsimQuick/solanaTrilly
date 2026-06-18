@@ -1,8 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 0/6 stories | 0/18 ACs
-**Last Updated:** 2026-06-18
+**Progress:** 0/6 stories | 1/18 ACs
+**Last Updated:** 2026-06-18T13:46:22+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -40,16 +40,44 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 ## User Stories
 
 ### US-64: P8 FOUNDATION: the shared execution-apparatus skeleton + the unified Position model + the trading.* config namespace + the vendored PumpSwap IDL
-**Status:** draft | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-64.1:** A shared execution app/namespace (name committed at development kickoff; 'trading/' used as the reference name throughout this sprint) BOTH pipelines call — a thin clock-injected core behind the DataSource seam (Principle #7); a trading.* config (Pydantic, consistent with §5) holding the §10/§17 trade knobs (slippage tiers TIGHT/NORMAL/LOSS/PANIC, TP/SL, exit-rule params, sizing, trading_enabled DEFAULT False). Save-time invariant rejection (US-10 write-path pattern). A no-auto-start AST guard (US-11 pattern) confirms nothing flips trading_enabled True on any boot/resolver/upload/ON path. Verified by config persist/reject tests + the AST guard.
+- [x] **AC-64.1:** A shared execution app/namespace (name committed at development kickoff; 'trading/' used as the reference name throughout this sprint) BOTH pipelines call — a thin clock-injected core behind the DataSource seam (Principle #7); a trading.* config (Pydantic, consistent with §5) holding the §10/§17 trade knobs (slippage tiers TIGHT/NORMAL/LOSS/PANIC, TP/SL, exit-rule params, sizing, trading_enabled DEFAULT False). Save-time invariant rejection (US-10 write-path pattern). A no-auto-start AST guard (US-11 pattern) confirms nothing flips trading_enabled True on any boot/resolver/upload/ON path. Verified by config persist/reject tests + the AST guard.
+  - Dev: done
 - [ ] **AC-64.2:** A unified Position Django model (the SHARED row both pipelines write): mint, source in {model, copytrade}, mode in {observe, live}, status in {PAPER, OPEN, CLOSED}, entry_ts/entry_price, size_sol, exit_ts/exit_price, exit_trigger, realized_pnl_sol, realized_pnl_pct, peak_price, closed_at — with the H3 json_safe encoder on any JSONField; migrations land. Verified by model/migration tests; a copytrade observe position is expressible as a Position row with source='copytrade' (parity foundation).
 - [ ] **AC-64.3:** The pinned PumpSwap IDL (pump_amm.json, from pump-fun/pump-public-docs) is vendored into the repo with a content-hash/pin manifest (IDL > scripts per CLAUDE.md). A pytest asserts the vendored IDL's buy/sell account counts (23 buy / 21 sell) + discriminators (buy 66063d1201daebea, sell 33e685a4017f83ad) match the §10.1 pinned ground truth. New files carry metadata front matter. Zero firehose.
 
 **Dependencies:** US-9, US-10, US-58
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-64.1 done: The commit is on the remote branch. Implementation is complete.
+  
+  ---
+  
+  ## Implementation Summary
+  
+  **Files created (10):**
+  
+  | File | Role |
+  |------|------|
+  | `trading/__init__.py` | Package init with metadata header |
+  | `trading/apps.py` | `TradingConfig` AppConfig — no `ready()` method (no-auto-start enforced) |
+  | `trading/schemas.py` | `TradingConfig` Pydantic v2 schema with all 19 §10/§17 fields and 3 model validators |
+  | `trading/execution_core.py` | `ExecutionCore` skeleton — `DataSource` + `Clock` injected; no `LiveSource`/`ReplaySource` imports |
+  | `trading/models.py` | `TradingSettings` singleton with `clean()` Pydantic gate, `save()` forcing `pk=1`, `get()`, `to_schema()` |
+  | `trading/migrations/__init__.py` | Migrations package init |
+  | `trading/migrations/0001_initial.py` | Creates `trading_config` table with all 21 columns |
+  | `trading/tests/__init__.py` | Tests package init |
+  | `trading/tests/test_trading_config_ac641.py` | 23 tests across 3 sections (schema, DB write-path, AST guard) |
+  
+  **Files modified (1):**
+  - `config/settings.py` — added `"trading"` to `INSTALLED_APPS`
+  
+  **Test results:** 23/23 new tests pass; 2161/2161 total tests pass (no regressions).
+  
+  **Key design …
 
 **Tester Status:** approved
 **Tester Notes:**
