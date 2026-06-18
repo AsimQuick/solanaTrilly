@@ -9,12 +9,14 @@
 //   The Feature Builder UI loads when view=features (US-57 AC-57.1).
 //   The Copy Trade tab loads when view=copytrade (US-63 AC-63.2).
 //   The Live Positions board loads when view=positions (US-69 AC-69.2).
+//   The Calibration & PnL analytics view loads when view=calibration (US-72 AC-72.2).
 // created-by: dev-team
-// sprint: sprint-11
-// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1, US-63 AC-63.2, US-69 AC-69.2
-// last-updated: 2026-06-18
+// sprint: sprint-14
+// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1, US-63 AC-63.2, US-69 AC-69.2, US-72 AC-72.2
+// last-updated: 2026-06-19
 // ---
 
+import CalibrationPnL from './CalibrationPnL.jsx'
 import CohortWall from './CohortWall.jsx'
 import ConfigControl from './ConfigControl.jsx'
 import CopyTradeTab from './CopyTradeTab.jsx'
@@ -49,6 +51,8 @@ function App() {
         <CopyTradeTab />
       ) : view === 'positions' ? (
         <LivePositions />
+      ) : view === 'calibration' ? (
+        <CalibrationPnL />
       ) : mint ? (
         <TokenDetail mint={mint} intervalS={intervalS} />
       ) : (
@@ -58,7 +62,8 @@ function App() {
           <code>?view=control</code> to open the config &amp; model control panel, or{' '}
           <code>?view=features</code> to open the Feature Builder (§6.5 export), or{' '}
           <code>?view=copytrade</code> to open the Copy Trade tab, or{' '}
-          <code>?view=positions</code> to open the Live Positions board.
+          <code>?view=positions</code> to open the Live Positions board, or{' '}
+          <code>?view=calibration</code> to open the Calibration &amp; PnL analytics view.
         </p>
       )}
     </div>
