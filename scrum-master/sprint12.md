@@ -1,8 +1,8 @@
 # Sprint 12
 
-**Phase:** planning
+**Phase:** complete
 **Progress:** 6/6 stories | 18/18 ACs
-**Last Updated:** 2026-06-18T12:39:38+00:00
+**Last Updated:** 2026-06-18T13:05:09+00:00
 
 ## Sprint Goal
 OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatrilly_copytrade_SPEC.md, provided 2026-06-17) — stand up the Copy-Trade pipeline as a FIRST-CLASS TRADING SIBLING to the prediction/model pipeline, driven by a JSON list of ~10 wallets instead of a model, delivered END-TO-END THROUGH OBSERVE (PAPER) MODE this sprint. Sprint-11 closed the P6 dashboard VPS deploy gap and delivered all THREE PRD pillars DoD-done at the dashboard layer; the project is NOT complete because the Copy-Trade Dashboard v1 SPEC is committed scope and is NOT YET BUILT (zero copytrade code in the repo). This sprint builds the SPEC's non-negotiables: a §5-ISOLATED copytrade_engine — its OWN copytrade.* config namespace, its OWN copytrade_-prefixed DB tables, and its OWN Helius subscription to WALLET addresses (NOT the token firehose) — that must NOT clash with or share mutable state with the existing firehose/model pipeline (both pipelines run concurrently, each with its own ON/OFF, positions, PnL, limits); the correctness-critical copy-BUY trigger (copy a watched wallet ONLY when it BUYS a pump.fun token STILL ON THE BONDING CURVE / PRE-graduation — first-buy-only, dedupe-token-across-wallets, NEVER mirror their sells); the position lifecycle with OUR configurable exits (TP / SL / near-curve-completion / max-hold; tight SL deliberate); the cohort FRESH-START lifecycle (a new cohort JSON wipes the old cohort ENTIRELY — settle open positions, purge old copytrade_* records; exactly one active cohort, no cross-cohort history in v1); and the new 'Copy Trade' dashboard tab (JSON upload, ON/OFF, Observe/Live mode, SOL size + TP%/SL% overrides, and the KEY per-wallet PnL table) plus its click-to-download export (include copytrade_positions). OBSERVE (paper) IS THE DEFAULT AND THE SAFETY GATE: in observe mode the engine runs the FULL logic (detect → 'buy' → manage → 'sell' → record PnL) placing NO real orders (books fills at the live price). CRITICAL SCOPING DECISION (verified against the codebase, NOT in the SPEC): the SPEC §0 assumes 'you already have working buy/sell execution' — you DO NOT. No PumpSwap order-execution path exists (TradingConfig has flags only; the only buy/sell code is tape RECORDING, not order placement); the P8 trading-execution path (PRD §10) is still DEFERRED. Therefore LIVE (real-order) copy-trade execution is OUT OF SCOPE this sprint — it depends on the P8 execution path and the operator's deliberate post-soak Live flip; the Live toggle is surfaced but INERT/GUARDED until P8 lands. Observe-complete is exactly the SPEC's default and its validation arbiter ('offline edges have repeatedly failed live in this project; the observe soak is the arbiter'), so an observe-complete v1 is the correct, non-over-committed first sprint of the epic. FIREHOSE: this sprint is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — observe mode books paper fills against existing price/tape data and the wallet-subscription is exercised by a schema-faithful synthetic replay stream behind the DataSource seam; ZERO firehose activation (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched — the LIVE Helius wallet-subscription will spend budget when LIVE is built later, so its activation ledger is planned BEFORE that, not now). Honor the §1 NON-goals explicitly: NO per-wallet manual controls, NO cross-cohort history, NO candle charts / TA in the copy-trade tab, NO funder logic / auto-retuning / per-position manual exits — do NOT add scope. Build order: US-58 (config namespace + tables, the §5-isolated foundation) FIRST; then US-59 (the isolated engine worker + Helius wallet-subscription seam) and US-60 (the copy-BUY trigger logic) may run in PARALLEL after US-58; US-61 (observe-mode position lifecycle + OUR exits) depends on US-60; US-62 (cohort fresh-start lifecycle + ON/OFF) depends on US-58/US-61; US-63 (the 'Copy Trade' tab + export) depends on US-58/US-61/US-62 and the US-48 React frontend.
@@ -98,9 +98,9 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   
   - **`copyt …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  All 3 ACs approved. Requirements are fully specified and testable. AC-58.1: valid/invalid config + mode-default pytest — clear pass/fail. AC-58.2: four named models with field lists + AST/pytest FK isolation guard — deterministic. Minor fix applied: 'rollup/view' label in copytrade_pnl_by_wallet tightened to 'Django model backed by a DB view or application-level rollup' so dev team has a clear implementation choice. AC-58.3: banked valid fixture + named rejection cases — deterministic. Zero firehose by construction.
+  All 3 ACs pass. CI green on PRs 249, 250, 251 (test job pass on all). All ACs implemented and merged: CopyTradeConfig Pydantic schema in own namespace (AC-58.1), four copytrade_-prefixed models with no FK into raw lake (AC-58.2), cohort-JSON validator with banked fixture and rejection tests (AC-58.3). VPS deploy confirmed green on run 27760052298 — stack Up, HTTP 200 on 8002. Zero firehose activation. DoD met.
 
 ---
 
@@ -172,9 +172,9 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   | `.github/workflows/deploy.yml` | Added `Verify copytrade_engine container Up (AC-59.3)` step between the celery-worker check (AC-53.3) and solanaBilly isolation check (AC-6.5). Step SSHes to VPS, runs `docker compose -p solanatrilly ps`, greps for `^solanatrilly.copytrade.engine`, checks `running|up`, exits 1 on failure. Also updated `story:` metadata header to include `US-59 AC-59.3`. |
   | `copytrade/tests/test_copytrade_engine_deploy_ac593.py` | New — 8 structural tests: H1 import trap (Command from `run_copytrade_engine`); copytrade_engine container check step present in deploy.yml; step scoped `-p solanatrilly`; step exits 1 on failure; staging compose has the service; check step ordered after deploy step; …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  All 3 ACs approved. Requirements are fully specified and testable. AC-59.1: compose-topology pytest + isolation guard — deterministic structural checks. AC-59.2: static-analysis guard + run-twice-identical synthetic replay + async-safety guard (K4 pattern) — clear and deterministic; zero firehose. AC-59.3 is a runtime VPS gate — approved for planning; tester re-confirms at sprint review after an actual green deploy run. All conditions named explicitly (container Up, HTTP 200, nine-invariant guard, solanaBilly untouched).
+  All 3 ACs pass. CI green on PRs 252, 253, 254. AC-59.3 VPS gate Tester-confirmed from deploy run 27760052298: 'copytrade_engine' container Up (solanatrilly-copytrade_engine-1, Up 12 seconds), AC-59.3 PASS logged in deploy step, HTTP 200 on 8002, all five existing containers Up, solanaBilly UNTOUCHED on 8001 (port 8001 HTTP 302). Zero firehose. DoD met.
 
 ---
 
@@ -239,9 +239,9 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   | `copytrade/trigger_pipeline.py` | **New** — `OpenedPositionRecord` (frozen dataclass: cohort_id, mint, trigger_wallet, entry_ts), `TriggerResult` (frozen dataclass: event, predicate_passed, decision, opened_position), and `run_trigger_pipeline()` async function. Wires the full path: `WalletSubscriptionConsumer` → `should_copy_buy` → `apply_multiplicity_controls` → records `OpenedPositionRecord` on `action=="open"`. No concrete source import (Principle #7), no `datetime.now()`/`time.time()` (US-2 guard), zero ORM. |
   | `copytrade/tests/test_trigger_pipeline_ac603.py` | **New** — 14 tests, zero firehose. AST guards (no concrete source import, no direct time calls); run-twice-identical determinism (same `FIXTURE_STREAM` + `VirtualClock(T0)` → identical `TriggerResult` sequences AND identical `OpenedPositionRecord` sets); `mirror_wallet_sells=False` invariant (sells/transfers pr …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  All 3 ACs approved. Requirements are fully specified and testable. AC-60.1 is the correctness-critical gate: four explicit REJECT cases (sell, transfer, non-pumpfun, post-graduation buy) plus one valid trigger — clear binary pass/fail. AC-60.2: three multiplicity controls each tested with a distinct scenario (second-same-wallet, two-wallets-same-token, over-cap) — fully deterministic. AC-60.3: run-twice-identical determinism test + mirror_wallet_sells=False invariant — zero firehose by construction.
+  All 3 ACs pass. CI green on PRs 255, 256, 257. AC-60.1 implements the correctness-critical pre-graduation gate with 4 explicit REJECT cases (sell, transfer, non-pumpfun, post-graduation buy); AC-60.2 implements multiplicity controls (first-buy-only, dedupe, cap) as pure functions; AC-60.3 proves run-twice-identical determinism behind the DataSource seam. Zero firehose by construction. VPS deploy confirms code runs in-container. DoD met.
 
 ---
 
@@ -307,9 +307,9 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   **AST guards — US-11 pattern extended to copytrade path (3):**
   - `test_copytrade_modules_do_not_auto_flip_mode_to_live` — scans all copytrade source files (non-test, non-migration) and asserts no keyword-arg `mode="live"` or attribute assignment `obj.mode = "live"` exists on any boot/ON/upload path. Correctly excludes `MODE_LIVE = "live"` class constants (Name target, not Attribute) and `Literal["observe", "live"]` type anno …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  All 3 ACs approved. Requirements are fully specified and testable. AC-61.1: single open position + assert no-execution-call — clear and deterministic. AC-61.2: four exit triggers each tested in isolation (first-to-fire wins) with PnL formulas explicitly stated — deterministic over replay. AC-61.3: AST guard (no auto-flip to live) + pytest (toggle-ON never places real order, never mutates live/trading flags) — the SPEC §10 safety gate is enforceable and binary.
+  All 3 ACs pass. CI green on PRs 258, 259, 260. Observe-mode paper-fill position opener and all four exit triggers (TP/SL/CURVE/TIMER) verified deterministically; execution apparatus confirmed never invoked in observe mode (AC-61.1/61.2). AST no-auto-start guard (US-11 pattern extended to copytrade path) plus functional safety gate confirm no copytrade path can auto-flip to live (AC-61.3). VPS deploy confirms code runs in-container. DoD met.
 
 ---
 
@@ -386,9 +386,9 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   **§6.4.1 / §5 ISOLATION — functional (2 tests):**
   - `t …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  All 3 ACs approved. Requirements are fully specified and testable. AC-62.1: the 5-step replacement sequence is ordered and verified by a single pytest scenario (cohort A with open positions → cohort B upload → assert A purged, B active, no A history) — deterministic. AC-62.2: bidirectional independence test (copytrade ON/OFF ↔ PipelineState) — clear isolation check. AC-62.3: idempotency (upload twice → same state) + AST guard (purge touches only copytrade_ tables) — zero firehose.
+  All 3 ACs pass. CI green on PRs 261, 262, 263. The 5-step atomic fresh-start replacement (auto-stop, settle, purge, load, subscribe) verified deterministically with cohort-A-over-B scenario (AC-62.1). Bidirectional engine ON/OFF isolation from PipelineState confirmed by AST guard plus 9-test independence sequence (AC-62.2). Idempotency and raw-lake isolation proven by 13-test suite (AC-62.3). Zero firehose. VPS deploy confirms code runs in-container. DoD met.
 
 ---
 
@@ -448,9 +448,9 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   | `copytrade/tasks.py` *(new)* | `export_copytrade_positions` `@shared_task` — runs **off the celery-worker** container (#289). Celery-autodiscovered; default output path `/tmp/copytrade_export_<cohort_id>.csv`. |
   | `copytrade/api.py` | `copytrade_export_trigger_view` (POST) — dispatches via `.delay()` **only** (never inline on web/gunicorn); returns `task_id`/`status=queued`; HTTP 400 when no active cohort. Result polled via the **existing** `GET /api/expo …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  All 3 ACs approved. Requirements are fully specified and testable. AC-63.1: API tests over a banked copytrade fixture with deterministic assertion of PnL/positions/summary + action endpoints — no live data required. AC-63.2: frontend wiring checks (component present, App.jsx route, PnL table sortable, no candle-chart import) are static/structural — testable in CI. AC-63.3: H1 ImportError traps lock the surfaces into the canonical test job; celery-container constraint verifiable structurally. VPS gate (Copy-Trade tab + APIs HTTP 200, containers Up, solanaBilly untouched) is a runtime gate — approved for planning; tester re-confirms at sprint review after an actual green deploy run.
+  All 3 ACs pass. CI green on PRs 264, 265, 266. AC-63.3 VPS gate Tester-confirmed from deploy run 27760052298: Copy Trade summary API PASS at /api/copytrade/summary/ (HTTP 200, attempt 1), copytrade_engine Up, celery-worker Up, solanaBilly UNTOUCHED on 8001. DRF API (8 endpoints), React CopyTradeTab.jsx with sortable PnL table and all 5 SPEC sections, and celery-only export task all merged and running in-container. DoD met.
 
 ---
 

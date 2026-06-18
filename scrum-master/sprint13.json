@@ -1,0 +1,273 @@
+{
+  "sprint": "sprint-13",
+  "phase": "planning",
+  "goal": "OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.",
+  "reference_docs": [
+    "scrum-master/prd.md",
+    "scrum-master/solanatrilly_copytrade_SPEC.md",
+    "scrum-master/retrospective.md",
+    "scrum-master/scrum-master.md",
+    "scrum-master/sprint12.json",
+    "CLAUDE.md",
+    "ops/firehose_activation_log.md"
+  ],
+  "definition_of_done": [
+    "All ACs verified by CI / Tester",
+    "No critical defects (and no major defects open at sprint close)",
+    "Coverage threshold met (>=80%)",
+    "Code file headers include metadata front matter (project convention) — on ALL new backend AND frontend source files",
+    "All services run in Docker (no host installs — Docker Rules). Any new service is defined in BOTH docker-compose.yml and docker-compose.staging.yml; any image change is followed by an in-container rebuild; Node/Vite run INSIDE the frontend container, NEVER on the host; every docker command is scoped with -p solanatrilly.",
+    "CD pipeline LIVE and GREEN: every story is merged + deployed to the VPS solanatrilly staging stack (-p solanatrilly, port 8002) and smoke-tested there ('works locally' is NOT done — PRD §15.2/§16). The smoke-test retains the runtime retry-with-backoff (AC-12.3). Per H1: the deploy is gated by the SAME canonical ci.yml 'test' job; the nine-invariant deploy regression guard (sprint-11 AC-54.2) stays GREEN.",
+    "VPS verification IN THE LOOP and gates 'done' (retrospective B3/C1/H1): the Tester confirms from an ACTUAL green deploy run that the stack answers HTTP 200 on 8002, the shared trading apparatus imports in-container, the copytrade_engine + listener/web/celery-worker/frontend containers remain Up, and solanaBilly is UNTOUCHED on 8001.",
+    "OBSERVE/PAPER-FIRST SAFETY GATE (non-negotiable): trading_enabled DEFAULT False, NO real orders / NO capital this sprint, the live RPC/Sender send boundary is ported but NEVER invoked in observe/paper or tests; a no-auto-start AST guard (US-11 pattern) confirms no boot/resolver/upload/ON path flips trading_enabled True — live capital is the operator-driven Cutover (§16).",
+    "§5 COPY-TRADE ISOLATION PRESERVED: copy-trade keeps its OWN engine/config/ON-OFF; only the execution+settlement CHASSIS is shared (read-only of shared code) — the copytrade isolation guards (sprint-12) stay GREEN; no shared mutable state with the firehose/model pipeline.",
+    "Hard isolation from live solanaBilly preserved (every docker command scoped with -p solanatrilly; solanaBilly on 8001 untouched; NO unscoped down / up --force-recreate / prune / volume-removal).",
+    "Config-driven (Principle #1): ALL §10/§17 trade knobs (slippage tiers TIGHT/NORMAL/LOSS/PANIC, TP/SL, exit-rule params, sizing, trading_enabled) are read from the trading.* config store — NEVER literals in code, NEVER scattered os.getenv.",
+    "Live/replay seam preserved (Principle #7): the trading core is clock-injected and reads from an injected DataSource — no concrete live source import on the core path, no time.time()/datetime.now() on the core path; the US-2 static-analysis guard EXTENDS to the new core paths.",
+    "Raw = immutable truth (§6.4.1): no trading/replay path mutates the raw lake; the replay sandbox is a separate store; settlement re-derives from raw via the existing shared extractor — no new feature/price/candle basis (Principle #2).",
+    "ONE tape oracle (Principle #5): settlement uses the SOLE tape oracle (ported from the trills resettle()); there is NO second exit engine for paper.",
+    "H3 json_safe encoder at EVERY JSONField write site; H4 zero-guard before EVERY division.",
+    "ZERO firehose activation — offline/replay by construction; 8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' holds. The LIVE Helius wallet-subscription + capital activation ledger is PLANNED before Cutover (forward_plan + ops/firehose_activation_log.md), not spent this sprint.",
+    "Status integrity enforced PROGRAMMATICALLY (US-13 guard): no story/AC reads status:done while its tester_status is failed/blocked; the guard is GREEN on sprint13.json at review. Phase-promotion is MECHANICAL (tools/promote_sprint_phase.py) BEFORE any sprint-end deploy; story-level dev_status promoted to 'done' at closeout (not exempted).",
+    "Process gates mechanized including the NOW-GENERALIZED async-safety guard (sprint-11 K4 / sprint-12 L2) covering ALL async consumers (not just the copytrade one): a Channels/async consumer's synchronous ORM call in an async context (the US-48 TapeFeedConsumer SynchronousOnlyOperation bug class) cannot ship CI-green.",
+    "retrospective.md updated for sprint-13 (named owner: Tester / scrum facilitator); after updating any /scrum-master/ doc, re-index via mcp__devrag__reindex_document (project convention)."
+  ],
+  "stories": [
+    {
+      "id": "US-64",
+      "title": "P8 FOUNDATION: the shared execution-apparatus skeleton + the unified Position model + the trading.* config namespace + the vendored PumpSwap IDL",
+      "status": "draft",
+      "priority": "high",
+      "dependencies": [
+        "US-9",
+        "US-10",
+        "US-58"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "64.1",
+          "text": "A shared execution app/namespace (name committed at development kickoff; 'trading/' used as the reference name throughout this sprint) BOTH pipelines call — a thin clock-injected core behind the DataSource seam (Principle #7); a trading.* config (Pydantic, consistent with §5) holding the §10/§17 trade knobs (slippage tiers TIGHT/NORMAL/LOSS/PANIC, TP/SL, exit-rule params, sizing, trading_enabled DEFAULT False). Save-time invariant rejection (US-10 write-path pattern). A no-auto-start AST guard (US-11 pattern) confirms nothing flips trading_enabled True on any boot/resolver/upload/ON path. Verified by config persist/reject tests + the AST guard.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "64.2",
+          "text": "A unified Position Django model (the SHARED row both pipelines write): mint, source in {model, copytrade}, mode in {observe, live}, status in {PAPER, OPEN, CLOSED}, entry_ts/entry_price, size_sol, exit_ts/exit_price, exit_trigger, realized_pnl_sol, realized_pnl_pct, peak_price, closed_at — with the H3 json_safe encoder on any JSONField; migrations land. Verified by model/migration tests; a copytrade observe position is expressible as a Position row with source='copytrade' (parity foundation).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "64.3",
+          "text": "The pinned PumpSwap IDL (pump_amm.json, from pump-fun/pump-public-docs) is vendored into the repo with a content-hash/pin manifest (IDL > scripts per CLAUDE.md). A pytest asserts the vendored IDL's buy/sell account counts (23 buy / 21 sell) + discriminators (buy 66063d1201daebea, sell 33e685a4017f83ad) match the §10.1 pinned ground truth. New files carry metadata front matter. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "approved",
+      "tester_notes": "All 3 ACs approved. AC-64.1: namespace name ambiguity ('e.g. trading/') resolved inline — Dev Team commits the name at kickoff; the rest of the sprint's imports follow that commitment. Config persist/reject + AST guard are established patterns (US-10/US-11) with clear deterministic verification. AC-64.2: all Position fields enumerated; model/migration tests are standard; source='copytrade' expressibility is a required test assertion, not just a design note. AC-64.3: pinned discriminators and account counts (23 buy / 21 sell, hex values) make this fully deterministic — highest-confidence AC in the story. Zero firehose — all offline-verifiable."
+    },
+    {
+      "id": "US-65",
+      "title": "PumpSwap buy/sell instruction builder + AMM quote/fee math (§10.1), ported behind trading_enabled, replay/unit-gated, NO live send",
+      "status": "draft",
+      "priority": "high",
+      "dependencies": [
+        "US-64"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "65.1",
+          "text": "A PumpSwap buy/sell instruction builder ports the §10.1 account lists VERBATIM from the vendored IDL: BUY 23 accounts in order, SELL 21 (OMITS the two volume accumulators), correct discriminators + args (buy base_amount_out:u64, max_quote_amount_in:u64, track_volume:OptionBool; sell base_amount_in:u64, min_quote_amount_out:u64); pool/creator PDA derivation (deterministic, no indexer) + runtime-derived event_authority (never hardcoded). Verified by deterministic unit tests asserting account order/writability/signer flags + discriminators + PDA derivation against pinned fixtures. NO mainnet send.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "65.2",
+          "text": "The AMM quote (PumpSwap constant-product) + fee math (Principle #4 coordinated pass): pool-reserve constant-product entry-price / tokens-out / sol-out with the 0.25%/0.30% creator-fee read from pinned GlobalConfig fixture values (not a live RPC call — offline constraint; buy fee on top, sell fee deducted); EVERY zero-reserve guard preserved (H4 — guard zero before division, never silent). Verified by unit tests against pinned pool-reserve + fee fixtures, including zero/null-reserve guard cases.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "65.3",
+          "text": "The execution body is gated behind trading_enabled (DEFAULT False); the live RPC/Sender send path is a clearly-isolated boundary NEVER invoked in observe/paper or tests (chainstacklabs manual_buy/sell_pumpswap.py port reference; Sender->RPC fallback + circuit-breaker + ghost-buy-verify + Anchor-decode structure ported but not executed against mainnet — Cutover-gated). Verified by an AST/guard test that no test or observe/paper path reaches a real send; the §12 S1 real-failure fixtures are banked as named fixture files in the T3 regression corpus directory. New files carry metadata front matter. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "approved",
+      "tester_notes": "All 3 ACs approved. AC-65.1: IDL-grounded fixture pins account order, writability, and signer flags exactly — deterministic and strong. AC-65.2: wording fixed inline to specify 'pinned GlobalConfig fixture values (not a live RPC call)' — the original 'read-from-GlobalConfig contract' was ambiguous about whether a live RPC was implied, which would violate zero-firehose; offline pinned values are the correct approach. AC-65.3: wording fixed inline to specify '§12 S1 real-failure fixtures are banked as named fixture files in the T3 regression corpus directory' — the original 'banked as T3 regressions' was unclear about storage location/form. Zero firehose — all offline-verifiable."
+    },
+    {
+      "id": "US-66",
+      "title": "The exit engine + the tape settler (the ONE oracle, §10.1/§10.2)",
+      "status": "draft",
+      "priority": "high",
+      "dependencies": [
+        "US-64"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "66.1",
+          "text": "evaluate_exit_rules (injectable now for replay) implements the §10.1 priority ladder (RUG_PULL -> DISASTER_CAP -> STOP_LOSS -> NEXT_POLL_GUARD -> TAKE_PROFIT_PCT -> AUTO_SELL_TIMER -> CEILING/VOLUME_COLLAPSE/CONCENTRATION -> TRAILING (arms only if peak>entry·1.05, not in the 60s grace) -> STALE), config-driven (§5/§17). Verified by deterministic unit tests driving each rule to fire first with the correct trigger.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "66.2",
+          "text": "The tape settler simulate_tape_exit ports solanatrills/.../tape_resettle.py resettle() VERBATIM (§10.2): entry quote = last swap in [entry−30, entry]; fill = first swap at entry+2; walk post-swaps tracking peak with the exact trigger priority (TP -> DISASTER_CAP -> STOP_LOSS -> RUG_PULL armed only after +5% peak -> AUTO_SELL_TIMER); exit fill = first swap >= trigger_t+2; impact 2·size/(size+flow); un-enterable rows (no quote/fill, or slip > 15%) EXCLUDED, never booked as 0%/−100%. It is the SOLE paper/observe settler (Principle #5 — no second exit engine for paper). Verified deterministically against banked tape fixtures from solanatrills/lake/tapes/ (port-parity with the trills oracle).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "66.3",
+          "text": "A settled paper position writes the SAME realized fields as a live CLOSED one (exit_price, exit_trigger, pnl_pct, peak_price, closed_at) into the shared US-64 Position model — so dashboard/analytics treat paper == live (settled == closed_at IS NOT NULL). Verified by a test asserting a settled PAPER position and a simulated live CLOSED position carry identical realized-field shape. New files carry metadata front matter. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "approved",
+      "tester_notes": "All 3 ACs approved. AC-66.1: the 9-rule priority ladder is fully enumerated with the TRAILING arm condition explicit (peak>entry·1.05, not in 60s grace) — one fires-first test per rule is required and unambiguous. AC-66.2: wording fixed inline to name the fixture source explicitly ('solanatrills/lake/tapes/' per CLAUDE.md) — the original 'banked tape fixtures' was informally covered by project conventions but should be explicit. Port-parity test against the trills oracle is a strong, correct approach. Un-enterable row exclusion (no quote/fill, slip>15%) is specific and testable. AC-66.3: 'closed_at IS NOT NULL' sentinel for settled==closed is a clean, mechanically verifiable invariant. Zero firehose."
+    },
+    {
+      "id": "US-67",
+      "title": "The T2 full-pipeline replay harness + the replay sandbox schema + T3 regression corpus (§11) — the P8 OFFLINE GATE",
+      "status": "draft",
+      "priority": "high",
+      "dependencies": [
+        "US-65",
+        "US-66"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "67.1",
+          "text": "A T2 full-pipeline replay harness ('a day in 30s') replays whole days end-to-end through the REAL serving + exit + settler core (clock-injected, DataSource=Replay) and writes the identical artifacts a live run would — Predictions/Positions/PnL — into an ISOLATED replay sandbox schema (§11.3), never the live tables. Verified by a deterministic replay over a banked multi-token tape day from solanatrills/lake/tapes/ producing expected sandbox Position/PnL rows pinned as named golden fixture files (run-twice-identical output; a replay output diff against the golden file is a first-class CI failure).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "67.2",
+          "text": "T0+T1+T2 wired as the promotion gate (§11.2): the PnL the labs quote and the PnL replay produces AGREE exactly (any gap is a parity/leak bug; the labs-side PnL reference used in the parity assertion is a static pinned golden value in the test fixture, not dynamically recomputed at test time — a dynamically-recomputed reference cannot catch regressions). T3 regression corpus: a frozen tape-settled cohort in CI fails if a PR flips a verdict (the #404 file+test-dropped-together class can't hide a flip). Verified by the T3 corpus test in the canonical ci.yml 'test' job + a parity-agreement assertion.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "67.3",
+          "text": "The replay sandbox is isolated (separate replay schema; no replay path writes live tables, §11.3) — verified by a guard test asserting at the ORM/transaction level that no replay write touches live-schema tables. The harness runs OFFLINE (zero firehose; replay/backfill DataSource only). New files carry metadata front matter.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "approved",
+      "tester_notes": "All 3 ACs approved with targeted wording fixes. AC-67.1: fixed inline to name the fixture source ('solanatrills/lake/tapes/') and to require expected rows be 'pinned as named golden fixture files' with 'a replay output diff against the golden file is a first-class CI failure' — the original 'run-twice-identical' is necessary but not sufficient for a regression test; pinned golden files are required. AC-67.2: fixed inline to require the labs-side PnL reference be 'a static pinned golden value in the test fixture, not dynamically recomputed at test time' — a dynamically-recomputed reference cannot catch regressions and is not a parity gate. Parity agreement is expected to be exact (no epsilon tolerance) given both paths use deterministic, fixed-seed computations on the same tape. AC-67.3: fixed inline to specify 'asserting at the ORM/transaction level that no replay write touches live-schema tables' — table-level isolation is a stronger and more precise assertion than schema-name checking alone. Zero firehose."
+    },
+    {
+      "id": "US-68",
+      "title": "Wire BOTH pipelines' observe/paper through the shared apparatus + wire copy-trade's Live toggle to the (capital-OFF) shared execution path",
+      "status": "draft",
+      "priority": "high",
+      "dependencies": [
+        "US-64",
+        "US-66",
+        "US-67"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "68.1",
+          "text": "The prediction pipeline's paper positions AND copy-trade's observe positions both now flow through the SHARED US-64 Position model + US-66 tape settler ('same execution path' parity, SPEC §0.1) — copytrade's sprint-12 local observe opener/manager (copytrade/position_opener.py / position_manager.py) is refactored to delegate to the shared apparatus with NO behavior change to the observe lifecycle (the full sprint-12 copytrade test suite passes against the refactored path — the existing green test suite IS the behavior spec). §5 isolation PRESERVED (copy-trade keeps its own engine/config/ON-OFF; only the execution+settlement CHASSIS is shared). Verified by tests that a copytrade observe position and a model paper position produce equivalent shared Position rows + settle identically, and the copytrade isolation guards stay green.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "68.2",
+          "text": "Copy-trade's Live toggle is WIRED to the shared execution path but remains CAPITAL-OFF / Cutover-gated: mode=live routes to the shared (gated) execution path, which — with trading_enabled False (default) — places NO real order this sprint; the no-auto-start guard confirms no path auto-enables capital. The LIVE Helius wallet-subscription + capital activation ledger is PLANNED in ops/firehose_activation_log.md (entry + protocol defined) BEFORE any spend — not activated. Verified by a test that mode=live with trading_enabled=False reaches the gated boundary and stops (no send) + an ops-doc presence check (assert ops/firehose_activation_log.md contains the required Helius activation protocol entry).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "68.3",
+          "text": "Deployed to the VPS solanatrilly staging stack and Tester-confirmed from an actual green deploy run (HTTP 200 on 8002, the shared apparatus imports in-container, copytrade_engine + listener/web/celery-worker/frontend Up, solanaBilly UNTOUCHED on 8001; nine-invariant deploy guard green). Zero firehose. New files carry metadata front matter.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "approved",
+      "tester_notes": "All 3 ACs approved. AC-68.1: wording fixed inline to make 'no behavior change' operationally precise — 'the full sprint-12 copytrade test suite passes against the refactored path; the existing green test suite IS the behavior spec'; this closes the ambiguity about what 'no behavior change' means in practice. Isolation guards (sprint-12 AST/pytest guards) staying green is a mechanical, CI-verifiable check. AC-68.2: wording fixed inline to make the ops-doc presence check precise — 'assert ops/firehose_activation_log.md contains the required Helius activation protocol entry'; file presence alone is insufficient. The mode=live + trading_enabled=False boundary-stop test is deterministic and clear. AC-68.3: standard VPS DoD — nine-invariant guard (US-54 AC-54.2) must remain green; Tester confirmation required from an actual deploy run. Zero firehose."
+    },
+    {
+      "id": "US-69",
+      "title": "Generalize the K4/L2 async-safety guard project-wide + the Live Positions dashboard board (§13.2#1) over the new replay/paper Position rows (completes the P8 offline gate's 'Positions render in the dashboard')",
+      "status": "draft",
+      "priority": "medium",
+      "dependencies": [
+        "US-67",
+        "US-68",
+        "US-48"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "69.1",
+          "text": "The async-safety guard is GENERALIZED project-wide (sprint-11 K4 / sprint-12 L2): a structural/AST (or runtime) check fails in pytest if ANY Channels/async consumer makes a synchronous ORM call in an async context (the US-48 TapeFeedConsumer SynchronousOnlyOperation bug class) — covering ALL consumers by scanning the consumers module/package, not just the copytrade one. Verified by the guard catching a deliberately-planted violation fixture (positive test) and passing on all real consumers (negative test).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "69.2",
+          "text": "A Live Positions dashboard board (§13.2#1, the operator's #1 ask) — a DRF API + a fresh React view in the US-48 frontend rendering the shared US-64 Position rows (replay-sandbox + observe/paper): open positions (entry/current price from replay/observe tape DataSource or Position row — NOT a live Birdeye call, zero firehose/unrealized-PnL/time-held) + closed positions (exit_trigger + realized PnL), for BOTH source=model and source=copytrade. No new PnL math (reads Position rows). Completes the P8 offline-gate clause 'sandbox Positions render in the dashboard.' Verified by API tests over banked Position fixtures (asserting both source=model and source=copytrade rows) + frontend wiring checks (component present, App.jsx route, metadata front matter, H1 ImportError trap).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        },
+        {
+          "id": "69.3",
+          "text": "Deployed + smoke-tested on the VPS (the Live Positions route + its API return 200; containers Up; solanaBilly untouched on 8001). Zero firehose. New backend AND frontend files carry metadata front matter.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "approved"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "approved",
+      "tester_notes": "All 3 ACs approved. AC-69.1: wording fixed inline to require the guard cover 'ALL consumers by scanning the consumers module/package' — 'not just the copytrade one' was the L2 carry; project-wide means the scan scope must be the full consumers package, not a hardcoded list. Positive+negative test pattern (planted violation + real consumers passing) is correct and required. AC-69.2: wording fixed inline to specify that 'current price' for open-position unrealized-PnL comes 'from replay/observe tape DataSource or Position row — NOT a live Birdeye call' — an unguarded live price query in the open-positions API would violate zero-firehose; this makes the constraint explicit and testable. API test assertion over banked fixtures must cover both source=model and source=copytrade explicitly. AC-69.3: standard VPS DoD. Zero firehose."
+    }
+  ],
+  "forward_plan": {
+    "note": "NOT committed to sprint-13 scope, to avoid the over-commitment the retrospectives warn against on heavy phases; P8 is the densest crown jewel (every piece paid for in live losses), so sprint-13 OPENS it observe/paper behind the replay gate (the SPEC/PRD arbiter) and defers live capital + the remaining views. PRIORITY ORDER of what remains.",
+    "items": [
+      "CUTOVER / LIVE CAPITAL (operator-driven, PRD §16 Cutover): operator provisions the trading-wallet secret; the LIVE Helius wallet-subscription activation (ledger planned in US-68); the live confirmation soak (§11.3 execution reality replay can't reproduce — RPC/Sender landing, real slippage, sub-slot fills, concurrency races); then flip capital. No capital before T0+T1+T2 pass AND the observe soak holds. NOT a sprint story.",
+      "I2/K2 — the prediction-model P7-3 SOAK (v3.2 vs incumbent, ~30/day, depth-fragile). OPERATOR-DRIVEN, not a sprint story; plan the activation ledger first.",
+      "I3/K3 — the prediction ENDGAME: promote trilly_pregrad_v3_2 via US-42 promote_blend() + start the firehose when the soak holds. OPERATOR-DRIVEN, not a sprint story.",
+      "The remaining P8-dependent dashboard views — Calibration & PnL analytics (§13.2#4), Replay viewer position-open/close overlay (§13.2#5) — now unblocked by P8 Position/PnL rows; build after the Live Positions board (US-69) lands.",
+      "Copy-Trade v2 NON-goals (SPEC §1): per-wallet manual controls, cross-cohort history/versioning, candle charts/TA in the copy-trade tab, funder logic, auto-retuning of TP/SL, per-position manual exits. Deferred — do NOT add to v1."
+    ]
+  },
+  "build_order": "US-64 (foundation: shared trading namespace + Position model + vendored IDL) runs FIRST. After US-64, US-65 (PumpSwap ix builder + AMM math) and US-66 (exit engine + tape settler) are independent and may run in PARALLEL. US-67 (T2 replay harness + sandbox schema + T3 corpus — the P8 offline gate) depends on US-65 + US-66. US-68 (wire both pipelines' observe/paper through the shared apparatus + copy-trade Live wiring, capital-OFF) depends on US-64/US-66/US-67. US-69 (generalized async guard + Live Positions board) depends on US-67/US-68 + US-48. Every AC is independently verifiable OFFLINE/replay against pinned IDL fixtures + banked tape fixtures + the existing replay/backfill DataSource — ZERO firehose this sprint (8 Birdeye + 8 Helius remain banked). LIVE real-order execution + capital are the operator-driven Cutover (§16) — OUT OF SCOPE.",
+  "last_updated": "2026-06-18",
+  "last_updated_by": "tester"
+}
