@@ -1,7 +1,7 @@
 # ---
 # module: trading.models
 # sprint: sprint-13
-# story: US-64 AC-64.1, US-64 AC-64.2, US-66 AC-66.1
+# story: US-64 AC-64.1, US-64 AC-64.2, US-66 AC-66.1, US-67 AC-67.1
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-18
@@ -232,3 +232,58 @@ class Position(models.Model):
 
     def __str__(self):
         return f"Position({self.mint[:8]}… src={self.source} status={self.status})"
+
+
+class ReplayPosition(models.Model):
+    """Replay sandbox position — written ONLY by the T2 replay harness (AC-67.1).
+
+    This model uses db_table='trading_replay_positions', which is NEVER
+    'trading_positions' (the live table).  The harness writes here; the live
+    pipeline writes to Position.  Isolation is a hard invariant (§11.3).
+
+    replay_run_id: opaque string identifying one harness run (e.g. a UUID).
+    score: the prediction score for this mint from the injected predictor.
+    enterable: False when simulate_tape_exit returns an un-enterable result —
+        the row is still written so the run is fully auditable, but all
+        PnL/trigger/held fields are null.
+    """
+
+    # --- Replay run identifier ---
+    replay_run_id = models.CharField(max_length=64, db_index=True)
+
+    # --- Token identification ---
+    mint = models.CharField(max_length=64, db_index=True)
+    score = models.FloatField()
+
+    # --- Entry fields (null only when un-enterable) ---
+    entry_ts = models.DateTimeField(null=True, blank=True)
+    entry_price = models.FloatField(null=True, blank=True)
+    size_sol = models.FloatField()
+
+    # --- Enterability ---
+    enterable = models.BooleanField(default=False)
+    unentered_reason = models.CharField(max_length=32, null=True, blank=True)
+
+    # --- Settlement fields (null when un-enterable) ---
+    exit_trigger = models.CharField(max_length=32, null=True, blank=True)
+    realized_pnl_pct = models.FloatField(null=True, blank=True)
+    peak_pct = models.FloatField(null=True, blank=True)
+    held_s = models.FloatField(null=True, blank=True)
+    flow_usd = models.FloatField(null=True, blank=True)
+    exit_price = models.FloatField(null=True, blank=True)
+    peak_price_abs = models.FloatField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "trading"
+        db_table = "trading_replay_positions"
+        indexes = [
+            models.Index(fields=["replay_run_id", "mint"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"ReplayPosition(run={self.replay_run_id[:8]}… "
+            f"mint={self.mint[:8]}… enterable={self.enterable})"
+        )
