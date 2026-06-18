@@ -1,8 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 4/6 stories | 12/18 ACs
-**Last Updated:** 2026-06-18T16:47:28+00:00
+**Progress:** 4/6 stories | 13/18 ACs
+**Last Updated:** 2026-06-18T17:09:17+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -321,16 +321,31 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 ---
 
 ### US-68: Wire BOTH pipelines' observe/paper through the shared apparatus + wire copy-trade's Live toggle to the (capital-OFF) shared execution path
-**Status:** draft | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-68.1:** The prediction pipeline's paper positions AND copy-trade's observe positions both now flow through the SHARED US-64 Position model + US-66 tape settler ('same execution path' parity, SPEC §0.1) — copytrade's sprint-12 local observe opener/manager (copytrade/position_opener.py / position_manager.py) is refactored to delegate to the shared apparatus with NO behavior change to the observe lifecycle (the full sprint-12 copytrade test suite passes against the refactored path — the existing green test suite IS the behavior spec). §5 isolation PRESERVED (copy-trade keeps its own engine/config/ON-OFF; only the execution+settlement CHASSIS is shared). Verified by tests that a copytrade observe position and a model paper position produce equivalent shared Position rows + settle identically, and the copytrade isolation guards stay green.
+- [x] **AC-68.1:** The prediction pipeline's paper positions AND copy-trade's observe positions both now flow through the SHARED US-64 Position model + US-66 tape settler ('same execution path' parity, SPEC §0.1) — copytrade's sprint-12 local observe opener/manager (copytrade/position_opener.py / position_manager.py) is refactored to delegate to the shared apparatus with NO behavior change to the observe lifecycle (the full sprint-12 copytrade test suite passes against the refactored path — the existing green test suite IS the behavior spec). §5 isolation PRESERVED (copy-trade keeps its own engine/config/ON-OFF; only the execution+settlement CHASSIS is shared). Verified by tests that a copytrade observe position and a model paper position produce equivalent shared Position rows + settle identically, and the copytrade isolation guards stay green.
+  - Dev: done
 - [ ] **AC-68.2:** Copy-trade's Live toggle is WIRED to the shared execution path but remains CAPITAL-OFF / Cutover-gated: mode=live routes to the shared (gated) execution path, which — with trading_enabled False (default) — places NO real order this sprint; the no-auto-start guard confirms no path auto-enables capital. The LIVE Helius wallet-subscription + capital activation ledger is PLANNED in ops/firehose_activation_log.md (entry + protocol defined) BEFORE any spend — not activated. Verified by a test that mode=live with trading_enabled=False reaches the gated boundary and stops (no send) + an ops-doc presence check (assert ops/firehose_activation_log.md contains the required Helius activation protocol entry).
 - [ ] **AC-68.3:** Deployed to the VPS solanatrilly staging stack and Tester-confirmed from an actual green deploy run (HTTP 200 on 8002, the shared apparatus imports in-container, copytrade_engine + listener/web/celery-worker/frontend Up, solanaBilly UNTOUCHED on 8001; nine-invariant deploy guard green). Zero firehose. New files carry metadata front matter.
 
 **Dependencies:** US-64, US-66, US-67
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-68.1 done: Pushed successfully. AC-68.1 is complete.
+  
+  ## Implementation Summary — US-68 AC-68.1
+  
+  **Status:** Complete and pushed to `feature/US-68-AC-68.1`.
+  
+  The bulk of the implementation existed from the prior agent's two commits (`25c3e96`, `19b1821`); I verified it end-to-end, found a coverage gap in a defensive branch, closed it, and confirmed the full behavior spec passes.
+  
+  ### Files changed (vs `main`)
+  - **`copytrade/position_opener.py`** — `open_observe_position` now also writes a shared `trading.Position` row (`source='copytrade'`, `mode='observe'`, `status='PAPER'`) alongside the existing `CopytradePosition`, linking them via `shared_position_id`. AC-61.1 behavior unchanged.
+  - **`copytrade/position_manager.py`** — `close_position` now also settles the linked shared `Position` via `trading.position_closer.close_observe_position`, writing the same realized fields. Gracefully skips when `shared_position_id` is null or stale.
+  - **`copytrade/models.py`** — added `shared_position_id` as a plain `IntegerField` (not FK) to preserve §5 isolation (no cross-app cascade/constraint).
+  - **`copytrade/migrations/0004_shared_position_link.py`** — `SeparateDatabaseAndState`-wrapped `AddField` (mirror …
 
 **Tester Status:** approved
 **Tester Notes:**
