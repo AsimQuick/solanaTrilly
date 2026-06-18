@@ -139,13 +139,20 @@ def test_unimportable_symbol_fails_smoke():
 
 
 def test_import_time_model_fails_without_django_setup():
-    code = "from django.db import models; class PlantedModel(models.Model): pass"
+    # Import a real Django model (User is defined at module level using ModelBase
+    # metaclass).  Without django.setup() the app registry is not populated, so
+    # ModelBase.__new__ raises AppRegistryNotReady when the module is imported.
+    # Using an existing model import avoids the compound-statement-after-semicolon
+    # SyntaxError that would occur with an inline class definition.
+    code = "from django.contrib.auth.models import User"
     result = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
     )
     assert result.returncode != 0, (
-        "Expected non-zero exit for import-time Django model without django.setup(), got 0"
+        "Expected non-zero exit when importing a Django model without django.setup() "
+        "(AppRegistryNotReady — the sprint-13 failure class), got 0. "
+        "Ensure DJANGO_SETTINGS_MODULE is set in the container environment."
     )
 
 
@@ -155,17 +162,16 @@ def test_import_time_model_fails_without_django_setup():
 
 
 def test_import_time_model_passes_with_django_setup():
-    code = (
-        "import django; django.setup(); "
-        "from django.db import models; "
-        "class PlantedModel(models.Model): pass"
-    )
+    # Same import, but now django.setup() is called first.  DJANGO_SETTINGS_MODULE
+    # is inherited from the container environment (config.settings), so setup()
+    # populates the app registry and the import succeeds.
+    code = "import django; django.setup(); from django.contrib.auth.models import User"
     result = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
     )
     assert result.returncode == 0, (
-        "Expected exit 0 for import-time Django model with django.setup(), got "
+        "Expected exit 0 when importing a Django model WITH django.setup(), got "
         f"{result.returncode}\nstderr: {result.stderr.decode(errors='replace')}"
     )
 
