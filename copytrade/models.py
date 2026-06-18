@@ -234,6 +234,11 @@ class CopytradePosition(models.Model):
     realized_pnl_sol = models.FloatField(null=True, blank=True)
     realized_pnl_pct = models.FloatField(null=True, blank=True)
 
+    # FK-free integer link to the shared trading.Position row (AC-68.1).
+    # IntegerField (not FK) to avoid Django cascade semantics and preserve §5 isolation.
+    # Null when the position was created before AC-68.1 or outside the shared path.
+    shared_position_id = models.IntegerField(null=True, blank=True, db_index=True)
+
     class Meta:
         app_label = "copytrade"
         db_table = "copytrade_positions"

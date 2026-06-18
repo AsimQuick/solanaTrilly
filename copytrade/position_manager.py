@@ -1,13 +1,14 @@
 # ---
 # module: copytrade.position_manager
-# sprint: sprint-12
-# story: US-61 AC-61.2
-# status: implemented
+# sprint: sprint-12, sprint-13
+# story: US-61 AC-61.2, US-68 AC-68.1
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-18
-# dependencies: copytrade.models, copytrade.schemas
+# dependencies: copytrade.models, copytrade.schemas, trading.models,
+#   trading.position_closer
 # ---
-"""AC-61.2: Position exit-condition engine and PnL recorder (SPEC §3 exit / §4).
+"""AC-61.2 / AC-68.1: Position exit-condition engine + shared Position settler.
 
 The engine MANAGES each open position itself — it never waits for or mirrors
 the watched wallet's sell (SPEC §3).  On each price tick the caller invokes
@@ -20,9 +21,16 @@ priority order (FIRST-to-fire wins):
                (only when config.exit_before_graduation is True)
     4. TIMER — (current_ts - entry_ts).total_seconds() >= max_hold_seconds
 
-On exit the position row is updated with exit_ts, exit_price, sol_out,
-exit_reason, realized_pnl_sol, realized_pnl_pct, and the
-copytrade_pnl_by_wallet rollup is upserted.
+On exit the CopytradePosition row is updated (AC-61.2 — unchanged).
+
+AC-68.1 refactor: close_position NOW ALSO writes the same realized fields to
+the shared trading.Position row (via trading.position_closer.close_observe_position)
+so BOTH pipelines produce structurally equivalent shared Position rows with
+closed_at IS NOT NULL (SPEC §0.1 'same execution path' parity).
+
+§5 ISOLATION PRESERVED: copytrade keeps its own engine/config/ON-OFF.  The
+shared Position is updated read-only from copytrade's perspective.  No
+trading_enabled or PipelineState field is touched.
 
 Paper-fill PnL formula (observe mode):
     sol_out          = sol_in * (exit_price / entry_price)
@@ -38,6 +46,8 @@ from datetime import datetime
 
 from copytrade.models import CopytradePnlByWallet, CopytradePosition
 from copytrade.schemas import CopyTradeConfig
+from trading.models import Position as SharedPosition
+from trading.position_closer import close_observe_position
 
 
 def check_exit_condition(
@@ -106,6 +116,11 @@ def close_position(
 ) -> CopytradePosition:
     """Close a position, persist exit fields and PnL, then roll up pnl_by_wallet.
 
+    AC-61.2: Updates CopytradePosition with exit fields and PnL (unchanged).
+    AC-68.1: Also settles the shared trading.Position row via
+             close_observe_position so both pipelines produce equivalent
+             shared Position rows (SPEC §0.1 'same execution path' parity).
+
     Paper-fill PnL (observe mode):
         sol_out          = sol_in * (exit_price / entry_price)
         realized_pnl_sol = sol_out - sol_in
@@ -135,6 +150,20 @@ def close_position(
     position.save()
 
     _update_pnl_by_wallet(position)
+
+    # --- AC-68.1: settle the shared trading.Position row (if linked) ---
+    if position.shared_position_id:
+        try:
+            shared_pos = SharedPosition.objects.get(pk=position.shared_position_id)
+            close_observe_position(
+                shared_pos,
+                exit_trigger=exit_reason,
+                exit_price=exit_price,
+                exit_ts=exit_ts,
+                realized_pnl_pct=realized_pnl_pct,
+            )
+        except SharedPosition.DoesNotExist:
+            pass
 
     return position
 

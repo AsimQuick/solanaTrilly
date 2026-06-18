@@ -1,32 +1,36 @@
 # ---
 # module: trading.position_closer
 # sprint: sprint-13
-# story: US-66 AC-66.3
+# story: US-66 AC-66.3, US-68 AC-68.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-18
 # dependencies: trading.models, datetime
 # ---
-"""Position closer: settle_paper_position — writes realized fields for PAPER positions.
+"""Position closer: settle_paper_position + close_observe_position.
 
-Takes a PAPER Position ORM instance and the result dict from simulate_tape_exit
-(tape_settler) and writes the same five realized fields as a live CLOSED position:
+Two public entry points for writing realized fields to a shared trading.Position:
 
-    exit_price, exit_trigger, realized_pnl_pct, peak_price, closed_at
-
-This makes the dashboard/analytics sentinel (closed_at IS NOT NULL) work
-uniformly for both paper-settled and live-closed positions (AC-66.3).
-
-Separation of concerns: this module does NOT import tape_settler.  The caller
-runs simulate_tape_exit and passes the result dict here.  The caller is
-responsible for ensuring the result is from an enterable position.
-
-Public API
-----------
 settle_paper_position(position, settler_result, now=None, fill_price=None) -> Position
-    Writes realized fields to a PAPER Position and persists via save().
-    Raises ValueError if settler_result['enterable'] is False.
-    Returns the updated position instance.
+    Model-pipeline path: takes a tape settler result dict (simulate_tape_exit)
+    and writes the realized fields.  Raises ValueError if not enterable.
+
+close_observe_position(position, exit_trigger, exit_price, exit_ts, realized_pnl_pct,
+                       peak_price=None) -> Position
+    Copytrade path (AC-68.1): closes a Position directly from a live exit event
+    (TP/SL/CURVE/TIMER tick) without a tape settler result.  Writes the same 7
+    realized fields as settle_paper_position so both pipelines produce equivalent
+    shared Position rows (the 'same execution chassis' parity, SPEC §0.1).
+
+Both produce:  exit_price, exit_trigger, realized_pnl_pct, peak_price,
+               closed_at, exit_ts, status='CLOSED'
+
+The dashboard/analytics sentinel (closed_at IS NOT NULL) works uniformly for
+both paper-settled (model) and observe-closed (copytrade) positions (AC-66.3 /
+AC-68.1).
+
+Separation of concerns: this module does NOT import tape_settler or any
+copytrade module.
 """
 
 from __future__ import annotations
@@ -110,6 +114,66 @@ def settle_paper_position(
     position.status = Position.STATUS_CLOSED
 
     # Persist only the updated fields — does not touch entry fields or source/mode
+    position.save(
+        update_fields=[
+            "exit_price",
+            "exit_trigger",
+            "realized_pnl_pct",
+            "peak_price",
+            "closed_at",
+            "exit_ts",
+            "status",
+        ]
+    )
+
+    return position
+
+
+def close_observe_position(
+    position: Position,
+    exit_trigger: str,
+    exit_price: float,
+    exit_ts: datetime,
+    realized_pnl_pct: float,
+    peak_price: Optional[float] = None,
+) -> Position:
+    """Write realized fields to a PAPER trading.Position from a live exit event.
+
+    Copytrade path (AC-68.1): closes a shared Position directly from a live
+    price-tick exit (TP / SL / CURVE / TIMER) without going through the tape
+    settler.  Writes the SAME 7 realized fields as settle_paper_position so both
+    pipelines produce structurally equivalent shared Position rows.
+
+    Parameters
+    ----------
+    position:
+        A PAPER or OPEN Position instance (source='copytrade', mode='observe').
+        Must have a PK (saved) for update_fields to work.
+    exit_trigger:
+        Exit reason string (e.g. 'TP', 'SL', 'CURVE', 'TIMER').
+    exit_price:
+        The observed price at the moment of exit.
+    exit_ts:
+        Timestamp at the moment of exit (injected clock — no datetime.now()).
+    realized_pnl_pct:
+        Realized PnL as a percentage (e.g. 50.0 = +50%).
+    peak_price:
+        Absolute peak price observed during the hold.  None if not tracked
+        by the caller (field stays null in the Position row).
+
+    Returns
+    -------
+    Position
+        The same position instance with realized fields written and persisted.
+    """
+    position.exit_price = exit_price
+    position.exit_trigger = exit_trigger
+    position.realized_pnl_pct = realized_pnl_pct
+    position.peak_price = peak_price
+    position.closed_at = exit_ts
+    position.exit_ts = exit_ts
+    position.status = Position.STATUS_CLOSED
+
     position.save(
         update_fields=[
             "exit_price",
