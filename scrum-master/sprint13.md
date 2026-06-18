@@ -1,9 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 5/6 stories | 15/18 ACs
-**Last Updated:** 2026-06-18T18:00:00+00:00
-**last-updated-by:** dev-team
+**Progress:** 5/6 stories | 16/18 ACs
+**Last Updated:** 2026-06-18T17:54:18+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -387,22 +386,41 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 ---
 
 ### US-69: Generalize the K4/L2 async-safety guard project-wide + the Live Positions dashboard board (§13.2#1) over the new replay/paper Position rows (completes the P8 offline gate's 'Positions render in the dashboard')
-**Status:** draft | **Priority:** medium
+**Status:** in-progress | **Priority:** medium
 
 #### Acceptance Criteria
-- [ ] **AC-69.1:** The async-safety guard is GENERALIZED project-wide (sprint-11 K4 / sprint-12 L2): a structural/AST (or runtime) check fails in pytest if ANY Channels/async consumer makes a synchronous ORM call in an async context (the US-48 TapeFeedConsumer SynchronousOnlyOperation bug class) — covering ALL consumers by scanning the consumers module/package, not just the copytrade one. Verified by the guard catching a deliberately-planted violation fixture (positive test) and passing on all real consumers (negative test).
+- [x] **AC-69.1:** The async-safety guard is GENERALIZED project-wide (sprint-11 K4 / sprint-12 L2): a structural/AST (or runtime) check fails in pytest if ANY Channels/async consumer makes a synchronous ORM call in an async context (the US-48 TapeFeedConsumer SynchronousOnlyOperation bug class) — covering ALL consumers by scanning the consumers module/package, not just the copytrade one. Verified by the guard catching a deliberately-planted violation fixture (positive test) and passing on all real consumers (negative test).
+  - Dev: done
 - [ ] **AC-69.2:** A Live Positions dashboard board (§13.2#1, the operator's #1 ask) — a DRF API + a fresh React view in the US-48 frontend rendering the shared US-64 Position rows (replay-sandbox + observe/paper): open positions (entry/current price from replay/observe tape DataSource or Position row — NOT a live Birdeye call, zero firehose/unrealized-PnL/time-held) + closed positions (exit_trigger + realized PnL), for BOTH source=model and source=copytrade. No new PnL math (reads Position rows). Completes the P8 offline-gate clause 'sandbox Positions render in the dashboard.' Verified by API tests over banked Position fixtures (asserting both source=model and source=copytrade rows) + frontend wiring checks (component present, App.jsx route, metadata front matter, H1 ImportError trap).
 - [ ] **AC-69.3:** Deployed + smoke-tested on the VPS (the Live Positions route + its API return 200; containers Up; solanaBilly untouched on 8001). Zero firehose. New backend AND frontend files carry metadata front matter.
 
 **Dependencies:** US-67, US-68, US-48
 
-**Dev Team Status:** in-progress
+**Dev Team Status:** not-started
 **Dev Team Notes:**
-- AC-69.1 done: created `core/tests/test_async_safety_guard_ac691.py` — project-wide AST async-safety guard
-- Implements `find_async_orm_violations()` using `_shallow_walk()` that stops at `FunctionDef`/`Lambda`/`AsyncFunctionDef` boundaries; correctly distinguishes sync-helper ORM (safe) from bare `.objects.` in async methods (violation)
-- Discovery glob `**/*consumer*.py` (excluding `test_` and `__pycache__`) picks up all 4 consumer files: `core/consumers.py`, `core/dashboard/consumer.py`, `core/detection/consumer.py`, `copytrade/wallet_consumer.py`
-- All 5 AC-69.1 tests pass; full suite 2426/2426 (2421 prior + 5 new), no regressions
-- blocker-type: none
+  AC-69.1 done: AC-69.1 is implemented and pushed. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  ## Implementation Summary — US-69 AC-69.1
+  
+  **Branch:** `feature/US-69-AC-69.1`
+  **Commit:** `ce7e1dc` — `[US-69] AC-69.1: project-wide async-safety guard for all Channels consumers`
+  
+  ### Files changed (1 new)
+  
+  | File | Role |
+  |------|------|
+  | `core/tests/test_async_safety_guard_ac691.py` | Project-wide async-safety guard: `find_async_orm_violations(source_text)` walks all `AsyncFunctionDef` nodes using `_shallow_walk` (stops at `FunctionDef`/`Lambda`/nested `AsyncFunctionDef` — sync contexts) and flags bare `.objects.` attribute access; `_find_consumer_files(repo_root)` discovers all `*consumer*.py` files excluding test files and `__pycache__` |
+  
+  ### What the guard checks
+  
+  - **Violation pattern** (caught): `async def method(): SomeModel.objects.get(pk=1)` — bare ORM in async context → `SynchronousOnlyOperation`
+  - **Safe pattern** (not flagged): ORM inside a sibling sync `def _helper(self)` or inside a `lambda` passed to `sync_to_async`
+  
+  ### 5 tests, all passing
+  
+  1. `test_positive_violation_fixture_is_caught` — planted `_PlantedViolationConsumer.connect()` with bare `.objects.get()` is …
 
 **Tester Status:** approved
 **Tester Notes:**
