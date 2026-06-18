@@ -5,7 +5,7 @@
 #          builds/pushes web image to GHCR, then deploys to the VPS staging stack
 #          (-p solanatrilly, port 8002) and smoke-tests it.
 # sprint: sprint-4, sprint-10, sprint-11
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1 AC-52.3 US-53 AC-53.2
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1 AC-52.3 US-53 AC-53.2 AC-53.3
 # created-by: dev-team
 # last-updated: 2026-06-18
 # ac-53.2-fix: docker image prune -f before docker compose pull to prevent ENOSPC on VPS
@@ -219,6 +219,26 @@ jobs:
             exit 1
           fi
           echo "AC-33.3 PASS: 'listener' container is Up"
+
+      - name: Verify celery-worker container Up (AC-53.3)
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-53.3 — verifying 'celery-worker' container is Up in the solanatrilly stack"
+          printf '%s\n' "$VPS_SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          ps_out=$(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /tmp/deploy_key \
+            "${VPS_USER}@${VPS_HOST}" \
+            'docker compose -p solanatrilly -f /root/solanatrilly/docker-compose.staging.yml ps 2>&1')
+          echo "$ps_out"
+          rm -f /tmp/deploy_key
+          if ! echo "$ps_out" | grep -iE '^solanatrilly.celery.worker' | grep -qiE 'running|up'; then
+            echo "AC-53.3 FAIL: 'celery-worker' container is NOT in running/up state"
+            exit 1
+          fi
+          echo "AC-53.3 PASS: 'celery-worker' container is Up"
 
       - name: Verify solanaBilly isolation (AC-6.5 / AC-12.4)
         env:
