@@ -1,0 +1,63 @@
+{
+  "_schema": "parity-gate-ac672",
+  "_note": "Static pinned labs-side PnL reference for the T0+T1+T2 promotion gate (AC-67.2). NOT dynamically recomputed at test time — a dynamically-recomputed reference cannot catch regressions. Any divergence between this and the replay harness output is a parity/leak bug.",
+  "_source": "Derived from verbatim port of solanatrills/analysis/wallet_strategy/tape_resettle.py at sprint-13 inception. Pinned 2026-06-18 against 2026-06-12.parquet (top-5 mints by trade count).",
+  "_tape_fixture": "replay_tape_day_ac671.json",
+  "config": {
+    "take_profit_pct": 100.0,
+    "stop_loss_pct": 20.0,
+    "disaster_cap_pct": 40.0,
+    "rug_pull_drop_pct": 50.0,
+    "auto_sell_timer_s": 300
+  },
+  "score_delay_s": 30.0,
+  "size_sol": 0.1,
+  "sol_usd": 140.0,
+  "labs_pnl": [
+    {
+      "mint": "9xskoaY5Mcnv1bZYTULENseEnFdDKdfxT2EfUJX3pump",
+      "enterable": true,
+      "pnl": -17.0798247108105,
+      "trigger": "RUG_PULL",
+      "held": 131.0,
+      "peak": 86.39407651172355,
+      "flow": 32987.551549
+    },
+    {
+      "mint": "A9wttooU42wTiEtChjcrpKW7RGZwu44B3Dfh53UTpump",
+      "enterable": true,
+      "pnl": -17.683135967524866,
+      "trigger": "STOP_LOSS",
+      "held": 12.0,
+      "peak": 19.42908737324629,
+      "flow": 48588.289992
+    },
+    {
+      "mint": "APErok2eCRnSa9iSx8oW5ybjCASsTczVxm4fTX42pump",
+      "enterable": true,
+      "pnl": -34.46300140713671,
+      "trigger": "STOP_LOSS",
+      "held": 38.0,
+      "peak": 24.5621631652607,
+      "flow": 45666.198832
+    },
+    {
+      "mint": "FqD1CYzTjZeeBfpsXANUuoWqNBjujGVm1PtuGXm5pump",
+      "enterable": true,
+      "pnl": -27.73374076460704,
+      "trigger": "RUG_PULL",
+      "held": 124.0,
+      "peak": 67.1324951376152,
+      "flow": 54330.108179
+    },
+    {
+      "mint": "svMU7z5uvq5QZJpgNoVFjCJdGJwykP3DWjsmvaRpump",
+      "enterable": true,
+      "pnl": -17.401720576708936,
+      "trigger": "STOP_LOSS",
+      "held": 23.0,
+      "peak": 12.562406566440076,
+      "flow": 42187.6483
+    }
+  ]
+}

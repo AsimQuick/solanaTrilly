@@ -1,0 +1,59 @@
+{
+  "_schema": "T3-verdict-corpus-ac672",
+  "_note": "Frozen tape-settled cohort for the T3 regression corpus (AC-67.2). A PR that flips any verdict (trigger, enterable, pnl) causes CI failure. The file+test-dropped-together evasion (#404 class) is blocked by test_t3_corpus_file_present in test_promotion_gate_ac672.py, which is separate from the per-verdict tests.",
+  "_tape_fixture": "replay_tape_day_ac671.json",
+  "_pinned": "2026-06-18",
+  "config": {
+    "take_profit_pct": 100.0,
+    "stop_loss_pct": 20.0,
+    "disaster_cap_pct": 40.0,
+    "rug_pull_drop_pct": 50.0,
+    "auto_sell_timer_s": 300
+  },
+  "score_delay_s": 30.0,
+  "size_sol": 0.1,
+  "sol_usd": 140.0,
+  "expected_count": 5,
+  "cohort": [
+    {
+      "mint": "9xskoaY5Mcnv1bZYTULENseEnFdDKdfxT2EfUJX3pump",
+      "verdict": {
+        "enterable": true,
+        "trigger": "RUG_PULL",
+        "pnl": -17.0798247108105
+      }
+    },
+    {
+      "mint": "A9wttooU42wTiEtChjcrpKW7RGZwu44B3Dfh53UTpump",
+      "verdict": {
+        "enterable": true,
+        "trigger": "STOP_LOSS",
+        "pnl": -17.683135967524866
+      }
+    },
+    {
+      "mint": "APErok2eCRnSa9iSx8oW5ybjCASsTczVxm4fTX42pump",
+      "verdict": {
+        "enterable": true,
+        "trigger": "STOP_LOSS",
+        "pnl": -34.46300140713671
+      }
+    },
+    {
+      "mint": "FqD1CYzTjZeeBfpsXANUuoWqNBjujGVm1PtuGXm5pump",
+      "verdict": {
+        "enterable": true,
+        "trigger": "RUG_PULL",
+        "pnl": -27.73374076460704
+      }
+    },
+    {
+      "mint": "svMU7z5uvq5QZJpgNoVFjCJdGJwykP3DWjsmvaRpump",
+      "verdict": {
+        "enterable": true,
+        "trigger": "STOP_LOSS",
+        "pnl": -17.401720576708936
+      }
+    }
+  ]
+}
