@@ -7,6 +7,17 @@ last-updated: 2026-06-18 (sprint-13 PLANNED — OPEN P8: the shared PumpSwap tra
 
 # solanaTrilly — Scrum Master Board
 
+> ✅ **US-70 / M1 (sprint-13 VPS deploy gate) is ALREADY CLOSED on `main`** (operator-applied, 2026-06-18, PR #296).
+> Root cause was a **faulty smoke-test, NOT a prod-image/wiring/dependency/migration gap**: the AC-68.3
+> step ran a bare `python3 -c "from trading… import …"` in the container without initialising Django, so a
+> module that defines a model at import time raised `AppRegistryNotReady`. Fix: prepend
+> `import django; django.setup();` to the AC-68.3 in-container check (`deploy.yml`). **Proven GREEN** — the
+> deploy was re-dispatched and ALL steps pass: AC-68.3 apparatus import ✓, US-69 Live Positions open/closed
+> APIs HTTP 200 ✓, solanaBilly isolation ✓; live `/api/trading/positions/{open,closed}/` and `/dashboard/`
+> all return 200. **Dev/Tester: treat the US-70 ACs as already-satisfied (empty branch →
+> `verify_ac_already_satisfied`) and proceed directly to US-71.** Do NOT modify app code for US-70 — the
+> apparatus imports correctly at runtime; only the test harness was wrong.
+
 > 🆕 **MANDATORY NEW FEATURE — PLAN THIS NEXT (after sprint-11): the Copy-Trade Dashboard (v1).**
 > Full build spec + consumption contract: [`solanatrilly_copytrade_SPEC.md`](solanatrilly_copytrade_SPEC.md)
 > (operator-provided, 2026-06-17). **PO: this is committed scope — do NOT declare the project complete
