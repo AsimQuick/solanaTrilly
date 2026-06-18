@@ -1,8 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 5/6 stories | 16/18 ACs
-**Last Updated:** 2026-06-18T17:54:18+00:00
+**Progress:** 5/6 stories | 17/18 ACs
+**Last Updated:** 2026-06-18T18:04:39+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -391,7 +391,8 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 #### Acceptance Criteria
 - [x] **AC-69.1:** The async-safety guard is GENERALIZED project-wide (sprint-11 K4 / sprint-12 L2): a structural/AST (or runtime) check fails in pytest if ANY Channels/async consumer makes a synchronous ORM call in an async context (the US-48 TapeFeedConsumer SynchronousOnlyOperation bug class) — covering ALL consumers by scanning the consumers module/package, not just the copytrade one. Verified by the guard catching a deliberately-planted violation fixture (positive test) and passing on all real consumers (negative test).
   - Dev: done
-- [ ] **AC-69.2:** A Live Positions dashboard board (§13.2#1, the operator's #1 ask) — a DRF API + a fresh React view in the US-48 frontend rendering the shared US-64 Position rows (replay-sandbox + observe/paper): open positions (entry/current price from replay/observe tape DataSource or Position row — NOT a live Birdeye call, zero firehose/unrealized-PnL/time-held) + closed positions (exit_trigger + realized PnL), for BOTH source=model and source=copytrade. No new PnL math (reads Position rows). Completes the P8 offline-gate clause 'sandbox Positions render in the dashboard.' Verified by API tests over banked Position fixtures (asserting both source=model and source=copytrade rows) + frontend wiring checks (component present, App.jsx route, metadata front matter, H1 ImportError trap).
+- [x] **AC-69.2:** A Live Positions dashboard board (§13.2#1, the operator's #1 ask) — a DRF API + a fresh React view in the US-48 frontend rendering the shared US-64 Position rows (replay-sandbox + observe/paper): open positions (entry/current price from replay/observe tape DataSource or Position row — NOT a live Birdeye call, zero firehose/unrealized-PnL/time-held) + closed positions (exit_trigger + realized PnL), for BOTH source=model and source=copytrade. No new PnL math (reads Position rows). Completes the P8 offline-gate clause 'sandbox Positions render in the dashboard.' Verified by API tests over banked Position fixtures (asserting both source=model and source=copytrade rows) + frontend wiring checks (component present, App.jsx route, metadata front matter, H1 ImportError trap).
+  - Dev: done
 - [ ] **AC-69.3:** Deployed + smoke-tested on the VPS (the Live Positions route + its API return 200; containers Up; solanaBilly untouched on 8001). Zero firehose. New backend AND frontend files carry metadata front matter.
 
 **Dependencies:** US-67, US-68, US-48
@@ -421,6 +422,20 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
   ### 5 tests, all passing
   
   1. `test_positive_violation_fixture_is_caught` — planted `_PlantedViolationConsumer.connect()` with bare `.objects.get()` is …
+  AC-69.2 done: Pushed to `feature/US-69-AC-69.2`. All 2446 tests pass.
+  
+  ---
+  
+  ## Implementation Summary — US-69 AC-69.2
+  
+  **Files created (4):**
+  
+  | File | Role |
+  |------|------|
+  | `trading/api.py` | Two DRF endpoints: `GET /api/trading/positions/open/` (PAPER+OPEN rows, closed_at IS NULL, entry_price from Position row — zero firehose, no unrealized PnL) and `GET /api/trading/positions/closed/` (closed_at IS NOT NULL, exit_trigger + realized PnL); optional `?source=` and `?limit=` query params; both return source=model and source=copytrade rows |
+  | `trading/urls.py` | URL routing for the two trading API endpoints, with named URL patterns |
+  | `trading/tests/test_live_positions_api_ac692.py` | 20 API tests over banked in-DB Position fixtures: open endpoint (200 OK, both sources, model/copytrade row presence, closed exclusion, source filter x2, no unrealized PnL/current price/time-held fields); closed endpoint (200 OK, both sources, model/copytrade presence, open exclusion, source filter x2, exit_trigger, realized PnL values, limit param) |
+  | `frontend/src/LivePositions.jsx` | React component with metadata front matter + H1 ImportError trap; open positions table (entry_price from Position row only), cl …
 
 **Tester Status:** approved
 **Tester Notes:**
