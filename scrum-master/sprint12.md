@@ -112,11 +112,12 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   - Dev: done
 - [x] **AC-59.2:** The wallet-subscription consumer reads the active cohort's wallet addresses (US-58 config) and subscribes to THOSE WALLETS (not tokens) behind an INJECTED DataSource + injected clock (Principle #7) — the US-2 static-analysis guard extends to this consumer: no concrete Helius/source import on the core path, no time.time()/datetime.now() on the core path; channel/topic names are config-driven (Principle #1). The consumer emits a normalized per-wallet transaction event for the US-60 trigger. ASYNC-SAFETY (sprint-11 K4): a guard asserts the consumer makes no synchronous ORM call in an async context (the US-48 SynchronousOnlyOperation bug class). Verified by static-analysis + a deterministic synthetic wallet-tx replay producing identical normalized events twice; zero firehose.
   - Dev: done
-- [ ] **AC-59.3:** The copytrade_engine is deployed to the VPS solanatrilly staging stack and Tester-CONFIRMED from an ACTUAL green deploy run: the 'copytrade_engine' container is Up (docker compose -p solanatrilly ps), HTTP 200 on 8002 still holds (AC-12.3 retry-with-backoff), the existing listener/web/celery-worker/frontend containers remain Up (the new engine does not disturb them — §5 isolation), and solanaBilly is UNTOUCHED on 8001. The nine-invariant deploy regression guard (sprint-11 AC-54.2) stays green. New/changed files carry metadata front matter.
+- [x] **AC-59.3:** The copytrade_engine is deployed to the VPS solanatrilly staging stack and Tester-CONFIRMED from an ACTUAL green deploy run: the 'copytrade_engine' container is Up (docker compose -p solanatrilly ps), HTTP 200 on 8002 still holds (AC-12.3 retry-with-backoff), the existing listener/web/celery-worker/frontend containers remain Up (the new engine does not disturb them — §5 isolation), and solanaBilly is UNTOUCHED on 8001. The nine-invariant deploy regression guard (sprint-11 AC-54.2) stays green. New/changed files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-58, US-1, US-2
 
-**Dev Team Status:** in-progress
+**Dev Team Status:** done
 **Dev Team Notes:**
   AC-59.1 done: copytrade_engine service added to both docker-compose.yml and docker-compose.staging.yml; management command run_copytrade_engine.py created under copytrade/management/commands/; 17 compose-topology + isolation-guard tests all pass (1931 total suite green). Command is idle (asyncio event loop awaiting SIGINT/SIGTERM). Imports only django/asyncio/signal/sys — no firehose singletons, no core.models. No ports (port-collision-free). HELIUS_API_KEY declared in both compose files (own connection slot). listener service preserved. blocker-type: none
   AC-59.1 done: Everything is implemented, committed, and pushed. Here is the implementation summary:
@@ -153,6 +154,23 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   |---|---|
   | `copytrade/wallet_consumer.py` | **New** — `WalletTxEvent` (frozen dataclass, fields: wallet/mint/tx_signature/tx_type/sol_amount/token_amount/timestamp/raw) + `WalletSubscriptionConsumer`. Imports ONLY abstract `DataSource` + `Clock` — zero concrete Helius/Birdeye imports (static-analysis guard). No `datetime.now()`/`time.time()` (US-2 guard). No `.objects.` ORM access (K4 guard). `wallet_addresses` injected by caller (read from DB via `sync_to_async`). `channel_name` is a config-driven parameter (Principle #1). `run()` is an async generator over `stamp_events(source, clock)`, yielding `WalletTxEvent` for watched wallets with non-empty mint. |
   | `copytrade/tests/test_wallet_consumer_ac592.py` | **New** — 9 tests: (1) AST guard — no concrete source import; (2) AST guard — no `datetime.now()`/`time.time()`; (3) K4 AST guard — no `.objects.` sync ORM; (4) normalization emits …
+  AC-59.3 done: Pushed to `feature/US-59-AC-59.3`. All 1947 tests pass (7 new + 1940 prior).
+
+  ---
+
+  ## Implementation Summary — US-59 AC-59.3
+
+  **Commit:** `ba401b1` `[US-59] AC-59.3: deploy.yml copytrade_engine container Up check + structural guard tests`
+  **Branch:** `feature/US-59-AC-59.3`
+
+  ### Files changed
+
+  | File | Change |
+  |---|---|
+  | `.github/workflows/deploy.yml` | Added `Verify copytrade_engine container Up (AC-59.3)` step between the celery-worker check and solanaBilly isolation check; greps `ps` output for `solanatrilly.copytrade.engine` running/up state; scoped with `-p solanatrilly`; exits 1 on failure (fail-loud). Updated `story:` header to include `US-59 AC-59.3`. |
+  | `copytrade/tests/test_copytrade_engine_deploy_ac593.py` | **New** — 7 structural tests (no DB, no Django marks): H1 import trap on `Command`; step-present check (AC-59.3 + container grep + running/up); `-p solanatrilly` scoping; `exit 1` on-failure; staging-compose service pinned; step ordered after deploy step; nine-invariant guard file exists + all nine functions present. |
+
+  All tests are pure static/structural — no DB, no marks needed. Nine-invariant guard (AC-54.2) stays green (10 tests pass unchanged). blocker-type: none
 
 **Tester Status:** approved
 **Tester Notes:**
