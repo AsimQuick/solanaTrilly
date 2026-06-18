@@ -2,7 +2,8 @@
 
 **Phase:** planning
 **Progress:** 5/6 stories | 15/18 ACs
-**Last Updated:** 2026-06-18T17:41:07+00:00
+**Last Updated:** 2026-06-18T18:00:00+00:00
+**last-updated-by:** dev-team
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -395,7 +396,13 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 
 **Dependencies:** US-67, US-68, US-48
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
+**Dev Team Notes:**
+- AC-69.1 done: created `core/tests/test_async_safety_guard_ac691.py` — project-wide AST async-safety guard
+- Implements `find_async_orm_violations()` using `_shallow_walk()` that stops at `FunctionDef`/`Lambda`/`AsyncFunctionDef` boundaries; correctly distinguishes sync-helper ORM (safe) from bare `.objects.` in async methods (violation)
+- Discovery glob `**/*consumer*.py` (excluding `test_` and `__pycache__`) picks up all 4 consumer files: `core/consumers.py`, `core/dashboard/consumer.py`, `core/detection/consumer.py`, `copytrade/wallet_consumer.py`
+- All 5 AC-69.1 tests pass; full suite 2426/2426 (2421 prior + 5 new), no regressions
+- blocker-type: none
 
 **Tester Status:** approved
 **Tester Notes:**
