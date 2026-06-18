@@ -359,7 +359,15 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
 
 **Dependencies:** US-48, US-9, US-42
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
+**Dev Team Notes:**
+- AC-56.1 implemented: read-only DRF API over PipelineConfig (US-9) and ModelRegistry (US-42)
+- Created `core/control_api.py`: PipelineConfigSerializer, ModelRegistrySerializer, compute_config_diff, compute_model_diff, _flat_diff, history helpers, and all 8 @api_view endpoints with @permission_classes([AllowAny])
+- Updated `core/urls.py`: imported all 8 views, added URL patterns with diff/ before <int:pk>/ to avoid routing conflicts, updated module header to include US-56 AC-56.1
+- Created `core/tests/test_control_api_ac561.py`: 24 deterministic tests covering H1 import traps, list/detail/history/diff for both config and registry, banked-fixture diff correctness (section-level changes verified exactly), and diff determinism (run-twice-identical)
+- No new config/registry math — view only reads/diffs existing rows; created_by FK excluded from PipelineConfigSerializer per spec
+- Syntax verified via py_compile inside Docker container
+- blocker-type: none
 
 **Tester Status:** approved
 **Tester Notes:**
