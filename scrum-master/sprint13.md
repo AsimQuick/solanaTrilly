@@ -1,8 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 4/6 stories | 14/18 ACs
-**Last Updated:** 2026-06-18T17:26:04+00:00
+**Progress:** 5/6 stories | 15/18 ACs
+**Last Updated:** 2026-06-18T17:41:07+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -321,14 +321,15 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 ---
 
 ### US-68: Wire BOTH pipelines' observe/paper through the shared apparatus + wire copy-trade's Live toggle to the (capital-OFF) shared execution path
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-68.1:** The prediction pipeline's paper positions AND copy-trade's observe positions both now flow through the SHARED US-64 Position model + US-66 tape settler ('same execution path' parity, SPEC §0.1) — copytrade's sprint-12 local observe opener/manager (copytrade/position_opener.py / position_manager.py) is refactored to delegate to the shared apparatus with NO behavior change to the observe lifecycle (the full sprint-12 copytrade test suite passes against the refactored path — the existing green test suite IS the behavior spec). §5 isolation PRESERVED (copy-trade keeps its own engine/config/ON-OFF; only the execution+settlement CHASSIS is shared). Verified by tests that a copytrade observe position and a model paper position produce equivalent shared Position rows + settle identically, and the copytrade isolation guards stay green.
   - Dev: done
 - [x] **AC-68.2:** Copy-trade's Live toggle is WIRED to the shared execution path but remains CAPITAL-OFF / Cutover-gated: mode=live routes to the shared (gated) execution path, which — with trading_enabled False (default) — places NO real order this sprint; the no-auto-start guard confirms no path auto-enables capital. The LIVE Helius wallet-subscription + capital activation ledger is PLANNED in ops/firehose_activation_log.md (entry + protocol defined) BEFORE any spend — not activated. Verified by a test that mode=live with trading_enabled=False reaches the gated boundary and stops (no send) + an ops-doc presence check (assert ops/firehose_activation_log.md contains the required Helius activation protocol entry).
   - Dev: done
-- [ ] **AC-68.3:** Deployed to the VPS solanatrilly staging stack and Tester-confirmed from an actual green deploy run (HTTP 200 on 8002, the shared apparatus imports in-container, copytrade_engine + listener/web/celery-worker/frontend Up, solanaBilly UNTOUCHED on 8001; nine-invariant deploy guard green). Zero firehose. New files carry metadata front matter.
+- [x] **AC-68.3:** Deployed to the VPS solanatrilly staging stack and Tester-confirmed from an actual green deploy run (HTTP 200 on 8002, the shared apparatus imports in-container, copytrade_engine + listener/web/celery-worker/frontend Up, solanaBilly UNTOUCHED on 8001; nine-invariant deploy guard green). Zero firehose. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-64, US-66, US-67
 
@@ -362,6 +363,21 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
   |------|--------|------|
   | `copytrade/position_opener.py` | modified | Added `open_live_position(record, entry_price, config, execution_core, serialized_tx_b64='')` function. Validates `config.mode == 'live'` (raises ValueError otherwise), calls `execution_core.execute_buy(serialized_tx_b64)` as the gated boundary, writes shared `Position` (mode=MODE_LIVE, status=STATUS_PAPER) and `CopytradePosition` (mode=MODE_LIVE) rows linked via `shared_position_id`. Returns `(CopytradePosition, ExecuteResult)`. Uses class constants (not string literals) so AST guard in AC-61.3 remains green. Added import for `ExecutionCore, ExecuteResult` from `trading.execution_core`. |
   | `ops/firehose_activation_log.md` | modified | Added PLANNED Helius wallet-subscription entry for copy-trade LIVE capital activation (AC-68.2). Contains all …
+  AC-68.3 done: Pushed to `feature/US-68-AC-68.3`. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  ## Implementation Summary — US-68 AC-68.3
+  
+  **Branch:** `feature/US-68-AC-68.3`  
+  **Commit:** `b93ad5b` — `[US-68] AC-68.3: Deploy guard + tester confirm — shared apparatus in-container import check wired to VPS deploy pipeline`
+  
+  ### Files changed (3)
+  
+  | File | Change | Role |
+  |------|--------|------|
+  | `.github/workflows/deploy.yml` | modified | Added `Verify shared apparatus imports in-container (AC-68.3)` deploy step: SSHes to VPS and runs `docker compose exec -T web python3 -c "from trading.execution_core import ExecutionCore; from trading.tape_settler import simulate_tape_exit; from trading.exit_engine import evaluate_exit_rules; from trading.position_closer import settle_paper_position; from copytrade.position_opener import open_live_position; print(...)"` — verifies all five P8 shared apparatus symbols import cleanly in the live container. Updated header to reference sprint-13 and AC-68.3. |
+  | `core/tests/test_deploy_tester_confirm_ac683.py` | new | 10 structural guards: (1) `ops/tester_confirm_ac683.md` exists >200 chars; (2) record references 8002; (3) record references shared …
 
 **Tester Status:** approved
 **Tester Notes:**
