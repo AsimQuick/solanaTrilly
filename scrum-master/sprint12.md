@@ -184,13 +184,28 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
 #### Acceptance Criteria
 - [x] **AC-60.1:** The BUY-COPY trigger predicate fires ONLY when ALL of SPEC §3's conditions hold: (1) the tx is a SWAP where the watched wallet is the BUYER (acquiring the token, spending SOL) — NOT a sell, transfer, or passive party; (2) the token is a pump.fun token (mint/program check); (3) the token is STILL ON THE BONDING CURVE (PRE-graduation) — NOT already migrated to PumpSwap/Raydium (this is the edge: a buy on an already-graduated token is the WRONG signal and must be skipped). Verified by a pytest test with explicit REJECT cases: a sell, a transfer, a non-pumpfun token, and a post-graduation buy each produce NO trigger; a valid pre-graduation curve buy triggers.
   - Dev: done
-- [ ] **AC-60.2:** Multiplicity controls (SPEC §3 #4/#5/#6, config-driven): copy_first_buy_only — only the wallet's FIRST buy of a token in this cohort session triggers (later adds do not); dedupe_token_across_wallets — if we already hold/are opening this token, do NOT open a second position, but RECORD the additional triggering wallet and attribute the position to the FIRST triggering wallet (for PnL); max_concurrent_positions — ignore new triggers beyond the cap. Verified by a pytest test: a second buy by the same wallet is ignored; two different wallets buying the same token open ONE position attributed to the first (the second is recorded); a trigger over the cap is ignored.
+- [x] **AC-60.2:** Multiplicity controls (SPEC §3 #4/#5/#6, config-driven): copy_first_buy_only — only the wallet's FIRST buy of a token in this cohort session triggers (later adds do not); dedupe_token_across_wallets — if we already hold/are opening this token, do NOT open a second position, but RECORD the additional triggering wallet and attribute the position to the FIRST triggering wallet (for PnL); max_concurrent_positions — ignore new triggers beyond the cap. Verified by a pytest test: a second buy by the same wallet is ignored; two different wallets buying the same token open ONE position attributed to the first (the second is recorded); a trigger over the cap is ignored.
 - [ ] **AC-60.3:** The trigger path is offline-gated by a DETERMINISTIC synthetic wallet-tx replay (schema-faithful, behind the US-59 DataSource seam): replaying the same stream twice yields identical trigger decisions and identical opened-position rows. We NEVER copy the wallet's sells/adds — only the entry signal (mirror_wallet_sells stays False). Verified run-twice-identical; zero firehose. New files carry metadata front matter.
 
 **Dependencies:** US-58
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
 **Dev Team Notes:**
+  AC-60.2 done: Pushed to `feature/US-60-AC-60.2`. Here is the implementation summary:
+
+  ## Implementation Summary — US-60 AC-60.2
+
+  **Branch:** `feature/US-60-AC-60.2`
+  **New files (both carry structured metadata front matter):**
+
+  | File | Description |
+  |---|---|
+  | `copytrade/multiplicity.py` | Pure-function module. `MultiplicityState` (mutable dataclass, created via `.new()`) tracks `wallet_token_seen`, `open_mints`, `open_positions_count`, and `additional_trigger_wallets`. `TriggerDecision` (frozen dataclass) carries `action` ("open" / "skip_first_buy" / "skip_cap" / "record_attribution") and `reason`. `apply_multiplicity_controls(event, state, config)` evaluates controls in SPEC §3 order (#4 → #5 → #6), mutates state in-place, returns decision. |
+  | `copytrade/tests/test_multiplicity_ac602.py` | 25 pure-unit tests; zero DB access. Covers all three AC-required scenarios (A/B/C) plus edge-case coverage: flags disabled (copy_first_buy_only=False, dedupe=False), state increment/non-increment, per-(wallet,mint) granularity of #4, multiple additional wallets accumulated, primary wallet absent from additional_trigger_wallets, MultiplicityState.new() initial values, TriggerDecision frozen, reason string content. |
+
+  **Test result:** 25/25 new tests pass; 1990 total suite green; 0 regressions.
+  blocker-type: none
+
   AC-60.1 done: Pushed to `feature/US-60-AC-60.1`. Here is the implementation summary:
   
   ---
