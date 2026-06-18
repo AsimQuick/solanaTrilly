@@ -114,7 +114,15 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
 
 **Dependencies:** US-58, US-1, US-2
 
-**Dev Team Status:** not-started
+**Dev Team Status:** in-progress
+**Dev Team Notes:**
+  AC-59.1 done: copytrade_engine service added to both docker-compose.yml and docker-compose.staging.yml; management command run_copytrade_engine.py created under copytrade/management/commands/; 17 compose-topology + isolation-guard tests all pass (1931 total suite green). Key implementation decisions:
+  - Management command is idle in AC-59.1 (asyncio event loop awaiting SIGINT/SIGTERM), matching the run_listener._run_idle() pattern.
+  - STRICTLY imports ONLY django, asyncio, signal, sys — no BirdeyeSwapSource, HeliusBirthTapeSource, TapeRecorder, LakeWriter, SwapWriter, or core.models (PipelineConfig/PipelineState/RawEvent/Token) — isolation guard tests confirm.
+  - Service has NO ports in either compose file (port-collision-free worker design).
+  - HELIUS_API_KEY is declared in the service env in both compose files (own connection, reserved for wallet-address subscription in AC-59.2).
+  - listener service preserved — engine is additive, does NOT replace it.
+  - blocker-type: none
 
 **Tester Status:** approved
 **Tester Notes:**

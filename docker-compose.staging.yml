@@ -16,8 +16,8 @@
 #   VPS is never hand-edited: deploy.yml pulls the GHCR image and brings up this file.
 # created-by: dev-team
 # sprint: sprint-7
-# story: US-6 AC-6.2, US-16 AC-16.3, US-31 AC-31.1, US-48 AC-48.1
-# last-updated: 2026-06-17
+# story: US-6 AC-6.2, US-16 AC-16.3, US-31 AC-31.1, US-48 AC-48.1, US-59 AC-59.1
+# last-updated: 2026-06-18
 # ---
 #
 # Hard isolation rules:
@@ -101,6 +101,26 @@ services:
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36,localhost,127.0.0.1}
       REDIS_URL: redis://redis:6379/0
       BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
+      HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - solanatrilly_net
+    restart: unless-stopped
+
+  copytrade_engine:
+    image: ghcr.io/asimquick/solanatrilly:latest
+    command: python manage.py run_copytrade_engine
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: 0
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36,localhost,127.0.0.1}
+      REDIS_URL: redis://redis:6379/0
       HELIUS_API_KEY: ${HELIUS_API_KEY:-}
     depends_on:
       db:
