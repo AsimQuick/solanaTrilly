@@ -5,7 +5,7 @@
 #          builds/pushes web image to GHCR, then deploys to the VPS staging stack
 #          (-p solanatrilly, port 8002) and smoke-tests it.
 # sprint: sprint-4, sprint-10, sprint-11, sprint-12, sprint-13
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1 AC-52.3 US-53 AC-53.2 AC-53.3 US-54 AC-54.1 AC-54.3 US-55 AC-55.1 AC-55.2 AC-55.3 US-56 AC-56.3 US-57 AC-57.3 US-59 AC-59.3 US-63 AC-63.3 US-68 AC-68.3 US-69 AC-69.3 US-71 AC-71.3
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1 AC-52.3 US-53 AC-53.2 AC-53.3 US-54 AC-54.1 AC-54.3 US-55 AC-55.1 AC-55.2 AC-55.3 US-56 AC-56.3 US-57 AC-57.3 US-59 AC-59.3 US-63 AC-63.3 US-68 AC-68.3 US-69 AC-69.3 US-71 AC-71.3 US-72 AC-72.3
 # created-by: dev-team
 # last-updated: 2026-06-19
 # ac-54.3-note: tester_confirm_ac543.md documents the reproducibility confirmation artifact
@@ -435,6 +435,25 @@ jobs:
             sleep "${SMOKE_RETRY_DELAY}"
           done
           echo "Live Positions closed API FAILED: /api/trading/positions/closed/ did not return HTTP 200 after ${SMOKE_MAX_ATTEMPTS} attempts"
+          exit 1
+
+      - name: Smoke-test US-72 Calibration & PnL analytics API (AC-72.3)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-72.3 — verifying Calibration & PnL analytics API returns HTTP 200 at http://${VPS_HOST}:8002/api/trading/analytics/calibration-pnl/"
+          SMOKE_MAX_ATTEMPTS=6
+          SMOKE_RETRY_DELAY=5
+          for i in $(seq 1 "${SMOKE_MAX_ATTEMPTS}"); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_HOST}:8002/api/trading/analytics/calibration-pnl/" || true)
+            if [ "$status" = "200" ]; then
+              echo "Calibration & PnL analytics API PASS on attempt ${i}: GET /api/trading/analytics/calibration-pnl/ returned HTTP 200"
+              exit 0
+            fi
+            echo "Attempt ${i}/${SMOKE_MAX_ATTEMPTS}: HTTP ${status} — retrying in ${SMOKE_RETRY_DELAY}s"
+            sleep "${SMOKE_RETRY_DELAY}"
+          done
+          echo "Calibration & PnL analytics API FAILED: /api/trading/analytics/calibration-pnl/ did not return HTTP 200 after ${SMOKE_MAX_ATTEMPTS} attempts"
           exit 1
 
       - name: Verify solanaBilly isolation (AC-6.5 / AC-12.4)
