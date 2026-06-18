@@ -1,8 +1,8 @@
 # Sprint 14
 
 **Phase:** in-progress
-**Progress:** 2/5 stories | 7/15 ACs
-**Last Updated:** 2026-06-18T20:23:38+00:00
+**Progress:** 2/5 stories | 8/15 ACs
+**Last Updated:** 2026-06-18T20:33:50+00:00
 
 ## Sprint Goal
 FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M1 keystone) is ALREADY CLOSED on main via PR #296 (merged 2026-06-18): the AC-68.3 in-container import failure (deploy run 27780073827) was root-caused to a FAULTY SMOKE-TEST HARNESS — the step ran a bare `python3 -c "from trading... import ..."` WITHOUT initialising Django, so a module that defines a model at import time raised AppRegistryNotReady; it was NOT a prod-image/dependency/migration/app-wiring gap. The fix (commit 35ce277) prepends `import django; django.setup();` to the AC-68.3 in-container check in deploy.yml; the deploy was re-dispatched GREEN and ALL steps pass (AC-68.3 apparatus import OK, US-69 Live Positions open/closed APIs HTTP 200 on 8002, solanaBilly isolation OK), retroactively closing sprint-13 US-68.3 + US-69.3. So US-70 is RECORDED DONE (no app code changed). Sprint-14's actionable scope is therefore: (1) M2 (US-71) — add a pre-deploy in-container import smoke against the BUILT staging image that ITSELF initialises Django (mirroring the PR #296 fix, so the exact AppRegistryNotReady class surfaces BEFORE the VPS, not after a whole-sprint round-trip) + pin it in the deploy regression guard; (2) M5 (US-72/US-73) — build the last two PRD §13.2 dashboard views now unblocked by the P8 Position/PnL rows: Calibration & PnL analytics (§13.2#4) and the Replay viewer position-open/close overlay (§13.2#5), both reading shared Position / replay-sandbox / tape rows (NO new PnL math, NO live Birdeye, zero firehose); (3) US-74 — close the recurring status-integrity artifact (A5/B4/C4/D2/D3) at the SOURCE: harden the US-13 guard to forbid phase:complete while any story tester_status is failed/blocked AND flag story-level dev_status:not-started on all-ACs-done stories, add a mechanical phase/dev_status promotion tool wired before the sprint-end deploy, and normalize sprint13.json to a guard-clean truthful state (it is now fully done — the deploy gate closed via US-70/PR #296). SAFETY GATE (non-negotiable, unchanged from sprint-13): trading_enabled DEFAULT False, ZERO real orders / ZERO capital, the live RPC/Sender send boundary ported but NEVER invoked (AST-guarded); §5 copy-trade isolation PRESERVED. OFFLINE/replay-driven by construction -> ZERO firehose activation (8 Birdeye + 8 Helius remain banked): the import smoke imports symbols inside the built image, and both new views read existing Position / replay-sandbox / tape rows (no live calls). CUTOVER / LIVE CAPITAL (PRD §16) + the prediction SOAK/ENDGAME (I2/I3/K2/K3/M3/M4) remain OPERATOR-DRIVEN — OUT OF SCOPE; the Copy-Trade v2 NON-goals (SPEC §1) remain deferred — do NOT add.
@@ -144,7 +144,8 @@ FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M
 #### Acceptance Criteria
 - [x] **AC-72.1:** A DRF API aggregates CLOSED shared US-64 Position rows (closed_at IS NOT NULL) into the §13.2#4 analytics: win-rate by score band, realized PnL by exit_trigger, score-vs-actual scatter points, and a calibration-curve bucketing — reading Position rows ONLY (both source=model and source=copytrade), with NO new PnL/price math (Principle #2), NO live Birdeye call, zero firehose, every bucket-count division H4 zero-guarded. Verified by API tests over banked Position fixtures asserting the four aggregates + that both source=model and source=copytrade rows are included + an empty-set returns an empty/zero-guarded response (no division-by-zero).
   - Dev: done
-- [ ] **AC-72.2:** A fresh CalibrationPnL.jsx React view in the US-48 frontend renders the four analytics (win-rate by score band, realized PnL by exit trigger, score-vs-actual scatter, calibration curve), wired with an App.jsx route, metadata front matter, and an H1 ImportError trap. NO candle/TA re-implementation — it consumes the AC-72.1 API. Verified by frontend wiring checks (component present, route registered, metadata header, ImportError trap).
+- [x] **AC-72.2:** A fresh CalibrationPnL.jsx React view in the US-48 frontend renders the four analytics (win-rate by score band, realized PnL by exit trigger, score-vs-actual scatter, calibration curve), wired with an App.jsx route, metadata front matter, and an H1 ImportError trap. NO candle/TA re-implementation — it consumes the AC-72.1 API. Verified by frontend wiring checks (component present, route registered, metadata header, ImportError trap).
+  - Dev: done
 - [ ] **AC-72.3:** Deployed + smoke-tested on the VPS: the Calibration & PnL route + its API return HTTP 200 on 8002 from an actual green deploy run; containers Up; solanaBilly UNTOUCHED on 8001; the deploy regression guard GREEN. Verified by the Tester from the green deploy run. New backend AND frontend files carry metadata front matter. Zero firehose.
 
 **Dependencies:** US-67, US-69, US-70, US-48
@@ -171,6 +172,21 @@ FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M
   
   **Key design notes:**
   - `score` is nullable on `Position` — copytrade rows without a model score get `null` …
+  AC-72.2 done: Pushed to `feature/US-72-AC-72.2`.
+  
+  ---
+  
+  **Implementation Summary — AC-72.2**
+  
+  **Files changed (3):**
+  
+  | File | Change | Purpose |
+  |------|--------|---------|
+  | `frontend/src/CalibrationPnL.jsx` | NEW (334 lines) | React component rendering four analytics as dark-theme tables: WinRateByScoreBand, PnLByExitTrigger, ScatterTable, CalibrationCurveTable. Fetches `/api/trading/analytics/calibration-pnl/` (AC-72.1 API). Metadata front matter with `US-72 AC-72.2`. H1 ImportError trap on `useState`. No candle/TA. |
+  | `frontend/src/App.jsx` | MODIFIED | Added `import CalibrationPnL`, `view === 'calibration'` branch, updated metadata front matter and help text. |
+  | `core/tests/test_calibration_pnl_view_ac722.py` | NEW (213 lines) | 10 tests: component present, metadata front matter has US-72, H1 ImportError trap present, App.jsx imports component, App.jsx routes `view=calibration`, four analytics sections referenced (win_rate, exit_trigger, scatter, calibration_curve), backend view importable. Module-level H1 trap for `calibration_pnl_analytics_view`. |
+  
+  **Test count:** 10 new tests. Total suite: **2538 passed** (no regressions).
 
 **Tester Status:** approved
 **Tester Notes:**
