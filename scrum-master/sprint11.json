@@ -72,7 +72,7 @@
     {
       "id": "US-53",
       "title": "J2 \u2014 diagnose at ROOT and fix the independent US-47 per-story deploy failure (run 27683660493): go to the run logs / the box (D5), isolate the concrete root cause that predates and differs from the WS-key defect, apply the fix, re-deploy, and confirm the VPS conditions (retrospective J2)",
-      "status": "planned",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-47"
@@ -81,8 +81,8 @@
         {
           "id": "53.1",
           "text": "Diagnose the ROOT CAUSE (not a symptom) of the failed US-47 per-story deploy (run 27683660493, conclusion: failure) by going to the run logs / the box per the D5 'on-box before concluding' rule. The US-47 mechanism (the AI dev-agent PreToolUse ruff gate) was CI-green; the failure predates the AC-48.3 WS-key defect (US-47 last merged 10:49Z; PR #208 merged 11:41Z) so it is a DISTINCT cause. Identify the concrete divergence (e.g. a deploy-context env/secret/migration/orphaned-container/registry condition) and record the root cause in an ops/ RCA record, verified by verifying the identified root cause against the deploy run logs.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "pending"
         },
         {
@@ -101,7 +101,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-53.1 done: Done. Here is the implementation summary for the orchestrator:\n\n---\n\n**AC-53.1 Implementation Summary**\n\n**Root cause identified:** Run 27683660493 failed at \"Deploy to VPS staging stack\" (deploy job 81877608439) with the OS-level ENOSPC error:\n\n```\nwrite /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/4475/fs/usr/local/lib/python3.12/site-packages/django/contrib/admin/locale/ko/LC_MESSAGES/djangojs.po: no space left on device\n```\n\nThe VPS `/var/lib/containerd` overlayfs partition was exhausted by accumulated Docker image layers from prior sprint-10 deploy runs. The failure occurred during `docker compose pull` (195MB Django image layer extraction), before `docker compose up -d` was ever reached \u2014 making it **distinct** from both the orphaned-container failure (AC-46.1, run 27673867804 \u2014 fails during `up -d`) and the WS-key defect (US-52 \u2014 would fail only in the smoke-test step, never reached here). The ci/test job was GREEN, confirming no code regression.\n\n**Files changed (2):**\n\n1. **`ops/rca_run_27683660493.md`** (new, 193 lines) \u2014 Full RCA record: symptom, VPS timeline, root cause (disk exhaustion), candidate ruling table (7 candidates evaluated), verbatim \u2026",
       "tester_status": "approved",
       "tester_notes": "AC-53.1 wording tightened: 'reproducing the diagnosis' changed to 'verifying the identified root cause against'; the run is gone, only the logs can be compared. ACs 53.2 and 53.3 have explicit pass conditions (green run ID, named container + port conditions). No scope issues."
     },
@@ -269,6 +269,6 @@
     ]
   },
   "build_order": "US-52 (J1 WS-key fix + hardened structural test) and US-53 (J2 US-47 deploy root-cause + fix) are INDEPENDENT deploy-layer fixes and may run FIRST / in parallel. US-54 (J4 consolidated holistic deploy-path pass + regression guard) DEPENDS on both US-52 and US-53 (it reconciles their root causes plus the per-merge regression into one system fix). US-55 (J3 the dashboard-chain closeout: one green HEAD deploy + Tester VPS-confirm of US-48/49/50/51) DEPENDS on US-52/US-53/US-54 and declares the P6 offline gate VPS-confirmed + the third pillar DoD-done. US-56 (Config & model control operator skin) and US-57 (Feature Builder UI) are NET-NEW dashboard views over EXISTING backends (US-9/US-42 config+registry; US-31 export), depend on US-48's foundation, and may run in PARALLEL once the deploy path is sound (after US-54). Every AC is independently verifiable OFFLINE/replay against the existing lake + ReplaySource + the US-9/US-42/US-31 backends \u2014 ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked). The deploy-gap work is CI/VPS infra; the two new views are UI surfaces over offline backends. P6 is offline/replay-driven by construction.",
-  "last_updated": "2026-06-18T04:25:51+00:00",
+  "last_updated": "2026-06-18T04:35:10+00:00",
   "deploy_summary": "Not yet deployed \u2014 sprint-11 in planning."
 }
