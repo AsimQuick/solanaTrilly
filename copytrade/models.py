@@ -1,7 +1,7 @@
 # ---
 # module: copytrade.models
 # sprint: sprint-12
-# story: US-58 AC-58.1, US-58 AC-58.2
+# story: US-58 AC-58.1, US-58 AC-58.2, US-62 AC-62.1
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-18
@@ -207,11 +207,13 @@ class CopytradePosition(models.Model):
     EXIT_SL = "SL"
     EXIT_CURVE = "CURVE"
     EXIT_TIMER = "TIMER"
+    EXIT_SETTLE = "SETTLE"
     EXIT_REASON_CHOICES = [
         (EXIT_TP, "Take Profit"),
         (EXIT_SL, "Stop Loss"),
         (EXIT_CURVE, "Curve Completion"),
         (EXIT_TIMER, "Max Hold Timer"),
+        (EXIT_SETTLE, "Cohort Settlement"),
     ]
 
     cohort_id = models.CharField(max_length=255, db_index=True)
