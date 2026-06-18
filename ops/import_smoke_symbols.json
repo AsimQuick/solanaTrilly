@@ -1,0 +1,10 @@
+{
+  "_comment": "Single source of truth for pre-deploy import smoke symbols (AC-71.1). Edit this file to add/remove symbols — no workflow YAML edits needed. Must stay in sync with the AC-68.3 check set in deploy.yml.",
+  "symbols": [
+    {"module": "trading.execution_core",   "attr": "ExecutionCore"},
+    {"module": "trading.tape_settler",     "attr": "simulate_tape_exit"},
+    {"module": "trading.exit_engine",      "attr": "evaluate_exit_rules"},
+    {"module": "trading.position_closer",  "attr": "settle_paper_position"},
+    {"module": "copytrade.position_opener","attr": "open_live_position"}
+  ]
+}
