@@ -9,7 +9,7 @@
 #          per-merge run (the J4 failure mode). Fails loudly; never degrades to a
 #          no-op (H1 pattern). Each invariant has a positive test and a planted-removal
 #          negative test.
-# story: US-71 AC-71.2 US-72 AC-72.3
+# story: US-71 AC-71.2 US-72 AC-72.3 US-73 AC-73.3
 # sprint: sprint-14
 # status: implemented
 # created-by: dev-team
@@ -19,9 +19,9 @@
 """AC-71.2 — Extended deploy regression guard: three new load-bearing invariants.
 
 This module extends the sprint-11 AC-54.2 nine-invariant guard (test_deploy_regression_guard_ac542.py)
-with three new invariants that post-date sprint-11 and must not be silently dropped.
+with four new invariants that post-date sprint-11 and must not be silently dropped.
 
-New invariants pinned (AC-71.2):
+New invariants pinned (AC-71.2 + AC-72.3 + AC-73.3):
 
   INVARIANT-10  Built-image import smoke step in ci.yml (AC-71.1)
                 'Pre-deploy built-image import smoke (AC-71.1)' step must be present
@@ -50,7 +50,13 @@ New invariants pinned (AC-71.2):
                 /api/trading/analytics/calibration-pnl/ for HTTP 200. Removing it allows
                 a broken US-72 analytics API to reach the VPS undetected (J4 failure mode).
 
-Guard check helpers (_check_inv10/11/12) accept text arguments so that negative tests
+  INVARIANT-14  AC-73.3 Replay viewer overlay API smoke-test step in deploy.yml
+                'Smoke-test US-73 Replay viewer overlay API (AC-73.3)' must be
+                present in the deploy.yml deploy job, checking
+                /api/trading/replay/overlay/ for HTTP 200. Removing it allows
+                a broken US-73 replay overlay API to reach the VPS undetected (J4 failure mode).
+
+Guard check helpers (_check_inv10/11/12/13/14) accept text arguments so that negative tests
 can pass modified content — decoupling the check logic from filesystem reads and making
 the planted-removal tests self-contained.
 
@@ -60,6 +66,7 @@ Tests:
     test_invariant_11_ac683_step_has_django_setup
     test_invariant_12_ac693_open_closed_smoke_steps_present
     test_invariant_13_ac723_calibration_pnl_smoke_step_present
+    test_invariant_14_ac733_replay_overlay_smoke_step_present
 
   Negative / planted-removal (assert guard fails if invariant removed):
     test_invariant_10_planted_removal
@@ -67,8 +74,9 @@ Tests:
     test_invariant_12_planted_removal_open_step
     test_invariant_12_planted_removal_closed_step
     test_invariant_13_planted_removal
+    test_invariant_14_planted_removal
 
-  Compound (all four new invariants pass simultaneously on real files):
+  Compound (all five new invariants pass simultaneously on real files):
     test_all_new_guard_invariants_pass
 """
 
@@ -88,6 +96,7 @@ DEPLOY_AC683_STEP_MARKER = "AC-68.3"
 DEPLOY_AC693_OPEN_STEP_NAME = "Smoke-test US-69 Live Positions open API (AC-69.3)"
 DEPLOY_AC693_CLOSED_STEP_NAME = "Smoke-test US-69 Live Positions closed API (AC-69.3)"
 DEPLOY_AC723_STEP_NAME = "Smoke-test US-72 Calibration & PnL analytics API (AC-72.3)"
+DEPLOY_AC733_STEP_NAME = "Smoke-test US-73 Replay viewer overlay API (AC-73.3)"
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +228,27 @@ def _check_inv13(deploy_text: str) -> list[str]:
         failures.append(
             "INVARIANT-13 VIOLATED: Calibration & PnL analytics smoke step present "
             "but does not check /api/trading/analytics/calibration-pnl/ endpoint."
+        )
+
+    return failures
+
+
+def _check_inv14(deploy_text: str) -> list[str]:
+    """INVARIANT-14: US-73 Replay viewer overlay API smoke step in deploy.yml."""
+    failures: list[str] = []
+
+    if DEPLOY_AC733_STEP_NAME not in deploy_text:
+        failures.append(
+            f"INVARIANT-14 MISSING: '{DEPLOY_AC733_STEP_NAME}' step absent "
+            "from deploy.yml. The US-73 Replay viewer overlay API smoke "
+            "(GET /api/trading/replay/overlay/) must be present to catch "
+            "US-73 replay overlay route regressions on every deploy — without it a broken "
+            "route can reach the VPS undetected (J4 failure mode)."
+        )
+    elif "/api/trading/replay/overlay/" not in deploy_text:
+        failures.append(
+            "INVARIANT-14 VIOLATED: Replay viewer overlay smoke step present "
+            "but does not check /api/trading/replay/overlay/ endpoint."
         )
 
     return failures
@@ -414,17 +444,59 @@ def test_invariant_13_planted_removal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# COMPOUND: all four new invariants pass simultaneously on real files
+# INVARIANT-14: US-73 Replay viewer overlay API smoke step in deploy.yml (AC-73.3)
+# ---------------------------------------------------------------------------
+
+
+def test_invariant_14_ac733_replay_overlay_smoke_step_present() -> None:
+    """INVARIANT-14 (positive): deploy.yml has the US-73 Replay viewer overlay API smoke step.
+
+    AC-73.3 adds 'Smoke-test US-73 Replay viewer overlay API (AC-73.3)' to deploy.yml,
+    checking GET /api/trading/replay/overlay/?run_id=smoke-test-ac733 for HTTP 200.
+    Without this step a broken US-73 replay overlay route passes all unit tests and only
+    surfaces at VPS time (J4 failure mode).
+
+    Regression: removing this step means a broken /api/trading/replay/overlay/
+    silently passes deploy pipeline checks and only surfaces on the VPS.
+    """
+    failures = _check_inv14(DEPLOY_YML.read_text(encoding="utf-8"))
+    assert not failures, (
+        "AC-73.3 INVARIANT-14 FAILED:\n" + "\n".join(f"  • {f}" for f in failures)
+    )
+
+
+def test_invariant_14_planted_removal() -> None:
+    """INVARIANT-14 (negative/planted-removal): guard fails when replay overlay smoke step is removed.
+
+    Plants a removal by replacing the step name with a sentinel, then verifies
+    _check_inv14 returns at least one failure. Proves the guard FAILS LOUDLY on
+    removal and cannot degrade to a no-op (H1 pattern).
+    """
+    deploy_text = DEPLOY_YML.read_text(encoding="utf-8")
+    modified = deploy_text.replace(
+        DEPLOY_AC733_STEP_NAME, "PLANTED_REMOVAL_SENTINEL_AC733"
+    )
+    failures = _check_inv14(modified)
+    assert failures, (
+        "AC-73.3 INVARIANT-14 PLANTED-REMOVAL: _check_inv14 returned NO failures "
+        "after the replay overlay smoke step name was replaced with a sentinel — H1 violated. "
+        f"The guard degraded to a no-op and would NOT catch removal of "
+        f"'{DEPLOY_AC733_STEP_NAME}' from deploy.yml."
+    )
+
+
+# ---------------------------------------------------------------------------
+# COMPOUND: all five new invariants pass simultaneously on real files
 # ---------------------------------------------------------------------------
 
 
 def test_all_new_guard_invariants_pass() -> None:
-    """COMPOUND GUARD (AC-71.2 + AC-72.3): all four new deploy invariants pass simultaneously.
+    """COMPOUND GUARD (AC-71.2 + AC-72.3 + AC-73.3): all five new deploy invariants pass simultaneously.
 
     Mirrors the H1 ImportError-trap pattern from AC-54.2: fails LOUDLY if ANY single
     new invariant is missing or violated, so no invariant can be silently removed
     without breaking the CI suite. Coexistence is load-bearing — a deploy path where
-    three of the four new invariants are present but one is absent is still unsound.
+    four of the five new invariants are present but one is absent is still unsound.
 
     Each failure message names the specific invariant and its concrete regression risk.
     """
@@ -436,13 +508,14 @@ def test_all_new_guard_invariants_pass() -> None:
     all_failures.extend(_check_inv11(deploy_text))
     all_failures.extend(_check_inv12(deploy_text))
     all_failures.extend(_check_inv13(deploy_text))
+    all_failures.extend(_check_inv14(deploy_text))
 
     assert not all_failures, (
         "AC-71.2 EXTENDED REGRESSION GUARD FAILED — the following new deploy "
         "invariants are missing or violated. The deploy path is NOT sound as a "
         "system. Each missing invariant re-exposes a specific failure mode from "
         "sprint-13 (AppRegistryNotReady / US-69 route regression / US-72 analytics "
-        "route regression):\n\n"
+        "route regression / US-73 replay overlay route regression):\n\n"
         + "\n".join(f"  • {f}" for f in all_failures)
         + "\n\nFix: restore each named invariant to ci.yml / deploy.yml before merging."
     )
