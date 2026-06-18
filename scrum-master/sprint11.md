@@ -2,7 +2,7 @@
 
 **Phase:** planning
 **Progress:** 5/6 stories | 17/18 ACs
-**Last Updated:** 2026-06-18T10:00:00+00:00
+**Last Updated:** 2026-06-18T07:19:20+00:00
 
 ## Sprint Goal
 CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dashboard chain LIVE on the VPS, finally meeting the P6 phase DoD ('live on the VPS', PRD §15.2/§16 — 'works locally' is NOT done), and extend the dashboard with the two remaining NON-P8-gated operator views. Sprint-10 OPENED P6 at code level: all 6 stories / 18 ACs landed CI-green — the React+Vite+DRF+Channels foundation + ONE-tape-feed consumer (US-48), the tape→candle token-detail/research view that MEETS the P6 offline gate ('operator sees real candles for a replayed token', US-49), the cohort pattern-mining wall (US-50), and the human-annotation→labeled-export killer feature (US-51) — and US-46/I1 confirmed the US-43 blend scorer LIVE on the VPS (soak prerequisite I2 met). BUT the VPS deploy DoD is UNMET for 5 of 6 stories, blocked by deploy-LAYER defects (no application-code change needed): (J1) a one-line RFC-6455-invalid hardcoded Sec-WebSocket-Key in deploy.yml's WS smoke-test (base64 of 'solanatrilly_ac483_key', 22 bytes) → Daphne HTTP 400 on every handshake → fails AC-48.3 and transitively blocks US-49/US-50/US-51's VPS confirmation; (J2) an INDEPENDENT US-47 per-story deploy failure (run 27683660493) that predates and differs from the WS-key defect and was never root-caused (D5 'go to the box' not completed); (J4) a per-merge deploy regression (run 27681451880) that failed AFTER US-46's deliberate HEAD run (27680808876) was green — three distinct deploy failures co-occurred, only the WS-key one fully diagnosed, so the deploy path needs ONE consolidated holistic pass + a regression guard, not three point-fixes chased independently (the multi-sprint P0 deploy drag lesson). Sprint-11 closes all three at root, lands a GREEN HEAD deploy carrying the full dashboard chain, and the Tester VPS-confirms US-48/49/50/51 (J3) to declare the P6 offline gate VPS-CONFIRMED and the third PRD pillar's phase DoD DONE. THEN, riding the now-sound deploy path, it adds the two dashboard views that are NOT gated on P8 trading data and only lack a UI surface over EXISTING backends: (US-56) the Config & model control operator skin (PRD §13.2#6) — an operator skin over the §5 admin / US-9 PipelineConfig + US-42 ModelRegistry (view/diff/activate with django-simple-history audit, operator-gated actions, NO silent auto-start per US-11); and (US-57) the Feature Builder UI (PRD §13.2#7) — a UI surface over the §6.5 one-click labeled export that ALREADY EXISTS from US-31 (only the UI is missing). FIREHOSE: this sprint is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — the deploy-gap fixes are CI/VPS infra, and both new views are UI surfaces over existing offline backends (config/registry/export); ZERO firehose activation (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched). DEFERRED (forward_plan, NOT committed — to avoid the over-commitment the retrospectives repeatedly warn against on heavy phases): I2 the operator-driven P7-3 SOAK (now UNBLOCKED by US-46) and I3 the ENDGAME (promote trilly_pregrad_v3_2 + start the firehose), both OPERATOR-DRIVEN not sprint stories; and the P8-DEPENDENT dashboard views — Live Positions board (§13.2#1, the operator's #1 ask), Calibration & PnL analytics (§13.2#4), and the Replay viewer's position-open/close overlay (§13.2#5) — which all need P8 position/PnL rows that do not exist until the P8 trading-execution path (PRD §10) lands. Build order: US-52 (J1 WS-key fix) and US-53 (J2 US-47 deploy root-cause) are independent deploy-layer fixes that may run FIRST / in parallel; US-54 (J4 consolidated deploy-path pass + regression guard) depends on both; US-55 (J3 green HEAD re-deploy + Tester VPS-confirm of US-48/49/50/51) depends on US-52/US-53/US-54 and is the dashboard-chain closeout; US-56 and US-57 (the two new operator views) depend on US-48's foundation + their existing backends and may run in parallel once the deploy path is sound.
@@ -436,27 +436,9 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
 
 **Dependencies:** US-48, US-31
 
-**Dev Team Status:** in-progress
+**Dev Team Status:** not-started
 **Dev Team Notes:**
   AC-57.1 done: Pushed to `feature/US-57-AC-57.1`. AC-57.1 is complete.
-
-  AC-57.2 done: Pushed to `feature/US-57-AC-57.2`. AC-57.2 is complete.
-
-  ## Implementation Summary — US-57 AC-57.2 (Feature Builder UI export result)
-
-  **Files changed (5):**
-
-  | File | Type | What it does |
-  |---|---|---|
-  | `core/export_result_api.py` | new | DRF `export_result_view` (`GET /api/export/result/<task_id>/`). Reads `AsyncResult(task_id)` from the Celery result backend; maps PENDING→queued, STARTED/RETRY→running, SUCCESS→complete, FAILURE→failed. On SUCCESS returns the manifest dict and row_count from `result.result["manifest"]` / `result.result["row_count"]` — pure read-through, zero re-implementation of export math. |
-  | `core/urls.py` | modified | Wires `api/export/result/<str:task_id>/` → `export_result_view`; metadata header updated to include AC-57.2. |
-  | `frontend/src/FeatureBuilder.jsx` | modified | Added auto-polling (setInterval every 5s up to 60s) after trigger; displays status indicator (queued/running/complete/failed) and a MANIFEST panel showing content_hash, date_range, feature_set_version, feature_set_hash, mint cohort size, and sources. Trigger button preserved and still works. |
-  | `core/tests/fixtures/export_fixture_ac572/features_1.csv` | new | Banked fixture CSV (2 mints, 3 columns). SHA-256: `94847d62d630b86e3c8f68f0e0c980ff736e00d9bb30451097a4c79b7a94ccb2`. |
-  | `core/tests/fixtures/export_fixture_ac572/features_1.manifest.json` | new | Banked fixture manifest with correct `content_hash` matching the CSV bytes above. |
-  | `core/tests/test_export_result_ac572.py` | new | 9 tests: H1 ImportError trap, 405 rejection, pending/running/failed state mocks, KEY fixture test (run-twice identical, content_hash == SHA-256 of CSV), manifest keys present, URL registration, AST no-reimplementation check. All OFFLINE. |
-
-  **Test results:** 9/9 passed; full suite 1809/1809 passed (no regressions). Ruff clean.
-  - blocker-type: none
   
   ## Implementation Summary — US-57 AC-57.1 (Feature Builder UI export trigger)
   
@@ -469,6 +451,25 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
   | `core/export_api.py` | new | DRF `feature_export_trigger_view` (`POST /api/export/trigger/`, `@api_view(["POST"])`). Reads `feature_set_id` from the active `PipelineConfig` and `label_def` from `get_active_config().outcome.label_def` (config-driven, Principle #1), then dispatches the **existing US-31** `core.tasks.build_features` via `.delay()` to the celery-worker — never inline on web/gunicorn (#289). Returns `{task_id, feature_set_id, dataset_id, status:"queued"}`; HTTP 400 when no `feature_set_id` is configured. No export math in the view. |
   | `core/urls.py` | modified | Wires `api/export/trigger/` → `feature_export_trigger_view`; metadata header updated (and wrapped to satisfy E501). |
   | `frontend/src/FeatureBuilder.jsx` | new | React v …
+  AC-57.2 done: Implementation is complete and pushed. Here's the summary for the orchestrator:
+  
+  ---
+  
+  ## AC-57.2 Implementation Summary
+  
+  **Branch:** `feature/US-57-AC-57.2`  
+  **Commit:** `4509273` — "[US-57] AC-57.2: The UI surfaces the export RESULT — MANIFEST + content hash from banked fixture, deterministic, offline"  
+  **Full suite:** 1809 passed, 0 failures  
+  **Ruff:** clean on all new files
+  
+  ### Files changed (5):
+  
+  | File | Type | What it does |
+  |---|---|---|
+  | `core/export_result_api.py` | **new** | `GET /api/export/result/<task_id>/` — pure read-through of `AsyncResult.result["manifest"]`; maps Celery states to queued/running/complete/failed; returns `{task_id, status, manifest, row_count, error}` |
+  | `core/urls.py` | **modified** | Added `export_result_view` import + `api/export/result/<str:task_id>/` route; metadata header updated to include `AC-57.2` |
+  | `frontend/src/FeatureBuilder.jsx` | **modified** | Added auto-poll (5s interval, 60s max) on `task_id` after trigger; MANIFEST panel on complete showing content_hash, date_range, feature_set_version, feature_set_hash, mint cohort size, sources; run/status indicator |
+  | `core/tests/fixtures/export_fixture_ac572/features_1.csv` | **new** | …
 
 **Tester Status:** approved
 **Tester Notes:**
