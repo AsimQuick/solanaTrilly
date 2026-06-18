@@ -1,8 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 0/6 stories | 2/18 ACs
-**Last Updated:** 2026-06-18T13:55:22+00:00
+**Progress:** 1/6 stories | 3/18 ACs
+**Last Updated:** 2026-06-18T14:04:11+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -40,14 +40,15 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 ## User Stories
 
 ### US-64: P8 FOUNDATION: the shared execution-apparatus skeleton + the unified Position model + the trading.* config namespace + the vendored PumpSwap IDL
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-64.1:** A shared execution app/namespace (name committed at development kickoff; 'trading/' used as the reference name throughout this sprint) BOTH pipelines call — a thin clock-injected core behind the DataSource seam (Principle #7); a trading.* config (Pydantic, consistent with §5) holding the §10/§17 trade knobs (slippage tiers TIGHT/NORMAL/LOSS/PANIC, TP/SL, exit-rule params, sizing, trading_enabled DEFAULT False). Save-time invariant rejection (US-10 write-path pattern). A no-auto-start AST guard (US-11 pattern) confirms nothing flips trading_enabled True on any boot/resolver/upload/ON path. Verified by config persist/reject tests + the AST guard.
   - Dev: done
 - [x] **AC-64.2:** A unified Position Django model (the SHARED row both pipelines write): mint, source in {model, copytrade}, mode in {observe, live}, status in {PAPER, OPEN, CLOSED}, entry_ts/entry_price, size_sol, exit_ts/exit_price, exit_trigger, realized_pnl_sol, realized_pnl_pct, peak_price, closed_at — with the H3 json_safe encoder on any JSONField; migrations land. Verified by model/migration tests; a copytrade observe position is expressible as a Position row with source='copytrade' (parity foundation).
   - Dev: done
-- [ ] **AC-64.3:** The pinned PumpSwap IDL (pump_amm.json, from pump-fun/pump-public-docs) is vendored into the repo with a content-hash/pin manifest (IDL > scripts per CLAUDE.md). A pytest asserts the vendored IDL's buy/sell account counts (23 buy / 21 sell) + discriminators (buy 66063d1201daebea, sell 33e685a4017f83ad) match the §10.1 pinned ground truth. New files carry metadata front matter. Zero firehose.
+- [x] **AC-64.3:** The pinned PumpSwap IDL (pump_amm.json, from pump-fun/pump-public-docs) is vendored into the repo with a content-hash/pin manifest (IDL > scripts per CLAUDE.md). A pytest asserts the vendored IDL's buy/sell account counts (23 buy / 21 sell) + discriminators (buy 66063d1201daebea, sell 33e685a4017f83ad) match the §10.1 pinned ground truth. New files carry metadata front matter. Zero firehose.
+  - Dev: done
 
 **Dependencies:** US-9, US-10, US-58
 
@@ -96,6 +97,21 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
   **Test results:** 15/15 new tests pass; 2176/2176 total tests pass (no regressions).
   
   **Coverage:** Full 80%+ threshold met (no new uncovered code paths — model and migration are 100% exercised by the DB tests).
+  AC-64.3 done: Pushed successfully. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **AC-64.3 Implementation Summary**
+  
+  **Files added (3):**
+  
+  | File | Role |
+  |------|------|
+  | `vendor/idl/pump_amm.json` | Vendored PumpSwap IDL fetched from `pump-fun/pump-public-docs` at commit `1b822158` — authoritative account-order ground truth per CLAUDE.md (IDL > chainstacklabs scripts) |
+  | `vendor/idl/pin_manifest.json` | Content-hash/pin manifest recording: source repo, commit SHA, git blob SHA, sha256 of the file, and the §10.1 pinned ground-truth values (buy: 23 accounts / `66063d1201daebea`, sell: 21 accounts / `33e685a4017f83ad`) |
+  | `trading/tests/test_pumpswap_idl_ac643.py` | 8 pytest tests (no DB, no network): artefact presence, sha256 integrity against manifest, buy account count, sell account count, buy discriminator hex, sell discriminator hex, and manifest ground-truth fields cross-check |
+  
+  **Test results:** 8/8 new tests pass; 2184/2184 total tests pass (no regressions). Zero firehose — all assertions are offline file reads. All new files carry metadata front matter.
 
 **Tester Status:** approved
 **Tester Notes:**
