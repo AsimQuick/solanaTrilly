@@ -105,6 +105,27 @@ then build against it forever.
 - **Tooling:** `tools/helius_g2b_activate.py` (deliberate, time-boxed, ledgered).
 - **Budget after this row:** **8 Birdeye / 9 Helius**.
 
+---
+
+## PLANNED: Helius wallet-subscription — Copy-trade LIVE capital activation (AC-68.2)
+
+**Status:** NOT YET ACTIVATED — planned for operator-driven Cutover (PRD §16).
+This entry is logged here per AC-68.2 BEFORE any spend so the activation protocol
+is defined and the remaining budget count is visible in git history.
+
+**What WS:** Helius `accountSubscribe` on the copy-trade trading-wallet address.
+**Purpose:** Real-time confirmation of the copy-trade engine's trading-wallet balance
+as the LIVE Helius wallet-subscription for capital gating (copy-trade LIVE toggle, SPEC §10).
+**When activated:** At Cutover (PRD §16) — when the operator provisions the
+trading-wallet secret and explicitly flips `trading_enabled=True` via the capital
+activation protocol. NOT this sprint (sprint-13 is OFFLINE/PAPER by construction).
+**Time-box:** 20-minute subscription window (default budget rule; PO may extend).
+**Budget decrement:** Helius 9→8 (1 activation). Occurs when the wallet-subscription
+is first opened. Budget is NOT consumed until that moment.
+**Current budget:** 8 Birdeye / 9 Helius (unchanged — not yet activated).
+**Fixtures to bank:** Trading-wallet balance snapshot at the moment of activation
+(durable fixture per the HARD RULE — every activation banks a durable fixture).
+
 ### Activation detail — 2026-06-15 Birdeye SUBSCRIBE_TXS
 
 - **What WS:** Birdeye `SUBSCRIBE_TXS` (`queryType: simple`) on `wss://public-api.birdeye.so/socket/solana`.
