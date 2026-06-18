@@ -1,7 +1,7 @@
 # ---
 # module: trading.models
 # sprint: sprint-13
-# story: US-64 AC-64.1
+# story: US-64 AC-64.1, US-64 AC-64.2
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-18
@@ -161,3 +161,71 @@ class TradingSettings(models.Model):
             volume_collapse_threshold_pct=self.volume_collapse_threshold_pct,
             concentration_threshold_pct=self.concentration_threshold_pct,
         )
+
+
+class Position(models.Model):
+    """Unified position row — the SHARED record both pipelines write (AC-64.2).
+
+    Both the model-prediction pipeline (source='model') and the copy-trade
+    engine (source='copytrade') write rows here.  The exit/settlement fields
+    are populated by the tape settler (US-66) when the position closes.
+
+    sentinel: closed_at IS NOT NULL  ↔  position settled/closed (AC-66.3).
+    """
+
+    SOURCE_MODEL = "model"
+    SOURCE_COPYTRADE = "copytrade"
+    SOURCE_CHOICES = [
+        (SOURCE_MODEL, "Model prediction pipeline"),
+        (SOURCE_COPYTRADE, "Copy-trade engine"),
+    ]
+
+    MODE_OBSERVE = "observe"
+    MODE_LIVE = "live"
+    MODE_CHOICES = [
+        (MODE_OBSERVE, "Observe (paper, no capital)"),
+        (MODE_LIVE, "Live (capital at risk)"),
+    ]
+
+    STATUS_PAPER = "PAPER"
+    STATUS_OPEN = "OPEN"
+    STATUS_CLOSED = "CLOSED"
+    STATUS_CHOICES = [
+        (STATUS_PAPER, "Paper / sandbox position"),
+        (STATUS_OPEN, "Open live position"),
+        (STATUS_CLOSED, "Closed position"),
+    ]
+
+    mint = models.CharField(max_length=64, db_index=True)
+    source = models.CharField(max_length=16, choices=SOURCE_CHOICES)
+    mode = models.CharField(max_length=10, choices=MODE_CHOICES)
+    status = models.CharField(max_length=8, choices=STATUS_CHOICES)
+
+    # --- Entry fields (always populated at open time) ---
+    entry_ts = models.DateTimeField()
+    entry_price = models.FloatField()
+    size_sol = models.FloatField()
+
+    # --- Exit / settlement fields (null until position closes) ---
+    exit_ts = models.DateTimeField(null=True, blank=True)
+    exit_price = models.FloatField(null=True, blank=True)
+    exit_trigger = models.CharField(max_length=32, null=True, blank=True)
+    realized_pnl_sol = models.FloatField(null=True, blank=True)
+    realized_pnl_pct = models.FloatField(null=True, blank=True)
+    peak_price = models.FloatField(null=True, blank=True)
+
+    # closed_at IS NOT NULL ↔ settled/closed (AC-66.3 sentinel)
+    closed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "trading"
+        db_table = "trading_positions"
+        indexes = [
+            models.Index(fields=["source", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Position({self.mint[:8]}… src={self.source} status={self.status})"
