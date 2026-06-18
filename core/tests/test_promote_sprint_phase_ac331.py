@@ -46,15 +46,15 @@ def _write_sprint(path: Path, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_planning_phase_all_stories_done_returns_complete():
+def test_planning_phase_all_stories_done_returns_done():
     """Core AC-33.1 case: the D2→E1→F2 failure mode."""
     data = _sprint("planning", ["done", "done", "done"])
-    assert compute_promoted_phase(data) == "complete"
+    assert compute_promoted_phase(data) == "done"
 
 
-def test_in_progress_phase_all_stories_done_returns_complete():
+def test_in_progress_phase_all_stories_done_returns_done():
     data = _sprint("in-progress", ["done", "done"])
-    assert compute_promoted_phase(data) == "complete"
+    assert compute_promoted_phase(data) == "done"
 
 
 def test_complete_phase_returns_none():
@@ -73,7 +73,7 @@ def test_planning_phase_empty_stories_returns_none():
 
 
 def test_unknown_phase_returns_none():
-    data = _sprint("review", ["done"])
+    data = _sprint("archived", ["done"])
     assert compute_promoted_phase(data) is None
 
 
@@ -82,11 +82,11 @@ def test_unknown_phase_returns_none():
 # ---------------------------------------------------------------------------
 
 
-def test_promote_returns_complete_dict_and_promoted_to():
+def test_promote_returns_done_dict_and_promoted_to():
     data = _sprint("planning", ["done", "done"])
     updated, promoted_to = promote_sprint_phase(data)
-    assert promoted_to == "complete"
-    assert updated["phase"] == "complete"
+    assert promoted_to == "done"
+    assert updated["phase"] == "done"
 
 
 def test_promote_does_not_mutate_input():
@@ -127,8 +127,8 @@ def test_remedy_message_contains_stale_phase():
 
 
 def test_remedy_message_contains_promoted_to():
-    msg = remedy_message(Path("scrum-master/sprint7.json"), "planning", "complete")
-    assert "complete" in msg
+    msg = remedy_message(Path("scrum-master/sprint7.json"), "planning", "done")
+    assert "done" in msg
 
 
 def test_remedy_message_contains_filename():
@@ -158,7 +158,7 @@ def test_cli_auto_promotes_stale_phase_file(tmp_path):
     )
     assert result.returncode == 0
     updated = json.loads(f.read_text())
-    assert updated["phase"] == "complete"
+    assert updated["phase"] == "done"
     assert "AUTO-PROMOTED" in result.stdout
 
 
@@ -202,7 +202,7 @@ def test_cli_check_only_prints_remedy_to_stderr(tmp_path):
         text=True,
     )
     assert "REMEDY" in result.stderr
-    assert "complete" in result.stderr
+    assert "done" in result.stderr
 
 
 def test_cli_check_only_does_not_write_file(tmp_path):
@@ -274,7 +274,7 @@ def test_d2_e1_f2_failure_mode_is_closed(tmp_path):
 
     # After promotion: integrity check sees no phase violation
     promoted_sprint, promoted_to = promote_sprint_phase(stale_sprint)
-    assert promoted_to == "complete"
+    assert promoted_to == "done"
     violations_after = check_sprint(promoted_sprint)
     phase_violations = [v for v in violations_after if "phase" in v.lower()]
     assert phase_violations == [], (
