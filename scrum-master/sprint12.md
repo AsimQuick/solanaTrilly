@@ -1,8 +1,8 @@
 # Sprint 12
 
 **Phase:** planning
-**Progress:** 4/6 stories | 14/18 ACs
-**Last Updated:** 2026-06-18T11:40:57+00:00
+**Progress:** 5/6 stories | 15/18 ACs
+**Last Updated:** 2026-06-18T11:51:37+00:00
 
 ## Sprint Goal
 OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatrilly_copytrade_SPEC.md, provided 2026-06-17) — stand up the Copy-Trade pipeline as a FIRST-CLASS TRADING SIBLING to the prediction/model pipeline, driven by a JSON list of ~10 wallets instead of a model, delivered END-TO-END THROUGH OBSERVE (PAPER) MODE this sprint. Sprint-11 closed the P6 dashboard VPS deploy gap and delivered all THREE PRD pillars DoD-done at the dashboard layer; the project is NOT complete because the Copy-Trade Dashboard v1 SPEC is committed scope and is NOT YET BUILT (zero copytrade code in the repo). This sprint builds the SPEC's non-negotiables: a §5-ISOLATED copytrade_engine — its OWN copytrade.* config namespace, its OWN copytrade_-prefixed DB tables, and its OWN Helius subscription to WALLET addresses (NOT the token firehose) — that must NOT clash with or share mutable state with the existing firehose/model pipeline (both pipelines run concurrently, each with its own ON/OFF, positions, PnL, limits); the correctness-critical copy-BUY trigger (copy a watched wallet ONLY when it BUYS a pump.fun token STILL ON THE BONDING CURVE / PRE-graduation — first-buy-only, dedupe-token-across-wallets, NEVER mirror their sells); the position lifecycle with OUR configurable exits (TP / SL / near-curve-completion / max-hold; tight SL deliberate); the cohort FRESH-START lifecycle (a new cohort JSON wipes the old cohort ENTIRELY — settle open positions, purge old copytrade_* records; exactly one active cohort, no cross-cohort history in v1); and the new 'Copy Trade' dashboard tab (JSON upload, ON/OFF, Observe/Live mode, SOL size + TP%/SL% overrides, and the KEY per-wallet PnL table) plus its click-to-download export (include copytrade_positions). OBSERVE (paper) IS THE DEFAULT AND THE SAFETY GATE: in observe mode the engine runs the FULL logic (detect → 'buy' → manage → 'sell' → record PnL) placing NO real orders (books fills at the live price). CRITICAL SCOPING DECISION (verified against the codebase, NOT in the SPEC): the SPEC §0 assumes 'you already have working buy/sell execution' — you DO NOT. No PumpSwap order-execution path exists (TradingConfig has flags only; the only buy/sell code is tape RECORDING, not order placement); the P8 trading-execution path (PRD §10) is still DEFERRED. Therefore LIVE (real-order) copy-trade execution is OUT OF SCOPE this sprint — it depends on the P8 execution path and the operator's deliberate post-soak Live flip; the Live toggle is surfaced but INERT/GUARDED until P8 lands. Observe-complete is exactly the SPEC's default and its validation arbiter ('offline edges have repeatedly failed live in this project; the observe soak is the arbiter'), so an observe-complete v1 is the correct, non-over-committed first sprint of the epic. FIREHOSE: this sprint is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — observe mode books paper fills against existing price/tape data and the wallet-subscription is exercised by a schema-faithful synthetic replay stream behind the DataSource seam; ZERO firehose activation (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched — the LIVE Helius wallet-subscription will spend budget when LIVE is built later, so its activation ledger is planned BEFORE that, not now). Honor the §1 NON-goals explicitly: NO per-wallet manual controls, NO cross-cohort history, NO candle charts / TA in the copy-trade tab, NO funder logic / auto-retuning / per-position manual exits — do NOT add scope. Build order: US-58 (config namespace + tables, the §5-isolated foundation) FIRST; then US-59 (the isolated engine worker + Helius wallet-subscription seam) and US-60 (the copy-BUY trigger logic) may run in PARALLEL after US-58; US-61 (observe-mode position lifecycle + OUR exits) depends on US-60; US-62 (cohort fresh-start lifecycle + ON/OFF) depends on US-58/US-61; US-63 (the 'Copy Trade' tab + export) depends on US-58/US-61/US-62 and the US-48 React frontend.
@@ -314,14 +314,15 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
 ---
 
 ### US-62: Cohort FRESH-START lifecycle (SPEC §6) + the engine ON/OFF runtime toggle: uploading a new cohort JSON WIPES the old cohort entirely (settle open positions, purge old copytrade_* records) — exactly one active cohort, zero cross-cohort history (v1); ON/OFF gates ONLY this engine
-**Status:** in-progress | **Priority:** medium
+**Status:** done | **Priority:** medium
 
 #### Acceptance Criteria
 - [x] **AC-62.1:** Uploading a new cohort JSON performs the SPEC §6 full REPLACEMENT, in order: (1) require the engine OFF (or auto-stop it on upload); (2) CLOSE/SETTLE any open copy positions (observe: mark closed at the current price, recording realized PnL); (3) PURGE all copytrade_* records for the OLD cohort (wallets, positions, pnl); (4) validate+load the new JSON (US-58 validator) and persist the new cohort as active; (5) subscribe the new wallets. EXACTLY ONE active cohort at a time; ZERO cross-cohort history retained (v1). Verified by a pytest test: after uploading cohort B over an active cohort A with open positions, A's positions are settled-and-closed, all of A's copytrade_ records are purged, exactly one active cohort (B) remains, and no A history survives.
   - Dev: done
 - [x] **AC-62.2:** The engine ON/OFF is RUNTIME state (not in the JSON, SPEC §2) and gates ONLY this engine (§5): turning copy-trade OFF/ON does NOT start/stop or otherwise affect the firehose, graduation feed, or model pipeline (they keep running regardless), and turning those on/off does not affect copy-trade. Verified by an isolation pytest test that toggling copytrade engine_on leaves PipelineState/firehose_active/scoring_enabled unchanged, and that the copytrade ON/OFF and the model-pipeline ON/OFF are independent.
   - Dev: done
-- [ ] **AC-62.3:** The fresh-start wipe is DETERMINISTIC and idempotent (running the upload/wipe twice yields the same end state) and OFFLINE (zero firehose). The wipe NEVER touches the raw lake or any non-copytrade_ table (§6.4.1 / §5 isolation) — verified by a pytest/AST guard that the purge operates only on copytrade_ tables. New files carry metadata front matter.
+- [x] **AC-62.3:** The fresh-start wipe is DETERMINISTIC and idempotent (running the upload/wipe twice yields the same end state) and OFFLINE (zero firehose). The wipe NEVER touches the raw lake or any non-copytrade_ table (§6.4.1 / §5 isolation) — verified by a pytest/AST guard that the purge operates only on copytrade_ tables. New files carry metadata front matter.
+  - Dev: done
 
 **Dependencies:** US-58, US-61
 
@@ -359,6 +360,31 @@ OPEN THE COPY-TRADE EPIC (the MANDATORY operator-committed next epic, solanatril
   |---|---|
   | `copytrade/engine_control.py` | **New** — `set_engine_on(value: bool) -> CopyTradeSettings`. Single public entry point for toggling `CopyTradeSettings.engine_on`. Imports ONLY from `copytrade.*` — zero `core.*` imports enforce the §5 isolation boundary at the module level. Updates `engine_on` only; never touches `PipelineState`, `PipelineConfig`, or any model-pipeline flag. |
   | `copytrade/tests/test_engine_on_isolation_ac622.py` | **New** — 9 isolation tests. Includes: AST guard (engine_control.py has no core.* imports); 4 directional tests (set_engine_on(True/False) leaves firehose_active/scoring_enabled unchanged); 2 reverse tests (PipelineState.firehose_active/scoring_enabled toggle leaves CopyTradeSettings.engine_on unchanged); 1 full bidirectional independence sequence (5-step both-OFF → copytrade-ON → pipeline-ON → copytrade-OFF → pipe …
+  AC-62.3 done: ---
+  
+  ## Implementation Summary — US-62 AC-62.3
+  
+  **Commit:** `3ba86ad [US-62] AC-62.3: fresh-start wipe idempotency, isolation, and determinism guard`  
+  **Branch:** `feature/US-62-AC-62.3` (pushed to origin)
+  
+  ### Files added
+  
+  | File | Role |
+  |---|---|
+  | `copytrade/tests/test_fresh_start_idempotency_ac623.py` | **New** — 13 AC-62.3 tests. Carries structured metadata front matter. |
+  
+  ### Tests (13 total, all pass; full suite: 2066 passed)
+  
+  **IDEMPOTENCY (6 tests):**
+  - `test_idempotency_upload_twice_same_active_cohort_id` — active_cohort_id matches JSON on both runs
+  - `test_idempotency_upload_twice_exactly_one_active_cohort` — exactly 1 active cohort after each call
+  - `test_idempotency_upload_twice_same_wallet_count` — wallet count matches JSON on both runs
+  - `test_idempotency_upload_twice_no_positions_linger` — no open positions survive either run
+  - `test_idempotency_full_end_state_snapshot_matches` — full state snapshot (cohort count, wallet addresses, position count, pnl count, engine_on, active_count) is identical after first and second upload
+  - `test_idempotency_engine_off_after_both_uploads` — engine_on=False after both runs
+  
+  **§6.4.1 / §5 ISOLATION — functional (2 tests):**
+  - `t …
 
 **Tester Status:** approved
 **Tester Notes:**
