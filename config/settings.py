@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "simple_history",
     "core",
     "copytrade",
+    "trading",
 ]
 
 # The MIDDLEWARE stack runs on EVERY request (top-down) and response (bottom-up).
