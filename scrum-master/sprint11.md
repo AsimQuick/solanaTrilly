@@ -1,8 +1,8 @@
 # Sprint 11
 
 **Phase:** planning
-**Progress:** 4/6 stories | 13/18 ACs
-**Last Updated:** 2026-06-18T06:21:39+00:00
+**Progress:** 4/6 stories | 14/18 ACs
+**Last Updated:** 2026-06-18T06:32:29+00:00
 
 ## Sprint Goal
 CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dashboard chain LIVE on the VPS, finally meeting the P6 phase DoD ('live on the VPS', PRD §15.2/§16 — 'works locally' is NOT done), and extend the dashboard with the two remaining NON-P8-gated operator views. Sprint-10 OPENED P6 at code level: all 6 stories / 18 ACs landed CI-green — the React+Vite+DRF+Channels foundation + ONE-tape-feed consumer (US-48), the tape→candle token-detail/research view that MEETS the P6 offline gate ('operator sees real candles for a replayed token', US-49), the cohort pattern-mining wall (US-50), and the human-annotation→labeled-export killer feature (US-51) — and US-46/I1 confirmed the US-43 blend scorer LIVE on the VPS (soak prerequisite I2 met). BUT the VPS deploy DoD is UNMET for 5 of 6 stories, blocked by deploy-LAYER defects (no application-code change needed): (J1) a one-line RFC-6455-invalid hardcoded Sec-WebSocket-Key in deploy.yml's WS smoke-test (base64 of 'solanatrilly_ac483_key', 22 bytes) → Daphne HTTP 400 on every handshake → fails AC-48.3 and transitively blocks US-49/US-50/US-51's VPS confirmation; (J2) an INDEPENDENT US-47 per-story deploy failure (run 27683660493) that predates and differs from the WS-key defect and was never root-caused (D5 'go to the box' not completed); (J4) a per-merge deploy regression (run 27681451880) that failed AFTER US-46's deliberate HEAD run (27680808876) was green — three distinct deploy failures co-occurred, only the WS-key one fully diagnosed, so the deploy path needs ONE consolidated holistic pass + a regression guard, not three point-fixes chased independently (the multi-sprint P0 deploy drag lesson). Sprint-11 closes all three at root, lands a GREEN HEAD deploy carrying the full dashboard chain, and the Tester VPS-confirms US-48/49/50/51 (J3) to declare the P6 offline gate VPS-CONFIRMED and the third PRD pillar's phase DoD DONE. THEN, riding the now-sound deploy path, it adds the two dashboard views that are NOT gated on P8 trading data and only lack a UI surface over EXISTING backends: (US-56) the Config & model control operator skin (PRD §13.2#6) — an operator skin over the §5 admin / US-9 PipelineConfig + US-42 ModelRegistry (view/diff/activate with django-simple-history audit, operator-gated actions, NO silent auto-start per US-11); and (US-57) the Feature Builder UI (PRD §13.2#7) — a UI surface over the §6.5 one-click labeled export that ALREADY EXISTS from US-31 (only the UI is missing). FIREHOSE: this sprint is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — the deploy-gap fixes are CI/VPS infra, and both new views are UI surfaces over existing offline backends (config/registry/export); ZERO firehose activation (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched). DEFERRED (forward_plan, NOT committed — to avoid the over-commitment the retrospectives repeatedly warn against on heavy phases): I2 the operator-driven P7-3 SOAK (now UNBLOCKED by US-46) and I3 the ENDGAME (promote trilly_pregrad_v3_2 + start the firehose), both OPERATOR-DRIVEN not sprint stories; and the P8-DEPENDENT dashboard views — Live Positions board (§13.2#1, the operator's #1 ask), Calibration & PnL analytics (§13.2#4), and the Replay viewer's position-open/close overlay (§13.2#5) — which all need P8 position/PnL rows that do not exist until the P8 trading-execution path (PRD §10) lands. Build order: US-52 (J1 WS-key fix) and US-53 (J2 US-47 deploy root-cause) are independent deploy-layer fixes that may run FIRST / in parallel; US-54 (J4 consolidated deploy-path pass + regression guard) depends on both; US-55 (J3 green HEAD re-deploy + Tester VPS-confirm of US-48/49/50/51) depends on US-52/US-53/US-54 and is the dashboard-chain closeout; US-56 and US-57 (the two new operator views) depend on US-48's foundation + their existing backends and may run in parallel once the deploy path is sound.
@@ -355,7 +355,8 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
 #### Acceptance Criteria
 - [x] **AC-56.1:** A read-only DRF API + React view surfaces the active PipelineConfig (US-9) and the ModelRegistry (US-42): the currently-active config and active model, their version/audit history (django-simple-history), and a DIFF between any two config versions (and between the active and a candidate model). No new config/registry math — the view reads the EXISTING US-9 / US-42 backends (Principle #1/#2; no dashboard-local source). Verified by a pytest/API test that the endpoint returns the active config + registry rows + a correct version diff over a banked fixture, deterministically.
   - Dev: done
-- [ ] **AC-56.2:** An operator-GATED activate action flips the active config / active model ONLY through the EXISTING audited US-9 activate_config() / US-42 activate_model() path (at-most-one-active discipline preserved, full audit row written) — it NEVER writes config/registry rows directly and NEVER flips firehose_active/scoring_enabled/trading_enabled (the US-11 AST no-auto-start guard stays green and covers this view path). Verified by a pytest test that an activate via the skin produces exactly one audited activation with the auto-start flags unchanged (defaulted False), plus an AST guard that the view path does not set those flags.
+- [x] **AC-56.2:** An operator-GATED activate action flips the active config / active model ONLY through the EXISTING audited US-9 activate_config() / US-42 activate_model() path (at-most-one-active discipline preserved, full audit row written) — it NEVER writes config/registry rows directly and NEVER flips firehose_active/scoring_enabled/trading_enabled (the US-11 AST no-auto-start guard stays green and covers this view path). Verified by a pytest test that an activate via the skin produces exactly one audited activation with the auto-start flags unchanged (defaulted False), plus an AST guard that the view path does not set those flags.
+  - Dev: done
 - [ ] **AC-56.3:** The operator-skin view renders the config/registry view + diff + the gated activate control in the US-48 React frontend (built fresh per §14, NOT server-rendered tables). The config/model-control tests are wired into the canonical ci.yml 'test' job via an ImportError trap on the named API/serializer function (H1) so a deleted/renamed endpoint fails pytest collection. New backend AND frontend files carry metadata front matter. Deployed + smoke-tested on the VPS (P6 DoD = live on the VPS).
 
 **Dependencies:** US-48, US-9, US-42
@@ -382,6 +383,23 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
        - `config_detail_view` — `GET /api/control/config/<pk>/`
        - `config_history_view` — `GET /api/control/config/<pk>/history/`
        - `config_diff_view` — `GET /api/contr …
+  AC-56.2 done: ---
+  
+  ## Implementation Summary — AC-56.2
+  
+  **Files changed (3):**
+  
+  1. **`core/control_api.py`** — Added `IsAdminUser` to imports (alongside existing `AllowAny`), added `activate_config` and `activate_model` to the resolver import, and added two new operator-gated views at the bottom:
+     - `config_activate_view(request, pk)` — `POST /api/control/config/<pk>/activate/`, `IsAdminUser`-gated, delegates to `activate_config(pk)` (US-9 audited path), returns serialized config
+     - `registry_activate_view(request, pk)` — `POST /api/control/registry/<pk>/activate/`, `IsAdminUser`-gated, delegates to `activate_model(pk)` (US-42 audited path), returns serialized model
+  
+  2. **`core/urls.py`** — Added imports for the two new views and wired two URL routes (`api/control/config/<pk>/activate/` and `api/control/registry/<pk>/activate/`)
+  
+  3. **`core/tests/test_control_api_activate_ac562.py`** (new, 235 lines) — **15 tests:**
+     - 2 H1 ImportError traps for the new view functions
+     - 2 operator-gate tests (unauthenticated → 401/403)
+     - 4 config activation tests: activates target, exactly-one-active discipline, auto-start flags unchanged, not-found 404
+     - 4 model activation tests: same coverage …
 
 **Tester Status:** approved
 **Tester Notes:**
