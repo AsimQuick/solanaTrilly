@@ -245,6 +245,65 @@ def test_consumer_reads_config_not_literals():
     )
 
 
+def test_connect_resolves_config_via_sync_to_async():
+    """REGRESSION (deploy AC-48.3): TapeFeedConsumer.connect() must resolve the
+    active config through ``sync_to_async``.
+
+    get_active_config() hits the Django ORM on a cache miss. Calling it directly
+    inside the async connect() raises SynchronousOnlyOperation, which surfaces as
+    an HTTP 500 on the WS upgrade (the failure the AC-48.3 deploy smoke-test caught
+    on the sprint-11 boundary). This test asserts the config resolution inside
+    connect() is wrapped in an awaited sync_to_async(...) call so the regression
+    cannot reappear.
+    """
+    src = CONSUMER_PY.read_text()
+    tree = ast.parse(src)
+
+    assert "from asgiref.sync import sync_to_async" in src, (
+        "consumer.py must import sync_to_async to safely run ORM-backed config "
+        "resolution from the async connect()"
+    )
+
+    # Locate the async connect() method.
+    connect_fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "connect":
+            connect_fn = node
+            break
+    assert connect_fn is not None, "consumer.py must define an async connect() method"
+
+    def _call_name(call: ast.Call) -> str:
+        f = call.func
+        if isinstance(f, ast.Name):
+            return f.id
+        if isinstance(f, ast.Attribute):
+            return f.attr
+        return ""
+
+    # The config resolution must be wrapped in sync_to_async(...).
+    sync_wrapped_calls = [
+        n for n in ast.walk(connect_fn)
+        if isinstance(n, ast.Call) and _call_name(n) == "sync_to_async"
+    ]
+    assert sync_wrapped_calls, (
+        "connect() must wrap the config resolution in sync_to_async(...) — "
+        "found no sync_to_async call in the method body"
+    )
+
+    # The sync_to_async(...) wrapper must itself be awaited:
+    #   await sync_to_async(fn)()
+    awaited_sync_to_async = any(
+        isinstance(n, ast.Await)
+        and isinstance(n.value, ast.Call)
+        and isinstance(n.value.func, ast.Call)
+        and _call_name(n.value.func) == "sync_to_async"
+        for n in ast.walk(connect_fn)
+    )
+    assert awaited_sync_to_async, (
+        "the sync_to_async-wrapped config resolution in connect() must be awaited"
+    )
+
+
 # ===========================================================================
 # (b) Deterministic replay tests — OFFLINE, zero firehose
 # ===========================================================================
