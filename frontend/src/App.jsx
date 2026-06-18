@@ -8,9 +8,10 @@
 //   The config/model control operator skin loads when view=control (US-56 AC-56.3).
 //   The Feature Builder UI loads when view=features (US-57 AC-57.1).
 //   The Copy Trade tab loads when view=copytrade (US-63 AC-63.2).
+//   The Live Positions board loads when view=positions (US-69 AC-69.2).
 // created-by: dev-team
 // sprint: sprint-11
-// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1, US-63 AC-63.2
+// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1, US-63 AC-63.2, US-69 AC-69.2
 // last-updated: 2026-06-18
 // ---
 
@@ -18,6 +19,7 @@ import CohortWall from './CohortWall.jsx'
 import ConfigControl from './ConfigControl.jsx'
 import CopyTradeTab from './CopyTradeTab.jsx'
 import FeatureBuilder from './FeatureBuilder.jsx'
+import LivePositions from './LivePositions.jsx'
 import TokenDetail from './TokenDetail.jsx'
 
 // Read a named query param from the current URL.
@@ -45,6 +47,8 @@ function App() {
         <FeatureBuilder />
       ) : view === 'copytrade' ? (
         <CopyTradeTab />
+      ) : view === 'positions' ? (
+        <LivePositions />
       ) : mint ? (
         <TokenDetail mint={mint} intervalS={intervalS} />
       ) : (
@@ -53,7 +57,8 @@ function App() {
           <code>?view=cohort</code> to open the cohort pattern-mining wall, or{' '}
           <code>?view=control</code> to open the config &amp; model control panel, or{' '}
           <code>?view=features</code> to open the Feature Builder (§6.5 export), or{' '}
-          <code>?view=copytrade</code> to open the Copy Trade tab.
+          <code>?view=copytrade</code> to open the Copy Trade tab, or{' '}
+          <code>?view=positions</code> to open the Live Positions board.
         </p>
       )}
     </div>
