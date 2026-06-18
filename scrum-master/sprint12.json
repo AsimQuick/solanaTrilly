@@ -184,7 +184,7 @@
     {
       "id": "US-62",
       "title": "Cohort FRESH-START lifecycle (SPEC \u00a76) + the engine ON/OFF runtime toggle: uploading a new cohort JSON WIPES the old cohort entirely (settle open positions, purge old copytrade_* records) \u2014 exactly one active cohort, zero cross-cohort history (v1); ON/OFF gates ONLY this engine",
-      "status": "todo",
+      "status": "in-progress",
       "priority": "medium",
       "dependencies": [
         "US-58",
@@ -194,8 +194,8 @@
         {
           "id": "62.1",
           "text": "Uploading a new cohort JSON performs the SPEC \u00a76 full REPLACEMENT, in order: (1) require the engine OFF (or auto-stop it on upload); (2) CLOSE/SETTLE any open copy positions (observe: mark closed at the current price, recording realized PnL); (3) PURGE all copytrade_* records for the OLD cohort (wallets, positions, pnl); (4) validate+load the new JSON (US-58 validator) and persist the new cohort as active; (5) subscribe the new wallets. EXACTLY ONE active cohort at a time; ZERO cross-cohort history retained (v1). Verified by a pytest test: after uploading cohort B over an active cohort A with open positions, A's positions are settled-and-closed, all of A's copytrade_ records are purged, exactly one active cohort (B) remains, and no A history survives.",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "approved"
         },
         {
@@ -214,7 +214,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-62.1 done: 2044 tests pass, zero regressions. The branch is already pushed to `feature/US-62-AC-62.1`.\n\n---\n\n## Implementation Summary \u2014 US-62 AC-62.1\n\n**Commit:** `710a81f [US-62] AC-62.1: SPEC \u00a76 cohort fresh-start lifecycle \u2014 replace_cohort atomic transaction`  \n**Branch:** `feature/US-62-AC-62.1` (pushed to origin)\n\n### Files changed\n\n| File | Change |\n|---|---|\n| `copytrade/models.py` | Added `EXIT_SETTLE = \"SETTLE\"` class constant and `(\"SETTLE\", \"Cohort Settlement\")` to `EXIT_REASON_CHOICES` on `CopytradePosition` |\n| `copytrade/migrations/0003_add_settle_exit_reason.py` | New \u2014 `SeparateDatabaseAndState` wrapping `AlterField` for the choices update (no DDL; choices are Python-only) |\n| `copytrade/cohort_lifecycle.py` | New \u2014 `replace_cohort(new_cohort_json, settlement_price, settlement_ts)`: validates JSON *before* any mutation, then inside `@transaction.atomic` executes the 5-step SPEC \u00a76 replacement (auto-stop \u2192 settle open positions \u2192 purge all 4 copytrade_* tables \u2192 persist new cohort \u2192 bulk_create wallets). Never calls `datetime.now()` (injection contract honoured) |\n| `copytrade/tests/test_cohort_lifecycle_ac621.py` | New \u2014 10 tests: main scenario (cohort B over cohort A with 2 \u2026",
       "tester_status": "approved",
       "tester_notes": "All 3 ACs approved. Requirements are fully specified and testable. AC-62.1: the 5-step replacement sequence is ordered and verified by a single pytest scenario (cohort A with open positions \u2192 cohort B upload \u2192 assert A purged, B active, no A history) \u2014 deterministic. AC-62.2: bidirectional independence test (copytrade ON/OFF \u2194 PipelineState) \u2014 clear isolation check. AC-62.3: idempotency (upload twice \u2192 same state) + AST guard (purge touches only copytrade_ tables) \u2014 zero firehose."
     },
@@ -271,5 +271,5 @@
     ]
   },
   "build_order": "US-58 (the \u00a75-isolated copytrade.* config namespace + the four copytrade_-prefixed tables + the cohort-JSON validator) is the FOUNDATION and runs FIRST \u2014 everything else reads its config/tables. After US-58, US-59 (the isolated copytrade_engine worker + Helius wallet-subscription seam, in both compose files, VPS-deployed) and US-60 (the correctness-critical copy-BUY trigger logic) are independent and may run in PARALLEL. US-61 (observe-mode position lifecycle + OUR TP/SL/CURVE/TIMER exits, observe-default safety gate) depends on US-60 (it consumes triggers). US-62 (cohort fresh-start lifecycle + ON/OFF) depends on US-58 (validator/tables) and US-61 (it settles open positions on wipe). US-63 (the 'Copy Trade' tab + export) depends on US-58/US-61/US-62 (the backends it surfaces) and US-48 (the React frontend it extends) + US-31 (the export channel it reuses). Every AC is independently verifiable OFFLINE/replay against synthetic wallet-tx streams + existing price/tape data + the existing US-31 export \u2014 ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked). LIVE real-order execution is OUT OF SCOPE (depends on the deferred P8 execution path); observe-complete is the SPEC's default and its validation arbiter, making it the correct non-over-committed first sprint of the epic.",
-  "last_updated": "2026-06-18T11:10:55+00:00"
+  "last_updated": "2026-06-18T11:30:38+00:00"
 }
