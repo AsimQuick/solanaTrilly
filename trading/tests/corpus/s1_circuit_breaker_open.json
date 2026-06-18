@@ -1,0 +1,22 @@
+{
+  "_comment": "§12 S1 real-failure fixture — banked as T3 regression corpus (AC-65.3)",
+  "scenario": "s1_circuit_breaker_open",
+  "failure_kind": "circuit_breaker_tripped",
+  "pr_references": ["#305"],
+  "description": "5 consecutive Helius Sender 5xx errors occurred within a 60-second window, tripping the circuit breaker. For the next 120 seconds all sell transactions bypass the Sender and route directly to the plain RPC endpoint. After cooldown, the next sell attempt tries Sender again (half-open). Buys remain unaffected by the circuit breaker.",
+  "circuit_breaker_config": {
+    "threshold": 5,
+    "window_seconds": 60,
+    "cooldown_seconds": 120
+  },
+  "sequence": [
+    {"event": "sender_5xx", "elapsed_s": 0},
+    {"event": "sender_5xx", "elapsed_s": 10},
+    {"event": "sender_5xx", "elapsed_s": 25},
+    {"event": "sender_5xx", "elapsed_s": 40},
+    {"event": "sender_5xx", "elapsed_s": 55}
+  ],
+  "expected_state_after_sequence": "circuit_open",
+  "expected_action": "all_sells_route_to_rpc_for_120s",
+  "notes": "Buys are excluded from circuit breaker coverage to prevent double-submit opening two positions. The breaker is sell-only. After cooldown the breaker enters half-open — the next sell probes Sender."
+}

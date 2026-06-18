@@ -1,0 +1,15 @@
+{
+  "_comment": "§12 S1 real-failure fixture — banked as T3 regression corpus (AC-65.3)",
+  "scenario": "s1_anchor_6002_too_much_sol_required",
+  "failure_kind": "anchor_error_buy_slippage",
+  "pr_references": ["#376"],
+  "description": "Buy tx included in block but inner instruction reverted with Anchor error 6002 (TooMuchSolRequired). The live pool price moved above max_quote_amount_in between simulation and submission. The tx consumed SOL for fees but delivered 0 tokens. meta.err must be decoded and the buy treated as failed.",
+  "input_meta_err": {"InstructionError": [0, {"Custom": 6002}]},
+  "expected_decoded": {
+    "anchor_name": "TooMuchSolRequired",
+    "custom_code": 6002,
+    "instruction_index": 0
+  },
+  "expected_action": "treat_as_confirmation_failure_no_position",
+  "notes": "Pool price rose faster than expected between simulate and send. Slippage tier upgrade on retry or skip this token. Seen frequently on fast-rising new mints."
+}

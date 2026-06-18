@@ -1,0 +1,17 @@
+{
+  "_comment": "§12 S1 real-failure fixture — banked as T3 regression corpus (AC-65.3)",
+  "scenario": "s1_sender_5xx_fallback",
+  "failure_kind": "sender_http_5xx",
+  "pr_references": ["#301", "#303"],
+  "description": "Helius Sender /fast endpoint returned HTTP 503 (Service Unavailable) on a sell attempt. Per-attempt fallback: the same signed transaction is immediately resubmitted to the plain Helius RPC endpoint. The circuit breaker records the 5xx error. Buys do NOT use this fallback to prevent double-open.",
+  "sender_http_status": 503,
+  "sender_error_body": "Service Unavailable",
+  "circuit_breaker_5xx_count_before": 1,
+  "expected_action": "rpc_fallback_immediate_same_tx",
+  "rpc_fallback_result": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": "5J2exampleSignatureRpcFallbackSuccess111111111111111111111111"
+  },
+  "notes": "Fallback uses the same serialized signed tx — no re-signing. The nonce in the tx must still be valid (< 150 slots). On sell retries with the PANIC tier, each attempt re-signs with a fresh blockhash."
+}

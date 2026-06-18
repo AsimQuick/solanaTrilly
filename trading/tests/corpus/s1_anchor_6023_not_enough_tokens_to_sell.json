@@ -1,0 +1,15 @@
+{
+  "_comment": "§12 S1 real-failure fixture — banked as T3 regression corpus (AC-65.3)",
+  "scenario": "s1_anchor_6023_not_enough_tokens_to_sell",
+  "failure_kind": "anchor_error_sell_token_count",
+  "pr_references": ["#377"],
+  "description": "Sell tx reverted with Anchor error 6023 (NotEnoughTokensToSell). Root cause: the sell instruction encoded the buy-time entry_tokens estimate but the wallet held fewer tokens (Token-2022 transfer fee deducted on buy receipt, or tokens partially transferred). Fix: always query live ATA balance before building the sell ix, not the stored entry_tokens estimate.",
+  "input_meta_err": {"InstructionError": [0, {"Custom": 6023}]},
+  "expected_decoded": {
+    "anchor_name": "NotEnoughTokensToSell",
+    "custom_code": 6023,
+    "instruction_index": 0
+  },
+  "expected_action": "re_query_ata_balance_and_rebuild_sell_ix",
+  "notes": "6023 storms are a benign confirmation-race when the live ATA balance was checked but a prior partial sell already cleared some tokens. Retry with fresh balance query. Not a slippage issue — do not widen the slippage tier."
+}

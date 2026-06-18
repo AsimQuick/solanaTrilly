@@ -1,0 +1,15 @@
+{
+  "_comment": "§12 S1 real-failure fixture — banked as T3 regression corpus (AC-65.3)",
+  "scenario": "s1_meta_err_reverted",
+  "failure_kind": "meta_err_non_null_reverted",
+  "pr_references": ["#385"],
+  "description": "getTransaction returned a full tx dict with a non-null meta.err. The outer transaction was included in a block but the inner instruction execution failed (e.g. InsufficientFunds, or an unmapped Anchor error). The tx consumed network fees. Must be treated as confirmation failure — not as a successful send. The decoded error is logged for diagnosis. This is Phase 3 meta.err verification (2026-05-13).",
+  "input_meta_err": {"InstructionError": [1, "InsufficientFunds"]},
+  "expected_decoded": {
+    "anchor_name": "InsufficientFunds",
+    "custom_code": null,
+    "instruction_index": 1
+  },
+  "expected_action": "treat_as_confirmation_failure",
+  "notes": "meta.err is present on both buy and sell paths. A non-null meta.err on a buy means no Position is created. On a sell it means the retry loop should attempt the next sell. The raw meta.err is always logged so unmapped codes remain diagnosable."
+}

@@ -1,0 +1,18 @@
+{
+  "_comment": "§12 S1 real-failure fixture — banked as T3 regression corpus (AC-65.3)",
+  "scenario": "s1_ghost_buy_zero_balance",
+  "failure_kind": "ghost_buy",
+  "pr_references": ["#288", "#317"],
+  "description": "Buy tx was confirmed on-chain (outer tx in a block) but the wallet's ATA balance stayed at 0 after all ghost-buy verification retries. The inner PumpSwap instruction failed silently — slippage exceeded or pool drained mid-transaction. The outer tx consumed the Jito tip SOL. No Position row should be created.",
+  "tx_signature": "5GhostBuyExampleSignature111111111111111111111111111111111",
+  "expected_tokens": 1000000,
+  "min_meaningful_balance": 100000,
+  "poll_results": [0, 0, 0, 0],
+  "final_ata_balance": 0,
+  "expected_action": "no_position_created",
+  "ghost_buy_config": {
+    "retries": 4,
+    "backoff_ms": [500, 1000, 2000, 3000]
+  },
+  "notes": "The ghost-buy check is a belt-and-suspenders on top of meta.err verification. Some validators return meta.err=null for txs where an inner CPI reverted. ATA balance is the ground truth: no tokens = no Position."
+}
