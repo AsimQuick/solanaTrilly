@@ -1,8 +1,8 @@
 # Sprint 14
 
 **Phase:** in-progress
-**Progress:** 1/5 stories | 3/15 ACs
-**Last Updated:** 2026-06-18T20:00:00+00:00
+**Progress:** 1/5 stories | 4/15 ACs
+**Last Updated:** 2026-06-18T19:44:21+00:00
 
 ## Sprint Goal
 FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M1 keystone) is ALREADY CLOSED on main via PR #296 (merged 2026-06-18): the AC-68.3 in-container import failure (deploy run 27780073827) was root-caused to a FAULTY SMOKE-TEST HARNESS — the step ran a bare `python3 -c "from trading... import ..."` WITHOUT initialising Django, so a module that defines a model at import time raised AppRegistryNotReady; it was NOT a prod-image/dependency/migration/app-wiring gap. The fix (commit 35ce277) prepends `import django; django.setup();` to the AC-68.3 in-container check in deploy.yml; the deploy was re-dispatched GREEN and ALL steps pass (AC-68.3 apparatus import OK, US-69 Live Positions open/closed APIs HTTP 200 on 8002, solanaBilly isolation OK), retroactively closing sprint-13 US-68.3 + US-69.3. So US-70 is RECORDED DONE (no app code changed). Sprint-14's actionable scope is therefore: (1) M2 (US-71) — add a pre-deploy in-container import smoke against the BUILT staging image that ITSELF initialises Django (mirroring the PR #296 fix, so the exact AppRegistryNotReady class surfaces BEFORE the VPS, not after a whole-sprint round-trip) + pin it in the deploy regression guard; (2) M5 (US-72/US-73) — build the last two PRD §13.2 dashboard views now unblocked by the P8 Position/PnL rows: Calibration & PnL analytics (§13.2#4) and the Replay viewer position-open/close overlay (§13.2#5), both reading shared Position / replay-sandbox / tape rows (NO new PnL math, NO live Birdeye, zero firehose); (3) US-74 — close the recurring status-integrity artifact (A5/B4/C4/D2/D3) at the SOURCE: harden the US-13 guard to forbid phase:complete while any story tester_status is failed/blocked AND flag story-level dev_status:not-started on all-ACs-done stories, add a mechanical phase/dev_status promotion tool wired before the sprint-end deploy, and normalize sprint13.json to a guard-clean truthful state (it is now fully done — the deploy gate closed via US-70/PR #296). SAFETY GATE (non-negotiable, unchanged from sprint-13): trading_enabled DEFAULT False, ZERO real orders / ZERO capital, the live RPC/Sender send boundary ported but NEVER invoked (AST-guarded); §5 copy-trade isolation PRESERVED. OFFLINE/replay-driven by construction -> ZERO firehose activation (8 Birdeye + 8 Helius remain banked): the import smoke imports symbols inside the built image, and both new views read existing Position / replay-sandbox / tape rows (no live calls). CUTOVER / LIVE CAPITAL (PRD §16) + the prediction SOAK/ENDGAME (I2/I3/K2/K3/M3/M4) remain OPERATOR-DRIVEN — OUT OF SCOPE; the Copy-Trade v2 NON-goals (SPEC §1) remain deferred — do NOT add.
@@ -64,16 +64,37 @@ FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M
 ---
 
 ### US-71: M2: pre-deploy in-container import smoke against the BUILT image (not the test venv) that ITSELF initialises Django + pin it in the deploy regression guard — close the 'green CI != live stack' import-layer recurrence
-**Status:** planned | **Priority:** high
+**Status:** in-progress | **Priority:** high
 
 #### Acceptance Criteria
-- [ ] **AC-71.1:** A pre-deploy in-container import smoke runs against the BUILT staging image (NOT the test venv) BEFORE push/deploy — either a ci.yml/build-and-push step or a documented `docker compose -p solanatrilly run --rm web python3 -c "..."` gate — that runs `import django; django.setup();` FIRST and then imports the shared-apparatus symbols, so the exact sprint-13 AppRegistryNotReady class (a module defining a Django model at import time, with no app registry initialised) surfaces PRE-VPS, not after a whole-sprint VPS round-trip. It FAILS LOUDLY (non-zero exit, fail the job) on any import break. The imported symbol list is maintained as DATA (a single source-of-truth list) so newly-added shared symbols are covered without editing workflow logic. Verified by a test that (a) a deliberately-planted unimportable symbol fails the smoke, (b) the smoke initialises Django before importing (a planted import-time-model module fails WITHOUT django.setup() and passes WITH it), and (c) the symbol list matches the AC-68.3 in-container check set (the test venv and prod image diverge — only the image matters for deploy).
+- [x] **AC-71.1:** A pre-deploy in-container import smoke runs against the BUILT staging image (NOT the test venv) BEFORE push/deploy — either a ci.yml/build-and-push step or a documented `docker compose -p solanatrilly run --rm web python3 -c "..."` gate — that runs `import django; django.setup();` FIRST and then imports the shared-apparatus symbols, so the exact sprint-13 AppRegistryNotReady class (a module defining a Django model at import time, with no app registry initialised) surfaces PRE-VPS, not after a whole-sprint VPS round-trip. It FAILS LOUDLY (non-zero exit, fail the job) on any import break. The imported symbol list is maintained as DATA (a single source-of-truth list) so newly-added shared symbols are covered without editing workflow logic. Verified by a test that (a) a deliberately-planted unimportable symbol fails the smoke, (b) the smoke initialises Django before importing (a planted import-time-model module fails WITHOUT django.setup() and passes WITH it), and (c) the symbol list matches the AC-68.3 in-container check set (the test venv and prod image diverge — only the image matters for deploy).
+  - Dev: done
 - [ ] **AC-71.2:** The deploy regression guard (sprint-11 AC-54.2 nine-invariant guard) is EXTENDED to pin the new load-bearing invariants — the built-image import smoke (AC-71.1), the AC-68.3 in-container import step (including its django.setup() prefix from PR #296), and the AC-69.3 Live Positions open/closed smoke-test steps — so the deploy path can no longer silently drop them between a green deliberate run and a later per-merge run (the J4 failure mode). The guard FAILS LOUDLY and never degrades to a no-op (the H1 pattern). Verified by the extended guard test asserting each new invariant is present (incl. the django.setup() prefix on the AC-68.3 step) + a planted-removal negative test per invariant.
 - [ ] **AC-71.3:** The pre-deploy import smoke is exercised LIVE on the VPS deploy run that carries this story — the built-image import smoke runs and passes in the actual pipeline before push, and the post-deploy in-container import step (AC-68.3) stays GREEN. Verified by the Tester from the green deploy run (the smoke step present and passing in the run log). New files carry metadata front matter. Zero firehose.
 
 **Dependencies:** US-70
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-71.1 done: ---
+  
+  ## Implementation Summary
+  
+  **AC-71.1 delivered in 2 commits on `feature/US-71-AC-71.1`.**
+  
+  ### Files changed
+  
+  | File | Change | Purpose |
+  |------|--------|---------|
+  | `ops/import_smoke_symbols.json` | NEW | Single source of truth: 5-entry symbol list (mirrors AC-68.3 check set). Add symbols here only — no YAML edits needed. |
+  | `tools/run_import_smoke.py` | NEW | `load_symbols()` / `build_smoke_command()` / `run_smoke()` / `main()`. Constructs `python3 -c "import django; django.setup(); from … import …"` and runs it via `docker compose run --rm web`. Exits non-zero on any import failure. |
+  | `.github/workflows/ci.yml` | MODIFIED | One new step — `Pre-deploy built-image import smoke (AC-71.1)` — inserted after `Build containers`, before lint. Runs `python3 tools/run_import_smoke.py`. |
+  | `core/tests/test_import_smoke_ac711.py` | NEW | 11 tests covering all three AC-71.1 verification requirements. |
+  
+  ### Test count: 11
+  - Structural: `test_symbols_file_exists`, `test_symbols_file_is_valid_json`, `test_each_symbol_has_module_and_attr`, `test_run_import_smoke_script_exists`
+  - **(c)** `test_symbol_list_matches_ac683_check_set` — set-equality against hardcoded AC-68.3 symbols
+  - `tes …
 
 **Tester Status:** approved
 **Tester Notes:**
