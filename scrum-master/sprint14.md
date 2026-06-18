@@ -1,8 +1,8 @@
 # Sprint 14
 
 **Phase:** in-progress
-**Progress:** 3/5 stories | 9/15 ACs
-**Last Updated:** 2026-06-18T20:50:48+00:00
+**Progress:** 3/5 stories | 10/15 ACs
+**Last Updated:** 2026-06-18T21:12:09+00:00
 
 ## Sprint Goal
 FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M1 keystone) is ALREADY CLOSED on main via PR #296 (merged 2026-06-18): the AC-68.3 in-container import failure (deploy run 27780073827) was root-caused to a FAULTY SMOKE-TEST HARNESS — the step ran a bare `python3 -c "from trading... import ..."` WITHOUT initialising Django, so a module that defines a model at import time raised AppRegistryNotReady; it was NOT a prod-image/dependency/migration/app-wiring gap. The fix (commit 35ce277) prepends `import django; django.setup();` to the AC-68.3 in-container check in deploy.yml; the deploy was re-dispatched GREEN and ALL steps pass (AC-68.3 apparatus import OK, US-69 Live Positions open/closed APIs HTTP 200 on 8002, solanaBilly isolation OK), retroactively closing sprint-13 US-68.3 + US-69.3. So US-70 is RECORDED DONE (no app code changed). Sprint-14's actionable scope is therefore: (1) M2 (US-71) — add a pre-deploy in-container import smoke against the BUILT staging image that ITSELF initialises Django (mirroring the PR #296 fix, so the exact AppRegistryNotReady class surfaces BEFORE the VPS, not after a whole-sprint round-trip) + pin it in the deploy regression guard; (2) M5 (US-72/US-73) — build the last two PRD §13.2 dashboard views now unblocked by the P8 Position/PnL rows: Calibration & PnL analytics (§13.2#4) and the Replay viewer position-open/close overlay (§13.2#5), both reading shared Position / replay-sandbox / tape rows (NO new PnL math, NO live Birdeye, zero firehose); (3) US-74 — close the recurring status-integrity artifact (A5/B4/C4/D2/D3) at the SOURCE: harden the US-13 guard to forbid phase:complete while any story tester_status is failed/blocked AND flag story-level dev_status:not-started on all-ACs-done stories, add a mechanical phase/dev_status promotion tool wired before the sprint-end deploy, and normalize sprint13.json to a guard-clean truthful state (it is now fully done — the deploy gate closed via US-70/PR #296). SAFETY GATE (non-negotiable, unchanged from sprint-13): trading_enabled DEFAULT False, ZERO real orders / ZERO capital, the live RPC/Sender send boundary ported but NEVER invoked (AST-guarded); §5 copy-trade isolation PRESERVED. OFFLINE/replay-driven by construction -> ZERO firehose activation (8 Birdeye + 8 Helius remain banked): the import smoke imports symbols inside the built image, and both new views read existing Position / replay-sandbox / tape rows (no live calls). CUTOVER / LIVE CAPITAL (PRD §16) + the prediction SOAK/ENDGAME (I2/I3/K2/K3/M3/M4) remain OPERATOR-DRIVEN — OUT OF SCOPE; the Copy-Trade v2 NON-goals (SPEC §1) remain deferred — do NOT add.
@@ -210,16 +210,26 @@ FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M
 ---
 
 ### US-73: M5: Replay viewer position-open/close overlay (PRD §13.2#5) — render a replay run_id's sandbox Positions opening/closing on the historical candles
-**Status:** planned | **Priority:** medium
+**Status:** in-progress | **Priority:** medium
 
 #### Acceptance Criteria
-- [ ] **AC-73.1:** A DRF API serves a selected replay run_id's sandbox Positions (the trading_replay_positions rows from US-67: entry_ts/entry_price, exit_ts/exit_price, exit_trigger, realized PnL) PLUS the replayed tape/candle basis for the overlay — reading the ISOLATED replay sandbox + the existing recorded tape ONLY (Principle #2: no new candle math, no live source), zero firehose. Verified by API tests over banked replay-sandbox + tape fixtures asserting the open/close markers for a run_id render from sandbox rows (never the live trading_positions table).
+- [x] **AC-73.1:** A DRF API serves a selected replay run_id's sandbox Positions (the trading_replay_positions rows from US-67: entry_ts/entry_price, exit_ts/exit_price, exit_trigger, realized PnL) PLUS the replayed tape/candle basis for the overlay — reading the ISOLATED replay sandbox + the existing recorded tape ONLY (Principle #2: no new candle math, no live source), zero firehose. Verified by API tests over banked replay-sandbox + tape fixtures asserting the open/close markers for a run_id render from sandbox rows (never the live trading_positions table).
+  - Dev: done
 - [ ] **AC-73.2:** A ReplayViewer.jsx React view in the US-48 frontend renders any replay run_id identically to live — reusing the US-49 token-detail candle component — and overlays the replayed positions opening/closing on the historical candles (entry/exit markers + exit_trigger labels) for the selected run_id, wired with an App.jsx route, metadata front matter, and an H1 ImportError trap. Verified by frontend wiring checks (component present, route registered, candle component reused, metadata header, ImportError trap).
 - [ ] **AC-73.3:** Deployed + smoke-tested on the VPS: the Replay viewer route + its API return HTTP 200 on 8002 from an actual green deploy run; containers Up; solanaBilly UNTOUCHED on 8001; the deploy regression guard GREEN. Verified by the Tester from the green deploy run. New backend AND frontend files carry metadata front matter. Zero firehose.
 
 **Dependencies:** US-67, US-69, US-70, US-49
 
 **Dev Team Status:** not-started
+**Dev Team Notes:**
+  AC-73.1 done: All 350 trading tests pass. The AC-73.1 implementation by the previous dev agent is complete, correct, and already committed and pushed to the branch. Here's my summary.
+  
+  ## Implementation Summary — US-73 AC-73.1
+  
+  **Status: COMPLETE** (delivered by the prior dev agent's commit `2c2d21d`, already pushed to `feature/US-73-AC-73.1`; HEAD matches `origin`). I verified the work end-to-end rather than producing redundant changes.
+  
+  ### Files in the AC-73.1 diff from `main`
+  - **`trading/replay_api.py`** (new, 190 lines) — DRF `replay_overlay_view` serving `GET /api/trading/replay/overlay/?run_id=<id>`. Reads **only** from the isolated sandbox (`ReplayPosition`, `db_table='trading_replay_positions'`) and the existing recorded tape (`core.models.Swap`). Candles are built via the existing `core.dashboard.candle_api.build_candles()` — no new candle math (Principle #2). `exit_ts` is derived as `entry_ts + timedelta(seconds=held_s)` since the model stores duration, not an explicit exit timestamp. The live `trading_positions` table is never queried. Zero firehose (DB-only). Returns 400 on missing/blank `run_id`, empty positions/candles for unknown `run_id`. Carries structured metadata front matte …
 
 **Tester Status:** approved
 **Tester Notes:**
