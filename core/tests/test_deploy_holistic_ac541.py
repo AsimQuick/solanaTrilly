@@ -39,7 +39,11 @@ Consolidated fix in deploy.yml:
   - down --remove-orphans before pull+up (belt-and-suspenders for orphaned containers)
   - up -d --remove-orphans (orphaned-container reconcile)
   - RFC-6455-valid WS key via base64.b64encode(os.urandom(16)).decode() (addresses J1)
-  - push trigger restored to on: block (re-enables per-merge deploys)
+
+Note: deploys are workflow_dispatch-only (operator decision 2026-06-18). The push
+trigger was intentionally removed because a push-to-main trigger fired a full ~5-min
+VPS deploy on every commit (including sprint-state commits), wasting GitHub Actions
+minutes. The orchestrator dispatches one deploy per sprint boundary.
 
 Tests in this module:
   test_consolidated_rca_record_exists
@@ -62,8 +66,9 @@ Tests in this module:
       deploy.yml generates a valid 16-byte WS key at runtime (fixes J1).
   test_deploy_yml_has_orphan_container_fix
       deploy.yml has both 'down --remove-orphans' and 'up -d --remove-orphans'.
-  test_deploy_yml_has_push_trigger
-      deploy.yml on: block includes push: branches: [main] (re-enables per-merge deploys).
+  test_deploy_yml_has_no_push_trigger
+      deploy.yml on: block has NO push trigger — deploys are workflow_dispatch-only
+      (operator decision 2026-06-18; push-to-main wasted Actions minutes).
   test_consolidated_fixes_are_present_together
       All consolidated fixes are present in deploy.yml simultaneously as a system.
 """
@@ -414,33 +419,26 @@ def test_deploy_yml_has_orphan_container_fix() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_deploy_yml_has_push_trigger() -> None:
-    """deploy.yml on: block must include push: branches: [main] (re-enables per-merge deploys).
+def test_deploy_yml_has_no_push_trigger() -> None:
+    """deploy.yml on: block must have NO push trigger — deploys are workflow_dispatch-only.
 
-    The push trigger was removed from deploy.yml during sprint-10, disabling
-    automatic per-merge deploys and requiring workflow_dispatch for all deploy runs.
-    US-52/AC-52.1 restored it. Without this trigger, the J4 pattern (per-merge run
-    AFTER a deliberate run) cannot be tested because per-merge runs don't fire.
+    Operator decision (2026-06-18): the push trigger was intentionally removed.
+    A push-to-main trigger fired a full ~5-min VPS deploy on every commit to main
+    (including many sprint-state commits), wasting GitHub Actions minutes. Deploys
+    now fire ONLY via workflow_dispatch — the orchestrator dispatches one deploy per
+    sprint boundary.
 
-    This test fails if the push trigger is removed again.
+    This test fails if the push trigger is re-added.
 
     Note: PyYAML parses the YAML 'on:' key as Python True (YAML 1.1 boolean), so
     we use _on_block() which handles both string 'on' and bool True lookup.
     """
     on_block = _on_block()
-    assert "push" in on_block, (
-        "AC-54.1: deploy.yml on: block must contain the push trigger "
-        "('push: branches: [main]'). The trigger was removed during sprint-10 "
-        "(disabling per-merge auto-deploys) and restored by US-52/AC-52.1. "
-        "Without it, only workflow_dispatch runs are possible — the J4 regression "
-        "(per-merge run failing after a green deliberate run) cannot re-occur or "
-        "be detected automatically."
-    )
-    push_block = on_block.get("push") or {}
-    branches = push_block.get("branches") or []
-    assert "main" in branches, (
-        "AC-54.1: deploy.yml push trigger must include 'main' in branches list. "
-        f"Current branches: {branches}"
+    assert "push" not in on_block, (
+        "deploy is dispatch-only; do not re-add the push trigger "
+        "(operator decision 2026-06-18 — a push-to-main trigger wastes Actions "
+        "minutes by deploying on every commit). Deploys fire only via "
+        "workflow_dispatch, dispatched once per sprint boundary."
     )
 
 
@@ -458,15 +456,17 @@ def test_consolidated_fixes_are_present_together() -> None:
       - down --remove-orphans before pull+up (orphaned container belt-and-suspenders)
       - up -d --remove-orphans (orphaned container reconcile)
       - os.urandom(16) WS key (J1: WS-key defect)
-      - push: branches: [main] (per-merge trigger re-enabled)
 
     If any single fix is removed, the deploy path is no longer sound as a system.
     A deploy path where two of three fixes are present but one is absent is still
     unsound — this test catches partial regression.
+
+    Note: the push trigger is intentionally NOT checked here. Deploys are
+    workflow_dispatch-only (operator decision 2026-06-18) — re-adding a push
+    trigger wastes Actions minutes by deploying on every commit.
     """
     content = _deploy_text()
     script = _vps_step_script()
-    on_block = _on_block()
 
     failures = []
 
@@ -481,13 +481,6 @@ def test_consolidated_fixes_are_present_together() -> None:
 
     if "urandom(16)" not in content:
         failures.append("MISSING: 'urandom(16)' in WS smoke-test (J1 WS-key fix)")
-
-    if "push" not in on_block:
-        failures.append("MISSING: push trigger in on: block (per-merge deploys disabled)")
-    else:
-        branches = (on_block.get("push") or {}).get("branches") or []
-        if "main" not in branches:
-            failures.append(f"MISSING: 'main' in push branches (current: {branches})")
 
     assert not failures, (
         "AC-54.1: The following consolidated deploy-path fixes are absent from deploy.yml. "

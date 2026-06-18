@@ -31,8 +31,9 @@ Tests in this module:
   test_workflow_dispatch_trigger_present
       deploy.yml has workflow_dispatch in its on: triggers so a deliberate
       manual boundary run on main can be initiated without a new push.
-  test_main_push_trigger_present
-      deploy.yml triggers on push to main, confirming merges also deploy.
+  test_main_push_trigger_absent
+      deploy.yml has NO push trigger — deploys are workflow_dispatch-only
+      (operator decision 2026-06-18; push-to-main wasted Actions minutes).
   test_ac403_three_confirm_conditions_all_wired
       All three AC-40.3 Tester-confirm conditions are wired as distinct steps.
   test_http_200_smoke_test_with_retry_backoff_wired
@@ -111,9 +112,10 @@ def test_workflow_dispatch_trigger_present() -> None:
     AC-40.3 specifies that "the deliberate boundary run at HEAD must be green"
     and that "a partial-evidence PR-merge deploy is NOT sufficient." A manual
     workflow_dispatch trigger lets the operator/orchestrator fire a deliberate
-    deploy on main at HEAD without requiring a new commit. Without it, only
-    push-triggered runs are possible, which are tied to merge events rather than
-    deliberate sprint-boundary verification runs.
+    deploy on main at HEAD without requiring a new commit. Since the push trigger
+    was removed (operator decision 2026-06-18, to stop per-commit Actions waste),
+    workflow_dispatch is the only way deploys fire — one deliberate sprint-boundary
+    run per dispatch.
     """
     data = _load_deploy()
     on = data.get("on") or data.get(True) or {}
@@ -125,25 +127,26 @@ def test_workflow_dispatch_trigger_present() -> None:
     )
 
 
-def test_main_push_trigger_present() -> None:
-    """deploy.yml must trigger on push to main branch.
+def test_main_push_trigger_absent() -> None:
+    """deploy.yml must have NO push trigger — deploys are workflow_dispatch-only.
 
-    AC-40.3 requires the deploy to run on 'main' at HEAD. When the sprint-8
-    fix PRs are merged, the push-to-main trigger fires automatically. Both
-    push (merge-triggered) and workflow_dispatch (deliberate run) must be wired
-    so the Tester can confirm from either invocation.
+    Operator decision (2026-06-18): the push trigger was intentionally removed.
+    A push-to-main trigger fired a full ~5-min VPS deploy on every commit to main
+    (including many sprint-state commits), wasting GitHub Actions minutes. The
+    deliberate sprint-boundary deploy is now fired exclusively via workflow_dispatch
+    (asserted present by test_workflow_dispatch_trigger_present); the orchestrator
+    dispatches one deploy per sprint boundary.
     """
     data = _load_deploy()
     on = data.get("on") or data.get(True) or {}
     assert isinstance(on, dict), (
         f"AC-40.3: deploy.yml on: block must be a mapping. Got: {type(on)}"
     )
-    push_cfg = on.get("push") or {}
-    branches = push_cfg.get("branches") or []
-    assert "main" in branches, (
-        "AC-40.3: deploy.yml push trigger must include 'main' so merges to main "
-        "deploy automatically. "
-        f"Current push.branches: {branches}"
+    assert "push" not in on, (
+        "deploy is dispatch-only; do not re-add the push trigger "
+        "(operator decision 2026-06-18 — a push-to-main trigger wastes Actions "
+        "minutes by deploying on every commit). Deploys fire only via "
+        "workflow_dispatch, dispatched once per sprint boundary."
     )
 
 

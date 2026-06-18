@@ -11,7 +11,10 @@
 
 Asserts every H1/AC-6.1 requirement of deploy.yml:
   1. File exists at .github/workflows/deploy.yml.
-  2. Triggers on push to main (merge trigger).
+  2. Is deliberate-dispatch-only: NO push trigger, workflow_dispatch present
+     (operator decision 2026-06-18 — push-to-main wasted Actions minutes by
+     deploying on every commit; orchestrator dispatches one deploy per sprint
+     boundary).
   3. Has permissions: packages: write at workflow level.
   4. Every action 'uses:' ref is SHA-pinned (40-char hex, H1).
   5. No custom secrets referenced — only secrets.GITHUB_TOKEN.
@@ -20,7 +23,7 @@ Asserts every H1/AC-6.1 requirement of deploy.yml:
 
 Tests:
   test_deploy_yml_exists
-  test_deploy_yml_triggers_on_push_to_main
+  test_deploy_yml_is_dispatch_only_no_push
   test_deploy_yml_has_packages_write_permission
   test_deploy_yml_all_actions_sha_pinned
   test_deploy_yml_no_custom_secrets
@@ -99,20 +102,29 @@ def test_deploy_yml_exists() -> None:
     )
 
 
-def test_deploy_yml_triggers_on_push_to_main() -> None:
-    """deploy.yml must trigger on push to main (the merge event) (AC-6.1)."""
+def test_deploy_yml_is_dispatch_only_no_push() -> None:
+    """deploy.yml must be deliberate-dispatch-only: NO push trigger, workflow_dispatch present.
+
+    Operator decision (2026-06-18): deploy.yml triggers ONLY on workflow_dispatch.
+    The push trigger was intentionally removed because a push-to-main trigger fired a
+    full ~5-min VPS deploy on every commit to main (including many sprint-state
+    commits), wasting GitHub Actions minutes. The orchestrator now dispatches one
+    deploy per sprint boundary via workflow_dispatch instead of per-commit.
+    """
     data = _load_deploy()
     on_block = data.get("on") or data.get(True)
     assert isinstance(on_block, dict), (
         "deploy.yml 'on:' block must be a mapping, not a scalar."
     )
-    push = on_block.get("push")
-    assert isinstance(push, dict), (
-        "deploy.yml must have an 'on.push' trigger."
+    assert "push" not in on_block, (
+        "deploy is dispatch-only; do not re-add the push trigger "
+        "(operator decision 2026-06-18 — a push-to-main trigger wastes Actions "
+        "minutes by deploying on every commit). Deploys fire only via "
+        "workflow_dispatch, dispatched once per sprint boundary."
     )
-    branches = push.get("branches") or []
-    assert "main" in branches, (
-        f"deploy.yml 'on.push.branches' must include 'main'. Got: {branches!r}"
+    assert "workflow_dispatch" in on_block, (
+        "deploy.yml must declare 'workflow_dispatch' so the orchestrator can "
+        "deliberately dispatch one deploy per sprint boundary."
     )
 
 
