@@ -6,14 +6,16 @@
 //   (US-50 AC-50.3) based on the ?view= query param.  The cohort wall loads when
 //   view=cohort; the token-detail view loads when view=token (default) with ?mint=.
 //   The config/model control operator skin loads when view=control (US-56 AC-56.3).
+//   The Feature Builder UI loads when view=features (US-57 AC-57.1).
 // created-by: dev-team
 // sprint: sprint-11
-// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3
+// story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1
 // last-updated: 2026-06-18
 // ---
 
 import CohortWall from './CohortWall.jsx'
 import ConfigControl from './ConfigControl.jsx'
+import FeatureBuilder from './FeatureBuilder.jsx'
 import TokenDetail from './TokenDetail.jsx'
 
 // Read a named query param from the current URL.
@@ -37,13 +39,16 @@ function App() {
         <CohortWall intervalS={intervalS} groupBy={groupBy} sortBy={sortBy} />
       ) : view === 'control' ? (
         <ConfigControl />
+      ) : view === 'features' ? (
+        <FeatureBuilder />
       ) : mint ? (
         <TokenDetail mint={mint} intervalS={intervalS} />
       ) : (
         <p style={{ color: '#9598a1' }}>
           Pass <code>?mint=&lt;address&gt;</code> to view a replayed token, or{' '}
           <code>?view=cohort</code> to open the cohort pattern-mining wall, or{' '}
-          <code>?view=control</code> to open the config &amp; model control panel.
+          <code>?view=control</code> to open the config &amp; model control panel, or{' '}
+          <code>?view=features</code> to open the Feature Builder (§6.5 export).
         </p>
       )}
     </div>
