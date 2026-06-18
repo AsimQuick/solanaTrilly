@@ -1,8 +1,8 @@
 # Sprint 11
 
-**Phase:** planning
+**Phase:** complete
 **Progress:** 6/6 stories | 18/18 ACs
-**Last Updated:** 2026-06-18T07:29:39+00:00
+**Last Updated:** 2026-06-18T08:27:44+00:00
 
 ## Sprint Goal
 CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dashboard chain LIVE on the VPS, finally meeting the P6 phase DoD ('live on the VPS', PRD §15.2/§16 — 'works locally' is NOT done), and extend the dashboard with the two remaining NON-P8-gated operator views. Sprint-10 OPENED P6 at code level: all 6 stories / 18 ACs landed CI-green — the React+Vite+DRF+Channels foundation + ONE-tape-feed consumer (US-48), the tape→candle token-detail/research view that MEETS the P6 offline gate ('operator sees real candles for a replayed token', US-49), the cohort pattern-mining wall (US-50), and the human-annotation→labeled-export killer feature (US-51) — and US-46/I1 confirmed the US-43 blend scorer LIVE on the VPS (soak prerequisite I2 met). BUT the VPS deploy DoD is UNMET for 5 of 6 stories, blocked by deploy-LAYER defects (no application-code change needed): (J1) a one-line RFC-6455-invalid hardcoded Sec-WebSocket-Key in deploy.yml's WS smoke-test (base64 of 'solanatrilly_ac483_key', 22 bytes) → Daphne HTTP 400 on every handshake → fails AC-48.3 and transitively blocks US-49/US-50/US-51's VPS confirmation; (J2) an INDEPENDENT US-47 per-story deploy failure (run 27683660493) that predates and differs from the WS-key defect and was never root-caused (D5 'go to the box' not completed); (J4) a per-merge deploy regression (run 27681451880) that failed AFTER US-46's deliberate HEAD run (27680808876) was green — three distinct deploy failures co-occurred, only the WS-key one fully diagnosed, so the deploy path needs ONE consolidated holistic pass + a regression guard, not three point-fixes chased independently (the multi-sprint P0 deploy drag lesson). Sprint-11 closes all three at root, lands a GREEN HEAD deploy carrying the full dashboard chain, and the Tester VPS-confirms US-48/49/50/51 (J3) to declare the P6 offline gate VPS-CONFIRMED and the third PRD pillar's phase DoD DONE. THEN, riding the now-sound deploy path, it adds the two dashboard views that are NOT gated on P8 trading data and only lack a UI surface over EXISTING backends: (US-56) the Config & model control operator skin (PRD §13.2#6) — an operator skin over the §5 admin / US-9 PipelineConfig + US-42 ModelRegistry (view/diff/activate with django-simple-history audit, operator-gated actions, NO silent auto-start per US-11); and (US-57) the Feature Builder UI (PRD §13.2#7) — a UI surface over the §6.5 one-click labeled export that ALREADY EXISTS from US-31 (only the UI is missing). FIREHOSE: this sprint is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — the deploy-gap fixes are CI/VPS infra, and both new views are UI surfaces over existing offline backends (config/registry/export); ZERO firehose activation (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched). DEFERRED (forward_plan, NOT committed — to avoid the over-commitment the retrospectives repeatedly warn against on heavy phases): I2 the operator-driven P7-3 SOAK (now UNBLOCKED by US-46) and I3 the ENDGAME (promote trilly_pregrad_v3_2 + start the firehose), both OPERATOR-DRIVEN not sprint stories; and the P8-DEPENDENT dashboard views — Live Positions board (§13.2#1, the operator's #1 ask), Calibration & PnL analytics (§13.2#4), and the Replay viewer's position-open/close overlay (§13.2#5) — which all need P8 position/PnL rows that do not exist until the P8 trading-execution path (PRD §10) lands. Build order: US-52 (J1 WS-key fix) and US-53 (J2 US-47 deploy root-cause) are independent deploy-layer fixes that may run FIRST / in parallel; US-54 (J4 consolidated deploy-path pass + regression guard) depends on both; US-55 (J3 green HEAD re-deploy + Tester VPS-confirm of US-48/49/50/51) depends on US-52/US-53/US-54 and is the dashboard-chain closeout; US-56 and US-57 (the two new operator views) depend on US-48's foundation + their existing backends and may run in parallel once the deploy path is sound.
@@ -90,31 +90,9 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
   2. **`core/tests/test_deploy_green_run_ac523.py`** (new, 9 tests) — Structural guards for all Tester VPS-confirmation conditions from AC-52.3:
      - `test_down_remove_orphans_before_up` — regression guard f …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  AC-52.1 diagnosis: Now I have the complete picture. Here is my diagnosis:
-  
-  ---
-  
-  ## CI Failure Diagnosis — US-52 AC-52.1 / branch `feature/US-52-AC-52.1`
-  
-  ### Verdict: **Code bug** — severity: **Blocker**
-  
-  ### What's failing (3 tests, 1638 pass)
-  
-  | Test file | AC guarded | Assertion |
-  |---|---|---|
-  | `test_deploy_workflow_ac61.py::test_deploy_yml_triggers_on_push_to_main` | AC-6.1 | `deploy.yml` must have `on.push` key |
-  | `test_deploy_boundary_run_ac403.py::test_main_push_trigger_present` | AC-40.3 | `on.push.branches` must contain `"main"` |
-  | `test_deploy_workflow_ac82.py::test_push_trigger_still_present` | AC-8.2 | `on:` block must contain both `push` and `workflow_dispatch` |
-  
-  All 3 fail for the same root cause: `deploy.yml`'s `on:` block contains **only** `workflow_dispatch:` — the `push: branches: [main]` trigger is absent.
-  
-  ### US-52 AC-52.1 itself: **PASSES** (all 4 dedicated tests in `test_deploy_ws_key_ac521.py` green). The WS key fix is correct.
-  
-  ### Root cause
-  
-  `deploy.yml` line 20-27 has a comment stating the `push:` trigger was deliberately removed by "operator request 2026-06-17" to stop redundant deploy runs on every bookkeeping commit to `main`. That removal violated three pre-existi …
+  All 3 ACs pass. CI green across all sprint-11 PRs (PRs #224, #225, #226). Final VPS confirmation obtained from deploy runs 27745162097 and 27745573971 (both fully green, 2026-06-18): HTTP 200 on 8002, /dashboard/ HTTP 200, WS endpoint HTTP 101 upgrade passed, frontend/web/listener/celery-worker containers Up, solanaBilly isolation verified on 8001. Phase-promoter pre-deploy gate (AC-39.2) confirmed present and ordered before deploy step in both runs. RFC-6455-valid key (os.urandom(16) base64) in deploy.yml confirmed by structural test (3 new tests, 1644 passed). Note: per-merge deploy runs for US-52 ACs themselves show the WS 500 bug was introduced later by the US-57 AC-57.3 SynchronousOnlyOperation bug (fixed by PR #242); the final HEAD deploy is the authoritative VPS confirmation.
 
 ---
 
@@ -179,9 +157,9 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
   
   2. **`ops/tester_confirm_ac533.md`** (new, 112 lines) — Durable Tester-CONFIRM evidence artifact. Documents all four AC-53.3 VPS conditions (HTTP 200 on 8002 with retry-backoff, listener Up, celery-worker Up, solanaBilly untouched on 8001), the root cau …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  AC-53.1 wording tightened: 'reproducing the diagnosis' changed to 'verifying the identified root cause against'; the run is gone, only the logs can be compared. ACs 53.2 and 53.3 have explicit pass conditions (green run ID, named container + port conditions). No scope issues.
+  All 3 ACs pass. CI green on PRs #227, #228, #229. Root cause of run 27683660493 identified as VPS disk exhaustion (ENOSPC during docker compose pull) — distinct from J1 WS-key defect and J4 orphaned-container issue. Fix: docker image prune -f prepended to deploy SSH command. Final VPS confirmation from deploy runs 27745162097 and 27745573971: HTTP 200 on 8002, listener Up, celery-worker Up (new dedicated verification step added), solanaBilly untouched on 8001. RCA documented in ops/rca_run_27683660493.md.
 
 ---
 
@@ -256,9 +234,9 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
      3. `test_tester_confirm_record_documents_http200_condition` — references '8002'
      4. `test_tester_confirm_record …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  AC-54.2 names the six pinned deploy invariants explicitly; the pytest guard fails on any removal — strong structural coverage. AC-54.3 requires green across deliberate + per-merge runs, directly targeting the J4 regression. No scope issues.
+  All 3 ACs pass. CI green on PRs #230, #231, #232. Holistic RCA (ops/rca_consolidated_ac541.md) correctly maps J4+J2 as sharing ENOSPC root cause and J1 as independent. Nine-invariant regression guard (test_deploy_regression_guard_ac542.py, 688 lines) pins all load-bearing deploy invariants with fail-loud pattern. Reproducibility confirmed: deploy runs 27745162097 (per-merge) and 27745573971 (deliberate HEAD) are BOTH fully green on 2026-06-18, with no ENOSPC recurrence. The J4-class regression is closed.
 
 ---
 
@@ -343,9 +321,9 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
   
   3. …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  AC-55.2 wording corrected: US-49/50 were CI-green/blocked in sprint-10, not Tester-confirmed passed; fixed to 'CI-verified code-complete, blocked only by the J1 deploy defect'. AC-55.3's VPS-confirmation + sprint-10 status update is a concrete, auditable artifact. No scope issues.
+  All 3 ACs pass. CI green on PRs #233, #234, #235. Green deploy runs confirmed: 27745162097 (2026-06-18T07:56Z) and 27745573971 (2026-06-18T08:04Z). Both runs verified all dashboard-chain smoke-tests passing: /dashboard/ HTTP 200, WS endpoint HTTP 101, US-49 candle API HTTP 200, US-50 cohort wall API HTTP 200, US-51 annotation list API HTTP 200. All four containers (frontend, web, listener, celery-worker) Up. solanaBilly isolation confirmed. Phase-promoter pre-deploy gate (AC-39.2) confirmed. P6 OFFLINE GATE VPS-CONFIRMED: operator sees real candles for a replayed token, live on the VPS. Third PRD pillar DoD DONE. Firehose budget untouched (8 Birdeye + 8 Helius banked).
 
 ---
 
@@ -418,9 +396,9 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
   
   2. **`frontend/src/App.jsx`** (modified) — Added `import ConfigControl from './ConfigControl.jsx'` and `view === 'control'` routi …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  Three ACs each have two verification layers: fixture-based API pytest, AST guard on auto-start flags, and ImportError trap wired into ci.yml. VPS deploy + smoke-test is a required close condition per the P6 DoD. No scope issues.
+  All 3 ACs pass. CI green on PRs #236, #237, #238. Read-only DRF API (control_api.py, 301 lines) surfaces US-9/US-42 backends without dashboard-local math. Activate actions delegate exclusively to audited activate_config()/activate_model() paths; AST guard confirms no auto-start flag mutation. H1 ImportError traps wired into ci.yml. React ConfigControl.jsx (669 lines) with metadata front matter. VPS smoke-test confirmed in deploy runs 27745162097 and 27745573971: Smoke-test US-56 control config API step passes (HTTP 200 on /api/control/config/). Principle #1 (config-driven) and Principle #2 (no re-implemented backends) satisfied.
 
 ---
 
@@ -488,9 +466,9 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
   |---|---|---|
   | `core/tests/test_feature_builder_ui_ac573.py` | **new** (477 lines) | AC-57.3 dedicated test file. Module-level H1 ImportError traps on `feature_export_trigger_view`, `export_result_view`, and `build_features` — deletion/rename of any surface fails pytest collection. 17 tests: 3 explicit H1 importable checks; 6 AST guards confirming `export_api.py` and `export_result_api.py` never set `scoring_enabled=True` / `trading_enabled=True` and never reference `PipelineState` (US-11 no-silent-state-change, extended to the Feature Builder path); 6 frontend wiring checks (FeatureBuilder.jsx exists, has metadata front matter, has trigger control, has MANIFEST surface; App.jsx …
 
-**Tester Status:** approved
+**Tester Status:** pass
 **Tester Notes:**
-  AC-57.1's AST verification that the view delegates to the existing US-31 task (not re-implements) is the key parity guard; testable at collection time. AC-57.2's run-twice / OFFLINE / content-hash determinism constraint is concrete. AC-57.3 closes with the H1 ImportError pattern and VPS deploy. No scope issues.
+  All 3 ACs pass. CI green on PRs #239, #240, #241, and the fix PR #242 (SynchronousOnlyOperation regression). Note: per-merge deploy runs for US-57 ACs (27742700887, 27743372068, 27743852301) all failed at WS smoke-test HTTP 500 due to TapeFeedConsumer calling get_active_config() synchronously in async context — this was a pre-existing bug in US-48 that surfaced only at deploy time. PR #242 (merged 2026-06-18T07:55Z) fixed it by wrapping ORM call in sync_to_async. Final deploy runs 27745162097 and 27745573971 are fully green including Smoke-test US-57 Feature Builder export result API (AC-57.3) step. AST guards confirm no auto-start flag mutation and celery-only dispatch. Export delegates to existing US-31 build_features task (no re-implementation). Idempotency confirmed. Firehose budget untouched.
 
 ---
 
@@ -502,7 +480,7 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
 _Pending_
 
 ### Tester Sprint Notes
-_Pending_
+Sprint-11 quality gate: PASS. All 6 stories, 18 ACs: tester_status=pass. CI green on all 19 sprint-11 PRs (#224-#242). Final authoritative deploy runs: 27745162097 (2026-06-18T07:56Z) and 27745573971 (2026-06-18T08:04Z), both fully green across all 16 deploy job steps including every story-specific smoke-test. Key quality observations: (1) Per-merge deploy runs for US-55 ACs and US-56/US-57 ACs failed at WS HTTP 500 due to a TapeFeedConsumer SynchronousOnlyOperation bug in AC-48.2 that surfaced only under load in the async context; this was diagnosed and fixed by PR #242 before the final sprint boundary deploy runs. The per-AC deploy failures do not constitute a DoD gap because the bug was caught by the deploy gate (not silently) and fixed within the sprint. (2) J1/J2/J4 root causes all closed: J1 (WS key) fixed by US-52, J2 (ENOSPC disk exhaustion) fixed by US-53, J4 (per-merge ENOSPC regression) fixed by US-53/US-54 with docker image prune -f. (3) Nine-invariant regression guard (AC-54.2) is in place. (4) P6 offline gate VPS-CONFIRMED: operator sees real candles for a replayed token live on the VPS. Third PRD pillar DoD DONE. (5) Firehose budget untouched: 8 Birdeye + 8 Helius banked. (6) Coverage >=80% met across sprint (1826 tests passing at final AC-57.3).
 
 ### PO Sprint Review Notes
 _Pending_
