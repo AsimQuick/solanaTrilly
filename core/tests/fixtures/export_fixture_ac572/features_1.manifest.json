@@ -1,0 +1,20 @@
+{
+  "content_hash": "94847d62d630b86e3c8f68f0e0c980ff736e00d9bb30451097a4c79b7a94ccb2",
+  "date_range": {
+    "end": "2025-01-31",
+    "start": "2025-01-01"
+  },
+  "feature_set_hash": "fixture_hash_ac572_v1",
+  "feature_set_version": "v1-fixture-ac572",
+  "label_def": {
+    "label_start_s": 120
+  },
+  "mint_cohort": [
+    "FIXTURE_MINT_AC572_AAAA1111",
+    "FIXTURE_MINT_AC572_BBBB2222"
+  ],
+  "row_count": 2,
+  "sources": [
+    "lake://lake/tapes"
+  ]
+}
