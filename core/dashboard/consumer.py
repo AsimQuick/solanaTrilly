@@ -30,6 +30,7 @@ Message types emitted by TapeFeedProcessor.iter_deltas():
 import json
 from typing import Any, AsyncGenerator, Callable
 
+from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from core.datasource import DataSource
@@ -231,8 +232,12 @@ class TapeFeedConsumer(AsyncWebsocketConsumer):
     async def connect(self) -> None:
         self.mint: str = self.scope["url_route"]["kwargs"].get("mint", "")
 
-        # Resolve channel group name from config (Principle #1)
-        config = (self._config_fn or _default_config_fn)()
+        # Resolve channel group name from config (Principle #1).
+        # get_active_config() may hit the Django ORM on a cache miss; the
+        # consumer runs in an async context, so the sync call MUST be wrapped
+        # in sync_to_async or Django raises SynchronousOnlyOperation (the
+        # WS-upgrade 500 caught by the AC-48.3 deploy smoke-test).
+        config = await sync_to_async(self._config_fn or _default_config_fn)()
         _dash = config.dashboard if config is not None else DashboardConfig()
         self.group_name: str = f"{_dash.ws_channel_prefix}_{self.mint}"
 
