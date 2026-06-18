@@ -1,10 +1,10 @@
 # ---
 # module: trading.models
-# sprint: sprint-13
-# story: US-64 AC-64.1, US-64 AC-64.2, US-66 AC-66.1, US-67 AC-67.1
+# sprint: sprint-13, sprint-14
+# story: US-64 AC-64.1, US-64 AC-64.2, US-66 AC-66.1, US-67 AC-67.1, US-72 AC-72.1
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-19
 # dependencies: django, trading.schemas, pydantic, core.encoders
 # ---
 """Django models for the trading.* config namespace (PRD §10/§17, AC-64.1).
@@ -203,6 +203,9 @@ class Position(models.Model):
     source = models.CharField(max_length=16, choices=SOURCE_CHOICES)
     mode = models.CharField(max_length=10, choices=MODE_CHOICES)
     status = models.CharField(max_length=8, choices=STATUS_CHOICES)
+
+    # --- Prediction score (null for copytrade positions with no model score) ---
+    score = models.FloatField(null=True, blank=True)
 
     # --- Entry fields (always populated at open time) ---
     entry_ts = models.DateTimeField()
