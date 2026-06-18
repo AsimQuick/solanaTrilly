@@ -1,8 +1,8 @@
 # Sprint 13
 
 **Phase:** planning
-**Progress:** 2/6 stories | 8/18 ACs
-**Last Updated:** 2026-06-18T15:51:32+00:00
+**Progress:** 3/6 stories | 9/18 ACs
+**Last Updated:** 2026-06-18T16:07:09+00:00
 
 ## Sprint Goal
 OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape settler + T2 full-pipeline replay harness, BEHIND THE REPLAY GATE, in OBSERVE/PAPER mode (NO capital, ZERO real orders), as the SHARED execution apparatus BOTH the prediction pipeline and copy-trade consume ('same execution path' parity, SPEC §0.1). Meet the P8 offline gate (PRD §16): 'T2 full-day replay → sandbox Positions render in the dashboard; T3 wired to CI; promotion blocked until T0+T1+T2 pass.' This wires copy-trade's Live toggle to the (still capital-OFF/Cutover-gated) shared path and lights up the operator's #1 dashboard ask (Live Positions). LIVE real-order execution against mainnet + capital remain the operator-driven Cutover (§16) — OUT OF SCOPE. Offline/replay by construction; zero firehose (8 Birdeye + 8 Helius remain banked). This is retrospective action item L1 and sprint-12 forward_plan item #1 — the keystone blocker for copy-trade LIVE, the prediction soak/endgame, and the P8-dependent dashboard views. CRITICAL SCOPING (non-negotiable): P8 per the PRD is observe/paper, behind the replay gate — NOT live capital. The execution code is PORTED and exercised by deterministic unit/replay tests against pinned IDL account-order fixtures, but is NEVER sent to mainnet (that is the operator-driven Cutover phase, which provisions the trading-wallet secret). Therefore sprint-13 is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION → ZERO firehose activation (8 Birdeye + 8 Helius remain banked), trading_enabled DEFAULTS False, ZERO real orders / ZERO capital this sprint. This mirrors sprint-12's 'observe-complete, LIVE out of scope' decision exactly.
@@ -181,14 +181,15 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
 ---
 
 ### US-66: The exit engine + the tape settler (the ONE oracle, §10.1/§10.2)
-**Status:** in-progress | **Priority:** high
+**Status:** done | **Priority:** high
 
 #### Acceptance Criteria
 - [x] **AC-66.1:** evaluate_exit_rules (injectable now for replay) implements the §10.1 priority ladder (RUG_PULL -> DISASTER_CAP -> STOP_LOSS -> NEXT_POLL_GUARD -> TAKE_PROFIT_PCT -> AUTO_SELL_TIMER -> CEILING/VOLUME_COLLAPSE/CONCENTRATION -> TRAILING (arms only if peak>entry·1.05, not in the 60s grace) -> STALE), config-driven (§5/§17). Verified by deterministic unit tests driving each rule to fire first with the correct trigger.
   - Dev: done
 - [x] **AC-66.2:** The tape settler simulate_tape_exit ports solanatrills/.../tape_resettle.py resettle() VERBATIM (§10.2): entry quote = last swap in [entry−30, entry]; fill = first swap at entry+2; walk post-swaps tracking peak with the exact trigger priority (TP -> DISASTER_CAP -> STOP_LOSS -> RUG_PULL armed only after +5% peak -> AUTO_SELL_TIMER); exit fill = first swap >= trigger_t+2; impact 2·size/(size+flow); un-enterable rows (no quote/fill, or slip > 15%) EXCLUDED, never booked as 0%/−100%. It is the SOLE paper/observe settler (Principle #5 — no second exit engine for paper). Verified deterministically against banked tape fixtures from solanatrills/lake/tapes/ (port-parity with the trills oracle).
   - Dev: done
-- [ ] **AC-66.3:** A settled paper position writes the SAME realized fields as a live CLOSED one (exit_price, exit_trigger, pnl_pct, peak_price, closed_at) into the shared US-64 Position model — so dashboard/analytics treat paper == live (settled == closed_at IS NOT NULL). Verified by a test asserting a settled PAPER position and a simulated live CLOSED position carry identical realized-field shape. New files carry metadata front matter. Zero firehose.
+- [x] **AC-66.3:** A settled paper position writes the SAME realized fields as a live CLOSED one (exit_price, exit_trigger, pnl_pct, peak_price, closed_at) into the shared US-64 Position model — so dashboard/analytics treat paper == live (settled == closed_at IS NOT NULL). Verified by a test asserting a settled PAPER position and a simulated live CLOSED position carry identical realized-field shape. New files carry metadata front matter. Zero firehose.
+  - Dev: done
 
 **Dependencies:** US-64
 
@@ -227,6 +228,23 @@ OPEN P8 — build the PumpSwap trading-execution chain + exit engine + tape sett
   **Files changed (3, all new):**
   - `trading/tape_settler.py` — `simulate_tape_exit()` public entry, plus `_config_to_pol()` (TradingConfig pct→fractional) and `_resettle()`, a **verbatim** line-by-line port of `solanatrills/analysis/wallet_strategy/tape_resettle.py::resettle()`. Honors §10.2: quote = last swap in [entry−30, entry]; fill = first swap at entry+2; peak-tracking walk with exact trigger priority (TP → DISASTER_CAP → STOP_LOSS → RUG_PULL armed only after +5% peak → AUTO_SELL_TIMER); exit fill = first swap ≥ trigger_t+2; impact `2·size/(size+flow)`; un-enterable rows (no-tape / dead / slip>15%) returned as `{'enterable': False}` and never booked as 0%/−100%.
     - **Fix applied:** removed an extra `if quote <= 0 or fill <= 0` guard the partial work had added inside the "verbatim" block — it does not e …
+  AC-66.3 done: 2363/2363 pass. No regressions.
+  
+  ---
+  
+  ## Implementation Summary
+  
+  **AC-66.3: Settled paper position writes identical realized fields as live CLOSED one**
+  
+  **Files created (2):**
+  
+  | File | Role |
+  |------|------|
+  | `trading/position_closer.py` | `settle_paper_position(position, settler_result, now=None, fill_price=None)` — bridges `simulate_tape_exit` output to the Position model. Raises `ValueError` for un-enterable results. Computes `exit_price = fill * (1 + pnl_pct/100)` and `peak_price = fill * (1 + peak_pct/100)` (absolute from percentage), derives `exit_ts` from `held` seconds, writes 7 fields via `save(update_fields=[...])`, transitions status to CLOSED. No import of `tape_settler` — layers are separated. |
+  | `trading/tests/test_position_closer_ac663.py` | 10 tests across 4 sections: §1 field writes (6 tests verifying each realized field is written), §2 core parity assertion (1 test — `_realized_field_shape()` confirms PAPER-settled and live-CLOSED positions carry identical 5-field shape + both appear in `closed_at IS NOT NULL` query), §3 sentinel (2 tests — settled paper included, unsettled excluded), §4 guard (1 test — unentered raises ValueError). |
+  
+  **Test counts:**
+  - AC-66 …
 
 **Tester Status:** approved
 **Tester Notes:**
