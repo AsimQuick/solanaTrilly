@@ -5,12 +5,13 @@
 #          builds/pushes web image to GHCR, then deploys to the VPS staging stack
 #          (-p solanatrilly, port 8002) and smoke-tests it.
 # sprint: sprint-4, sprint-10, sprint-11, sprint-12, sprint-13
-# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1 AC-52.3 US-53 AC-53.2 AC-53.3 US-54 AC-54.1 AC-54.3 US-55 AC-55.1 AC-55.2 AC-55.3 US-56 AC-56.3 US-57 AC-57.3 US-59 AC-59.3 US-63 AC-63.3 US-68 AC-68.3
+# story: US-6 AC-6.1 AC-6.3 AC-6.4 AC-6.5 US-8 AC-8.1 AC-8.2 AC-8.4 AC-8.5 US-12 AC-12.3 AC-12.4 AC-12.5 US-33 AC-33.3 US-39 AC-39.2 AC-39.3 US-45 AC-45.2 US-46 AC-46.2 US-48 AC-48.3 US-52 AC-52.1 AC-52.3 US-53 AC-53.2 AC-53.3 US-54 AC-54.1 AC-54.3 US-55 AC-55.1 AC-55.2 AC-55.3 US-56 AC-56.3 US-57 AC-57.3 US-59 AC-59.3 US-63 AC-63.3 US-68 AC-68.3 US-69 AC-69.3
 # created-by: dev-team
 # last-updated: 2026-06-18
 # ac-54.3-note: tester_confirm_ac543.md documents the reproducibility confirmation artifact
 # ac-53.2-fix: docker image prune -f before docker compose pull to prevent ENOSPC on VPS
 # ac-68.3-note: shared apparatus in-container import check verifies trading+copytrade integration
+# ac-69.3-note: Live Positions open+closed API smoke-tests confirm US-69 AC-69.2 routes live on VPS
 # ---
 #
 # GHCR auth uses the built-in GITHUB_TOKEN with packages:write — no extra secrets required.
@@ -393,6 +394,44 @@ jobs:
             exit 1
           fi
           echo "AC-68.3 PASS: shared apparatus imports in-container confirmed"
+
+      - name: Smoke-test US-69 Live Positions open API (AC-69.3)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-69.3 — verifying Live Positions open API returns HTTP 200 at http://${VPS_HOST}:8002/api/trading/positions/open/"
+          SMOKE_MAX_ATTEMPTS=6
+          SMOKE_RETRY_DELAY=5
+          for i in $(seq 1 "${SMOKE_MAX_ATTEMPTS}"); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_HOST}:8002/api/trading/positions/open/" || true)
+            if [ "$status" = "200" ]; then
+              echo "Live Positions open API PASS on attempt ${i}: GET /api/trading/positions/open/ returned HTTP 200"
+              exit 0
+            fi
+            echo "Attempt ${i}/${SMOKE_MAX_ATTEMPTS}: HTTP ${status} — retrying in ${SMOKE_RETRY_DELAY}s"
+            sleep "${SMOKE_RETRY_DELAY}"
+          done
+          echo "Live Positions open API FAILED: /api/trading/positions/open/ did not return HTTP 200 after ${SMOKE_MAX_ATTEMPTS} attempts"
+          exit 1
+
+      - name: Smoke-test US-69 Live Positions closed API (AC-69.3)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "AC-69.3 — verifying Live Positions closed API returns HTTP 200 at http://${VPS_HOST}:8002/api/trading/positions/closed/"
+          SMOKE_MAX_ATTEMPTS=6
+          SMOKE_RETRY_DELAY=5
+          for i in $(seq 1 "${SMOKE_MAX_ATTEMPTS}"); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://${VPS_HOST}:8002/api/trading/positions/closed/" || true)
+            if [ "$status" = "200" ]; then
+              echo "Live Positions closed API PASS on attempt ${i}: GET /api/trading/positions/closed/ returned HTTP 200"
+              exit 0
+            fi
+            echo "Attempt ${i}/${SMOKE_MAX_ATTEMPTS}: HTTP ${status} — retrying in ${SMOKE_RETRY_DELAY}s"
+            sleep "${SMOKE_RETRY_DELAY}"
+          done
+          echo "Live Positions closed API FAILED: /api/trading/positions/closed/ did not return HTTP 200 after ${SMOKE_MAX_ATTEMPTS} attempts"
+          exit 1
 
       - name: Verify solanaBilly isolation (AC-6.5 / AC-12.4)
         env:
