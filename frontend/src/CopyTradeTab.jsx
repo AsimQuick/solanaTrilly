@@ -1,18 +1,22 @@
 // ---
 // file: frontend/src/CopyTradeTab.jsx
 // stack: react+vite
-// purpose: Copy Trade dashboard tab (SPEC §8, US-63 AC-63.2).
+// purpose: Copy Trade dashboard tab (SPEC §8, US-63 AC-63.2) + click-to-download
+//   export (SPEC §11, US-63 AC-63.3).
 //   Renders the five §8 sections: (1) top bar — Upload JSON (with §6 wipe confirm),
 //   ON/OFF master toggle, Observe/Live mode toggle (Live is P8-gated INERT), editable
-//   SOL size / TP% / SL%, status chips (engine state, mode, # wallets, # open positions,
-//   cohort_id, created_at); (2) per-wallet PnL table (address short/copyable, #trades,
-//   win-rate, total realized PnL SOL & %, avg hold, last-trigger; SORTABLE by PnL and
-//   other columns); (3) open positions table; (4) recent trades log; (5) cohort summary.
+//   SOL size / TP% / SL%, Download Export button (AC-63.3), status chips (engine state,
+//   mode, # wallets, # open positions, cohort_id, created_at); (2) per-wallet PnL table
+//   (address short/copyable, #trades, win-rate, total realized PnL SOL & %, avg hold,
+//   last-trigger; SORTABLE by PnL and other columns); (3) open positions table;
+//   (4) recent trades log; (5) cohort summary.
 //   Honors §1/§8 NON-goals: NO candle charts/TA, NO per-row action buttons, NO
 //   per-wallet toggles. Data from /api/copytrade/* endpoints (US-63 AC-63.1).
+//   Export dispatched via /api/copytrade/export/trigger/ to celery-worker (NEVER
+//   web/gunicorn, #289); result polled via existing §6.5 /api/export/result/<task_id>/.
 // created-by: dev-team
 // sprint: sprint-12
-// story: US-63 AC-63.2
+// story: US-63 AC-63.2, AC-63.3
 // last-updated: 2026-06-18
 // ---
 
@@ -445,6 +449,13 @@ function CopyTradeTab() {
   // Upload
   const fileInputRef = useRef(null)
 
+  // Export (AC-63.3) — click-to-download via §6.5 celery export channel
+  const [exportTaskId, setExportTaskId] = useState(null)
+  const [exportStatus, setExportStatus] = useState(null)
+  const [exportMsg, setExportMsg] = useState(null)
+  const [exportError, setExportError] = useState(null)
+  const [exportLoading, setExportLoading] = useState(false)
+
   // ---------------------------------------------------------------------------
   // Data fetch — called on mount and after every successful action
   // ---------------------------------------------------------------------------
@@ -571,6 +582,67 @@ function CopyTradeTab() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Export handler (AC-63.3) — POST trigger → poll §6.5 result endpoint
+  // ---------------------------------------------------------------------------
+
+  function handleExport() {
+    setExportMsg(null)
+    setExportError(null)
+    setExportLoading(true)
+    setExportTaskId(null)
+    setExportStatus(null)
+    fetch('/api/copytrade/export/trigger/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+      .then((r) => (r.ok ? r.json() : r.json().then((d) => Promise.reject(d.error || `HTTP ${r.status}`))))
+      .then((data) => {
+        setExportTaskId(data.task_id)
+        setExportStatus('queued')
+        setExportMsg(`Export queued (task ${data.task_id.slice(0, 8)}…). Polling for result…`)
+        _pollExportResult(data.task_id, 0)
+      })
+      .catch((err) => {
+        setExportError(String(err))
+        setExportLoading(false)
+      })
+  }
+
+  function _pollExportResult(taskId, attempt) {
+    const MAX_ATTEMPTS = 20
+    const POLL_MS = 2000
+    if (attempt >= MAX_ATTEMPTS) {
+      setExportError('Export timed out — check the celery-worker logs.')
+      setExportLoading(false)
+      return
+    }
+    setTimeout(() => {
+      fetch(`/api/export/result/${taskId}/`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
+        .then((data) => {
+          setExportStatus(data.status)
+          if (data.status === 'complete') {
+            const rows = data.row_count != null ? ` (${data.row_count} rows)` : ''
+            const path = data.manifest && data.manifest.dataset_id ? ` — dataset: ${data.manifest.dataset_id}` : ''
+            setExportMsg(`Export complete${rows}${path}`)
+            setExportLoading(false)
+          } else if (data.status === 'failed') {
+            setExportError(`Export failed: ${data.error || 'unknown error'}`)
+            setExportLoading(false)
+          } else {
+            setExportMsg(`Export ${data.status}… (attempt ${attempt + 1}/${MAX_ATTEMPTS})`)
+            _pollExportResult(taskId, attempt + 1)
+          }
+        })
+        .catch((err) => {
+          setExportError(String(err))
+          setExportLoading(false)
+        })
+    }, POLL_MS)
+  }
+
   function handleFileChange(e) {
     const file = e.target.files && e.target.files[0]
     if (!file) return
@@ -663,7 +735,21 @@ function CopyTradeTab() {
           >
             Mode: {mode === 'observe' ? 'Observe → Live ⚠' : 'Live → Observe'}
           </button>
+
+          {/* Download Export (AC-63.3 / SPEC §11) — dispatches to celery via §6.5 channel */}
+          <button
+            style={btnStyle('secondary', exportLoading || actionLoading)}
+            onClick={handleExport}
+            disabled={exportLoading || actionLoading || !cohortId}
+            title={cohortId ? 'Export copytrade_positions CSV (dispatched to celery-worker)' : 'No active cohort — upload one first'}
+          >
+            {exportLoading ? 'Exporting…' : 'Download Export'}
+          </button>
         </div>
+
+        {/* Export feedback */}
+        {exportMsg && <InfoBox msg={exportMsg} />}
+        {exportError && <ErrorBox msg={`Export error: ${exportError}`} />}
 
         {/* SOL size / TP% / SL% overrides */}
         <form onSubmit={handleOverrides} style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '14px' }}>
