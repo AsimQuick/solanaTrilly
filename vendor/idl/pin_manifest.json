@@ -1,0 +1,14 @@
+{
+  "vendor": "pump-fun/pump-public-docs",
+  "path": "idl/pump_amm.json",
+  "source_commit": "1b822158844a60ca577df6ca122211b595a1a578",
+  "git_blob_sha": "f73cf11ac1a5380a0c710c010e19c89041beb5f7",
+  "sha256": "cd5c58a5dded23632aedb993b08cc0d2ba91bda2bb084560913464274d3bee50",
+  "pinned_ground_truth": {
+    "buy_account_count": 23,
+    "sell_account_count": 21,
+    "buy_discriminator": "66063d1201daebea",
+    "sell_discriminator": "33e685a4017f83ad"
+  },
+  "notes": "IDL is authoritative for account order per CLAUDE.md (IDL > chainstacklabs scripts). Sell omits the two volume accumulators present in buy."
+}
