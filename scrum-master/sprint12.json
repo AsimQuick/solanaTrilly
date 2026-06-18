@@ -148,7 +148,7 @@
     {
       "id": "US-61",
       "title": "OBSERVE-mode position lifecycle + OUR exits (SPEC \u00a73 exit/\u00a74/\u00a710): on a valid trigger, open a PAPER position (book fill at the live price, NO real order) and exit on the FIRST of TP / SL / near-curve-completion / max-hold \u2014 observe is the DEFAULT and the SAFETY GATE; LIVE real-order execution is OUT OF SCOPE (P8-gated)",
-      "status": "todo",
+      "status": "in-progress",
       "priority": "high",
       "dependencies": [
         "US-60"
@@ -157,8 +157,8 @@
         {
           "id": "61.1",
           "text": "On a valid US-60 trigger in OBSERVE (paper) mode, the engine OPENS a position by booking a fill at the current curve price (NO real order placed) and records the entry (cohort_id, wallet, mint, ts, price, sol_in=sol_size_per_trade) in copytrade_positions with mode='observe', status='open'. Verified by a pytest test that an observe open writes exactly one open position with the booked entry price and that NO real order-execution call is made (assert the execution apparatus is never invoked in observe mode).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "approved"
         },
         {
@@ -177,7 +177,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-61.1 done: ---\n\n**Implementation summary \u2014 US-61 AC-61.1**\n\n**Files added (all carry structured metadata front matter):**\n\n| File | Role |\n|---|---|\n| `copytrade/execution.py` | P8-gated execution stub. Defines `place_buy_order(mint, sol_amount)` which raises `NotImplementedError` \u2014 the boundary between the copy-trade engine and the real Solana order path (deferred to P8). Used as the mock target in AC-61.1's execution-apparatus guard test. |\n| `copytrade/position_opener.py` | Observe-mode position opener. `open_observe_position(record, entry_price, config)` books a paper fill at `entry_price`, writes exactly one `CopytradePosition` row with `mode='observe'`, `status='open'`, `sol_in=config.sol_size_per_trade`. Raises `ValueError` if `config.mode != 'observe'` (enforces the P8 gate). Never imports or calls `place_buy_order`. |\n| `copytrade/tests/test_position_opener_ac611.py` | 8 pytest tests covering: (1) exactly one row written, (2) mode/status correct, (3) entry_price matches booked fill, (4) sol_in matches config, (5) all record fields stored, (6) execution apparatus `assert_not_called()` guard, (7) `place_buy_order` raises `NotImplementedError`, (8) `ValueError` on `mode='live'` attempt. \u2026",
       "tester_status": "approved",
       "tester_notes": "All 3 ACs approved. Requirements are fully specified and testable. AC-61.1: single open position + assert no-execution-call \u2014 clear and deterministic. AC-61.2: four exit triggers each tested in isolation (first-to-fire wins) with PnL formulas explicitly stated \u2014 deterministic over replay. AC-61.3: AST guard (no auto-flip to live) + pytest (toggle-ON never places real order, never mutates live/trading flags) \u2014 the SPEC \u00a710 safety gate is enforceable and binary."
     },
@@ -271,5 +271,5 @@
     ]
   },
   "build_order": "US-58 (the \u00a75-isolated copytrade.* config namespace + the four copytrade_-prefixed tables + the cohort-JSON validator) is the FOUNDATION and runs FIRST \u2014 everything else reads its config/tables. After US-58, US-59 (the isolated copytrade_engine worker + Helius wallet-subscription seam, in both compose files, VPS-deployed) and US-60 (the correctness-critical copy-BUY trigger logic) are independent and may run in PARALLEL. US-61 (observe-mode position lifecycle + OUR TP/SL/CURVE/TIMER exits, observe-default safety gate) depends on US-60 (it consumes triggers). US-62 (cohort fresh-start lifecycle + ON/OFF) depends on US-58 (validator/tables) and US-61 (it settles open positions on wipe). US-63 (the 'Copy Trade' tab + export) depends on US-58/US-61/US-62 (the backends it surfaces) and US-48 (the React frontend it extends) + US-31 (the export channel it reuses). Every AC is independently verifiable OFFLINE/replay against synthetic wallet-tx streams + existing price/tape data + the existing US-31 export \u2014 ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked). LIVE real-order execution is OUT OF SCOPE (depends on the deferred P8 execution path); observe-complete is the SPEC's default and its validation arbiter, making it the correct non-over-committed first sprint of the epic.",
-  "last_updated": "2026-06-18T10:37:46+00:00"
+  "last_updated": "2026-06-18T10:48:55+00:00"
 }
