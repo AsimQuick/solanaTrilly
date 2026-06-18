@@ -83,7 +83,7 @@ _NINE_INVARIANT_TESTS = [
     "test_invariant_workflow_call_gate_no_inline_pytest",
     "test_invariant_rfc6455_valid_ws_key",
     "test_invariant_disk_exhaustion_fix",
-    "test_invariant_push_trigger_main",
+    "test_invariant_no_push_trigger",
 ]
 
 # ---------------------------------------------------------------------------
