@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "cohort_id": "whale-ct-2026-06-17-v1",
+  "created_at": "2026-06-17",
+  "description": "Top-10 pump.fun wallets by precision score — cohort June 2026",
+  "trade_config": {
+    "mode": "observe",
+    "sol_size_per_trade": 0.25,
+    "take_profit_pct": 200,
+    "stop_loss_pct": 40,
+    "exit_before_graduation": true,
+    "curve_completion_exit_pct": 90,
+    "max_hold_seconds": 1800,
+    "max_concurrent_positions": 20,
+    "copy_only_pumpfun_curve_buys": true,
+    "copy_first_buy_only": true,
+    "dedupe_token_across_wallets": true,
+    "mirror_wallet_sells": false
+  },
+  "wallets": [
+    {
+      "address": "EohTPNGdZkqH4e3gmhxSm5GqvtZ6PNpZMHmWXDsCVBx",
+      "rank": 1,
+      "precision": 0.38,
+      "total_pump_buys": 255,
+      "median_lead_min": 1.4
+    },
+    {
+      "address": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+      "rank": 2,
+      "precision": 0.35,
+      "total_pump_buys": 189,
+      "median_lead_min": 2.1
+    },
+    {
+      "address": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+      "rank": 3,
+      "precision": 0.32,
+      "total_pump_buys": 312,
+      "median_lead_min": 0.9
+    },
+    {
+      "address": "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWgRGmc",
+      "rank": 4,
+      "precision": 0.30,
+      "total_pump_buys": 421,
+      "median_lead_min": 1.8
+    },
+    {
+      "address": "BrEhWRNmzPKTc7J8UaJCDnS9j9t4YLkHsBwCcGNFJvnQ",
+      "rank": 5,
+      "precision": 0.28,
+      "total_pump_buys": 198,
+      "median_lead_min": 3.2
+    }
+  ]
+}
