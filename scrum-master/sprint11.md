@@ -1,8 +1,8 @@
 # Sprint 11
 
 **Phase:** planning
-**Progress:** 5/6 stories | 17/18 ACs
-**Last Updated:** 2026-06-18T07:19:20+00:00
+**Progress:** 6/6 stories | 18/18 ACs
+**Last Updated:** 2026-06-18T07:29:39+00:00
 
 ## Sprint Goal
 CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dashboard chain LIVE on the VPS, finally meeting the P6 phase DoD ('live on the VPS', PRD §15.2/§16 — 'works locally' is NOT done), and extend the dashboard with the two remaining NON-P8-gated operator views. Sprint-10 OPENED P6 at code level: all 6 stories / 18 ACs landed CI-green — the React+Vite+DRF+Channels foundation + ONE-tape-feed consumer (US-48), the tape→candle token-detail/research view that MEETS the P6 offline gate ('operator sees real candles for a replayed token', US-49), the cohort pattern-mining wall (US-50), and the human-annotation→labeled-export killer feature (US-51) — and US-46/I1 confirmed the US-43 blend scorer LIVE on the VPS (soak prerequisite I2 met). BUT the VPS deploy DoD is UNMET for 5 of 6 stories, blocked by deploy-LAYER defects (no application-code change needed): (J1) a one-line RFC-6455-invalid hardcoded Sec-WebSocket-Key in deploy.yml's WS smoke-test (base64 of 'solanatrilly_ac483_key', 22 bytes) → Daphne HTTP 400 on every handshake → fails AC-48.3 and transitively blocks US-49/US-50/US-51's VPS confirmation; (J2) an INDEPENDENT US-47 per-story deploy failure (run 27683660493) that predates and differs from the WS-key defect and was never root-caused (D5 'go to the box' not completed); (J4) a per-merge deploy regression (run 27681451880) that failed AFTER US-46's deliberate HEAD run (27680808876) was green — three distinct deploy failures co-occurred, only the WS-key one fully diagnosed, so the deploy path needs ONE consolidated holistic pass + a regression guard, not three point-fixes chased independently (the multi-sprint P0 deploy drag lesson). Sprint-11 closes all three at root, lands a GREEN HEAD deploy carrying the full dashboard chain, and the Tester VPS-confirms US-48/49/50/51 (J3) to declare the P6 offline gate VPS-CONFIRMED and the third PRD pillar's phase DoD DONE. THEN, riding the now-sound deploy path, it adds the two dashboard views that are NOT gated on P8 trading data and only lack a UI surface over EXISTING backends: (US-56) the Config & model control operator skin (PRD §13.2#6) — an operator skin over the §5 admin / US-9 PipelineConfig + US-42 ModelRegistry (view/diff/activate with django-simple-history audit, operator-gated actions, NO silent auto-start per US-11); and (US-57) the Feature Builder UI (PRD §13.2#7) — a UI surface over the §6.5 one-click labeled export that ALREADY EXISTS from US-31 (only the UI is missing). FIREHOSE: this sprint is OFFLINE/REPLAY-DRIVEN BY CONSTRUCTION — the deploy-gap fixes are CI/VPS infra, and both new views are UI surfaces over existing offline backends (config/registry/export); ZERO firehose activation (8 Birdeye + 8 Helius remain banked; the HARD RULE 'every activation banks a durable fixture' is untouched). DEFERRED (forward_plan, NOT committed — to avoid the over-commitment the retrospectives repeatedly warn against on heavy phases): I2 the operator-driven P7-3 SOAK (now UNBLOCKED by US-46) and I3 the ENDGAME (promote trilly_pregrad_v3_2 + start the firehose), both OPERATOR-DRIVEN not sprint stories; and the P8-DEPENDENT dashboard views — Live Positions board (§13.2#1, the operator's #1 ask), Calibration & PnL analytics (§13.2#4), and the Replay viewer's position-open/close overlay (§13.2#5) — which all need P8 position/PnL rows that do not exist until the P8 trading-execution path (PRD §10) lands. Build order: US-52 (J1 WS-key fix) and US-53 (J2 US-47 deploy root-cause) are independent deploy-layer fixes that may run FIRST / in parallel; US-54 (J4 consolidated deploy-path pass + regression guard) depends on both; US-55 (J3 green HEAD re-deploy + Tester VPS-confirm of US-48/49/50/51) depends on US-52/US-53/US-54 and is the dashboard-chain closeout; US-56 and US-57 (the two new operator views) depend on US-48's foundation + their existing backends and may run in parallel once the deploy path is sound.
@@ -425,14 +425,15 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
 ---
 
 ### US-57: P6 — the Feature Builder UI (PRD §13.2#7): a React+DRF UI surface over the §6.5 one-click labeled export that ALREADY EXISTS from US-31 (only the UI is missing) — trigger an export off the celery container, surface its MANIFEST/result; NOT P8-gated
-**Status:** in-progress | **Priority:** medium
+**Status:** done | **Priority:** medium
 
 #### Acceptance Criteria
 - [x] **AC-57.1:** A DRF endpoint + React view triggers the EXISTING §6.5 one-click labeled export (US-31) — NO new export math; the UI invokes the existing export Celery task, which runs OFF the celery container (NEVER web/gunicorn, #289) and re-derives from raw via the shared US-30 extractor (Principle #2; raw=immutable, §6.4.1). The export parameters (destination, dataset id) are config-driven (Principle #1). Verified by a pytest/AST test that the view delegates to the existing US-31 export task (not a re-implemented export) and that triggering it is a Celery task dispatch, not a web-view-side export.
   - Dev: done
 - [x] **AC-57.2:** The UI surfaces the export RESULT — the produced labeled dataset + its US-36-pattern MANIFEST (dataset id, content hash, LC_ALL=C sort, SHA-256 of decompressed bytes) and a run/status indicator — read back deterministically from the existing export output. Verified by a pytest test that, over a banked export fixture, the view reports the MANIFEST + content hash matching the produced dataset, deterministically (run-twice identical), OFFLINE (zero firehose).
   - Dev: done
-- [ ] **AC-57.3:** The Feature Builder view renders the trigger control + result/MANIFEST surface in the US-48 React frontend (built fresh per §14). No silent state change: triggering an export NEVER flips scoring_enabled/trading_enabled (US-11 guard green over this path) and the export is idempotent. The Feature Builder tests are wired into the canonical ci.yml 'test' job via an ImportError trap on the named endpoint/task function (H1) so a deleted/renamed surface fails pytest collection. New backend AND frontend files carry metadata front matter. Deployed + smoke-tested on the VPS.
+- [x] **AC-57.3:** The Feature Builder view renders the trigger control + result/MANIFEST surface in the US-48 React frontend (built fresh per §14). No silent state change: triggering an export NEVER flips scoring_enabled/trading_enabled (US-11 guard green over this path) and the export is idempotent. The Feature Builder tests are wired into the canonical ci.yml 'test' job via an ImportError trap on the named endpoint/task function (H1) so a deleted/renamed surface fails pytest collection. New backend AND frontend files carry metadata front matter. Deployed + smoke-tested on the VPS.
+  - Dev: done
 
 **Dependencies:** US-48, US-31
 
@@ -470,6 +471,22 @@ CLOSE THE P6 DASHBOARD VPS DEPLOY GAP — land the entire P6 research-first dash
   | `core/urls.py` | **modified** | Added `export_result_view` import + `api/export/result/<str:task_id>/` route; metadata header updated to include `AC-57.2` |
   | `frontend/src/FeatureBuilder.jsx` | **modified** | Added auto-poll (5s interval, 60s max) on `task_id` after trigger; MANIFEST panel on complete showing content_hash, date_range, feature_set_version, feature_set_hash, mint cohort size, sources; run/status indicator |
   | `core/tests/fixtures/export_fixture_ac572/features_1.csv` | **new** | …
+  AC-57.3 done: AC-57.3 is implemented and pushed. Here's the implementation summary for the orchestrator:
+  
+  ---
+  
+  ## Implementation Summary — US-57 AC-57.3
+  
+  **Branch:** `feature/US-57-AC-57.3`  
+  **Commit:** `32ff41d` — `[US-57] AC-57.3: Feature Builder UI wiring guard, US-11 no-silent-state-change AST guard, idempotency test, VPS smoke test`  
+  **Full suite:** 1826 passed, 0 failures (1809 before + 17 new)  
+  **Ruff:** clean (I001 import-order fix applied before commit)
+  
+  ### Files changed (2):
+  
+  | File | Type | What it does |
+  |---|---|---|
+  | `core/tests/test_feature_builder_ui_ac573.py` | **new** (477 lines) | AC-57.3 dedicated test file. Module-level H1 ImportError traps on `feature_export_trigger_view`, `export_result_view`, and `build_features` — deletion/rename of any surface fails pytest collection. 17 tests: 3 explicit H1 importable checks; 6 AST guards confirming `export_api.py` and `export_result_api.py` never set `scoring_enabled=True` / `trading_enabled=True` and never reference `PipelineState` (US-11 no-silent-state-change, extended to the Feature Builder path); 6 frontend wiring checks (FeatureBuilder.jsx exists, has metadata front matter, has trigger control, has MANIFEST surface; App.jsx …
 
 **Tester Status:** approved
 **Tester Notes:**
