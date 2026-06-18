@@ -1,18 +1,19 @@
 # ---
 # module: copytrade.urls
 # sprint: sprint-12
-# story: US-63 AC-63.1
+# story: US-63 AC-63.1, AC-63.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-18
 # dependencies: django, copytrade.api
 # ---
-"""URL routing for the copytrade DRF API (AC-63.1)."""
+"""URL routing for the copytrade DRF API (AC-63.1 + AC-63.3 export)."""
 
 from django.urls import path
 
 from copytrade.api import (
     copytrade_engine_view,
+    copytrade_export_trigger_view,
     copytrade_mode_view,
     copytrade_overrides_view,
     copytrade_pnl_view,
@@ -33,4 +34,6 @@ urlpatterns = [
     path("api/copytrade/engine/", copytrade_engine_view, name="copytrade_engine"),
     path("api/copytrade/mode/", copytrade_mode_view, name="copytrade_mode"),
     path("api/copytrade/overrides/", copytrade_overrides_view, name="copytrade_overrides"),
+    # POST — export (AC-63.3 / SPEC §11) — dispatches to celery-worker
+    path("api/copytrade/export/trigger/", copytrade_export_trigger_view, name="copytrade_export_trigger"),
 ]

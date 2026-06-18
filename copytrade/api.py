@@ -1,30 +1,33 @@
 # ---
 # module: copytrade.api
 # sprint: sprint-12
-# story: US-63 AC-63.1
+# story: US-63 AC-63.1, AC-63.3
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-18
 # dependencies: djangorestframework, copytrade.models, copytrade.cohort_lifecycle,
-#   copytrade.engine_control, copytrade.validators
+#   copytrade.engine_control, copytrade.validators, copytrade.tasks
 # ---
-"""DRF API for the Copy Trade dashboard tab (SPEC §8, AC-63.1).
+"""DRF API for the Copy Trade dashboard tab (SPEC §8, AC-63.1) + export (SPEC §11, AC-63.3).
 
 Surfaces the copytrade_ backends (read) and operator actions:
 
 GET endpoints:
-  /api/copytrade/pnl/          — per-wallet PnL rollup (CopytradePnlByWallet)
-  /api/copytrade/positions/    — open positions (CopytradePosition status=open)
-  /api/copytrade/trades/       — recent closed trades (exit_reason + mode)
-  /api/copytrade/summary/      — cohort summary (total trades, win-rate, PnL, since)
+  /api/copytrade/pnl/             — per-wallet PnL rollup (CopytradePnlByWallet)
+  /api/copytrade/positions/       — open positions (CopytradePosition status=open)
+  /api/copytrade/trades/          — recent closed trades (exit_reason + mode)
+  /api/copytrade/summary/         — cohort summary (total trades, win-rate, PnL, since)
 
 POST/action endpoints:
-  /api/copytrade/upload/       — JSON upload → US-58 validate → US-62 wipe+load
-  /api/copytrade/engine/       — ON/OFF toggle (body: {"engine_on": bool})
-  /api/copytrade/mode/         — mode (observe/live; live is P8-gated INERT this sprint)
-  /api/copytrade/overrides/    — persist sol_size / take_profit_pct / stop_loss_pct
+  /api/copytrade/upload/          — JSON upload → US-58 validate → US-62 wipe+load
+  /api/copytrade/engine/          — ON/OFF toggle (body: {"engine_on": bool})
+  /api/copytrade/mode/            — mode (observe/live; live is P8-gated INERT this sprint)
+  /api/copytrade/overrides/       — persist sol_size / take_profit_pct / stop_loss_pct
+  /api/copytrade/export/trigger/  — dispatch export task to celery-worker (AC-63.3 / SPEC §11)
 
 No new PnL/price math — reads the copytrade_ rows (Principle #2).
+Export runs OFF the celery container (#289 — NEVER web/gunicorn); result polled via
+the EXISTING §6.5 result endpoint GET /api/export/result/<task_id>/.
 """
 
 from django.db.models import Count, Q, Sum
@@ -42,6 +45,7 @@ from copytrade.models import (
     CopyTradeSettings,
     CopytradeWallet,
 )
+from copytrade.tasks import export_copytrade_positions
 from copytrade.validators import CohortJsonValidationError
 
 # ---------------------------------------------------------------------------
@@ -392,5 +396,65 @@ def copytrade_overrides_view(request):
             "sol_size_per_trade": settings.sol_size_per_trade,
             "take_profit_pct": settings.take_profit_pct,
             "stop_loss_pct": settings.stop_loss_pct,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST — dispatch copytrade positions export to celery-worker (SPEC §11 / AC-63.3)
+# ---------------------------------------------------------------------------
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def copytrade_export_trigger_view(request):
+    """Dispatch the §11 click-to-download copytrade export to the Celery worker (AC-63.3).
+
+    Reuses the EXISTING §6.5 export channel: dispatches
+    copytrade.tasks.export_copytrade_positions.delay() to the celery-worker
+    container — NEVER runs inline on web/gunicorn (#289 lesson).
+
+    Includes ALL CopytradePosition rows for the active cohort (open + closed)
+    so research can compare live results to the offline precision baseline.
+
+    Request body (JSON, optional):
+        dataset_id: str  — identifier for the MANIFEST.  Defaults to
+                          "copytrade_export_<cohort_id>".
+
+    Returns (JSON):
+        task_id    — Celery async result ID; poll via GET /api/export/result/<task_id>/
+        cohort_id  — cohort exported
+        status     — "queued"
+
+    HTTP 400 when no active cohort is configured.
+    """
+    settings = CopyTradeSettings.get()
+    cohort_id = settings.active_cohort_id
+
+    if cohort_id is None:
+        return Response(
+            {
+                "error": (
+                    "No active cohort configured. "
+                    "Upload a cohort JSON before triggering an export."
+                )
+            },
+            status=400,
+        )
+
+    body = request.data or {}
+    safe_id = cohort_id.replace("/", "_").replace(" ", "_")
+    dataset_id = body.get("dataset_id") or f"copytrade_export_{safe_id}"
+
+    task = export_copytrade_positions.delay(
+        cohort_id=cohort_id,
+        dataset_id=dataset_id,
+    )
+
+    return Response(
+        {
+            "task_id": task.id,
+            "cohort_id": cohort_id,
+            "status": "queued",
         }
     )
