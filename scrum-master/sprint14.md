@@ -1,8 +1,8 @@
 # Sprint 14
 
 **Phase:** in-progress
-**Progress:** 4/5 stories | 14/15 ACs
-**Last Updated:** 2026-06-18T22:14:45+00:00
+**Progress:** 5/5 stories | 15/15 ACs
+**Last Updated:** 2026-06-18T22:29:21+00:00
 
 ## Sprint Goal
 FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M1 keystone) is ALREADY CLOSED on main via PR #296 (merged 2026-06-18): the AC-68.3 in-container import failure (deploy run 27780073827) was root-caused to a FAULTY SMOKE-TEST HARNESS — the step ran a bare `python3 -c "from trading... import ..."` WITHOUT initialising Django, so a module that defines a model at import time raised AppRegistryNotReady; it was NOT a prod-image/dependency/migration/app-wiring gap. The fix (commit 35ce277) prepends `import django; django.setup();` to the AC-68.3 in-container check in deploy.yml; the deploy was re-dispatched GREEN and ALL steps pass (AC-68.3 apparatus import OK, US-69 Live Positions open/closed APIs HTTP 200 on 8002, solanaBilly isolation OK), retroactively closing sprint-13 US-68.3 + US-69.3. So US-70 is RECORDED DONE (no app code changed). Sprint-14's actionable scope is therefore: (1) M2 (US-71) — add a pre-deploy in-container import smoke against the BUILT staging image that ITSELF initialises Django (mirroring the PR #296 fix, so the exact AppRegistryNotReady class surfaces BEFORE the VPS, not after a whole-sprint round-trip) + pin it in the deploy regression guard; (2) M5 (US-72/US-73) — build the last two PRD §13.2 dashboard views now unblocked by the P8 Position/PnL rows: Calibration & PnL analytics (§13.2#4) and the Replay viewer position-open/close overlay (§13.2#5), both reading shared Position / replay-sandbox / tape rows (NO new PnL math, NO live Birdeye, zero firehose); (3) US-74 — close the recurring status-integrity artifact (A5/B4/C4/D2/D3) at the SOURCE: harden the US-13 guard to forbid phase:complete while any story tester_status is failed/blocked AND flag story-level dev_status:not-started on all-ACs-done stories, add a mechanical phase/dev_status promotion tool wired before the sprint-end deploy, and normalize sprint13.json to a guard-clean truthful state (it is now fully done — the deploy gate closed via US-70/PR #296). SAFETY GATE (non-negotiable, unchanged from sprint-13): trading_enabled DEFAULT False, ZERO real orders / ZERO capital, the live RPC/Sender send boundary ported but NEVER invoked (AST-guarded); §5 copy-trade isolation PRESERVED. OFFLINE/replay-driven by construction -> ZERO firehose activation (8 Birdeye + 8 Helius remain banked): the import smoke imports symbols inside the built image, and both new views read existing Position / replay-sandbox / tape rows (no live calls). CUTOVER / LIVE CAPITAL (PRD §16) + the prediction SOAK/ENDGAME (I2/I3/K2/K3/M3/M4) remain OPERATOR-DRIVEN — OUT OF SCOPE; the Copy-Trade v2 NON-goals (SPEC §1) remain deferred — do NOT add.
@@ -267,14 +267,15 @@ FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M
 ---
 
 ### US-74: Close the recurring status-integrity artifact (A5/B4/C4/D2/D3) AT THE SOURCE: mechanical phase/dev_status promotion before the sprint-end deploy + harden the US-13 guard to forbid phase:complete while any story is failed/blocked
-**Status:** in-progress | **Priority:** medium
+**Status:** done | **Priority:** medium
 
 #### Acceptance Criteria
 - [x] **AC-74.1:** The US-13 sprint_integrity_check.py guard is HARDENED: it FAILS if a sprint's top-level phase reads 'complete'/'done' while ANY story's tester_status is 'failed'/'blocked' (in addition to the existing per-story status:done + tester_status:failed/blocked check), AND it flags per-story dev_status:'not-started' on stories whose ACs are all dev_status:'done' (the recurring A5/B4/D2/D3 artifact). Verified by the guard catching a PLANTED fixture exhibiting the artifact (phase:complete + a story tester_status:failed + a story with all-done ACs but dev_status:not-started) and passing on a normalized fixture.
   - Dev: done
 - [x] **AC-74.2:** A mechanical phase-promotion tool (tools/promote_sprint_phase.py) promotes a sprint's top-level phase and each story's dev_status to the correct closeout value (NOT exempted/carved-out) and is wired to run BEFORE any sprint-end deploy (D2/D3) — so the board no longer trips the guard on our own staleness. Verified by a unit test driving the tool over a fixture (planning->review->done transitions; dev_status promoted to 'done' at closeout) + a check that the tool is referenced in the sprint-end deploy/closeout path.
   - Dev: done
-- [ ] **AC-74.3:** sprint13.json is NORMALIZED to a guard-clean, truthful state reflecting its ACTUAL final outcome — sprint-13 is fully DONE (its VPS deploy gate is now CLOSED via US-70/PR #296), so US-64..US-69 carry status:'done' with tester_status:'approved', every story's story-level dev_status is promoted to 'done' (closing the dev_status:'not-started'-on-done-AC-stories artifact present in the current sprint13.json), and the top-level phase reads 'done'/'review' (NOT 'planning'). The hardened US-13 guard (AC-74.1) is GREEN on both sprint13.json and sprint14.json. Verified by the guard passing in the canonical ci.yml 'test' job over all sprint*.json. After editing, re-index via mcp__devrag__reindex_document.
+- [x] **AC-74.3:** sprint13.json is NORMALIZED to a guard-clean, truthful state reflecting its ACTUAL final outcome — sprint-13 is fully DONE (its VPS deploy gate is now CLOSED via US-70/PR #296), so US-64..US-69 carry status:'done' with tester_status:'approved', every story's story-level dev_status is promoted to 'done' (closing the dev_status:'not-started'-on-done-AC-stories artifact present in the current sprint13.json), and the top-level phase reads 'done'/'review' (NOT 'planning'). The hardened US-13 guard (AC-74.1) is GREEN on both sprint13.json and sprint14.json. Verified by the guard passing in the canonical ci.yml 'test' job over all sprint*.json. After editing, re-index via mcp__devrag__reindex_document.
+  - Dev: done
 
 **Dependencies:** US-13
 
@@ -307,6 +308,22 @@ FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE. The sprint-13 VPS deploy gate (M
   |---|---|---|
   | `tools/promote_sprint_phase.py` | MODIFIED | Now promotes both the sprint top-level `phase` (planning/in-progress/**review** → `done`) AND each story's `dev_status` → `done` when all its ACs are `dev_status='done'` (NOT exempted — every story evaluated, via `promote_story_dev_statuses`). Targets `done` (not `complete`) at closeout. Supports default auto-promote, `--check-only` (exit 1 + remedy), and `--dry-run`. Non-mutating. |
   | `.github/workflows/ci.yml` | MODIFIED | Promoter step runs **before** the US-13 `sprint_integrity_check` (verif …
+  AC-74.3 done: Done. Here is the implementation summary for the orchestrator:
+  
+  ---
+  
+  **Implementation Summary — AC-74.3**
+  
+  **Files changed (2):**
+  
+  | File | Change | Purpose |
+  |---|---|---|
+  | `scrum-master/sprint13.json` | MODIFIED | Normalized to guard-clean, truthful done state: `"phase": "planning"` → `"phase": "done"`; US-64/65/66/67/68/69 each had `"dev_status": "not-started"` at story level despite all their ACs having `dev_status: "done"` — all 6 promoted to `"dev_status": "done"`. All stories already had `status: "done"` and `tester_status: "approved"`. After editing, re-indexed via `mcp__devrag__index_markdown`. |
+  | `core/tests/test_sprint13_normalized_ac743.py` | NEW (9 tests) | Verification suite for the normalization: file presence, phase=done, all stories status/tester/dev_status correct, guard passes directly with zero violations, promoter returns unchanged data (nothing more to do), sprint14.json guard also passes. |
+  
+  **Test count:** 9 new tests. Total suite: **2641 passed** (no regressions). Coverage: 86.29% (threshold 80% ✓).
+  
+  **Guard verification:** `python3 tools/sprint_integrity_check.py --skip-complete scrum-master/sprint*.json` passes on all sprint files. The promoter `promote …
 
 **Tester Status:** approved
 **Tester Notes:**
