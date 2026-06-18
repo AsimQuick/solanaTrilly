@@ -221,7 +221,7 @@
     {
       "id": "US-63",
       "title": "The 'Copy Trade' dashboard tab (SPEC \u00a78) + click-to-download export (SPEC \u00a711): a fresh React tab in the US-48 frontend \u2014 JSON upload, ON/OFF, Observe/Live, SOL size + TP%/SL% overrides, and the KEY per-wallet PnL table (+ open positions, recent trades, cohort summary); export includes copytrade_positions, off the celery container \u2014 VPS-deployed",
-      "status": "todo",
+      "status": "in-progress",
       "priority": "medium",
       "dependencies": [
         "US-58",
@@ -234,8 +234,8 @@
         {
           "id": "63.1",
           "text": "A DRF API surfaces the copytrade_ backends (read) and the operator actions: GET endpoints for the per-wallet PnL rollup, open positions, recent trades (with exit_reason TP/SL/CURVE/TIMER + mode), and the cohort summary (total trades, overall win-rate, net PnL SOL, since cohort start); POST/action endpoints for JSON upload (\u2192 US-58 validate \u2192 US-62 wipe+load), ON/OFF, mode (observe/live, with live INERT/P8-gated per US-61.3), and persisting the SOL size / TP% / SL% overrides to the config store (Principle #1). No new PnL/price math \u2014 reads the copytrade_ rows. Verified by API tests over a banked copytrade fixture (deterministic per-wallet PnL + positions + trades + summary; upload action triggers the \u00a76 wipe; override action persists).",
-          "checked": false,
-          "dev_status": "not-started",
+          "checked": true,
+          "dev_status": "done",
           "tester_status": "approved"
         },
         {
@@ -254,7 +254,7 @@
         }
       ],
       "dev_status": "not-started",
-      "dev_notes": "",
+      "dev_notes": "AC-63.1 done: Done. Branch `feature/US-63-AC-63.1` is pushed with commit `241e220`.\n\n---\n\n## Implementation Summary \u2014 US-63 AC-63.1\n\n**Files changed (4):**\n\n| File | Change |\n|---|---|\n| `copytrade/api.py` | **New** \u2014 8 DRF `@api_view` endpoints (no new PnL/price math \u2014 reads copytrade_ rows). GET: `copytrade_pnl_view` (per-wallet PnL rollup), `copytrade_positions_view` (open positions), `copytrade_trades_view` (closed trades with exit_reason + mode), `copytrade_summary_view` (total trades, win-rate, net PnL SOL, since). POST: `copytrade_upload_view` (\u2192 US-58 validate \u2192 US-62 wipe+load), `copytrade_engine_view` (ON/OFF via `set_engine_on`), `copytrade_mode_view` (observe persists; live returns HTTP 400 with P8-gated guard message), `copytrade_overrides_view` (sol_size/take_profit_pct/stop_loss_pct saved through Pydantic gate). |\n| `copytrade/urls.py` | **New** \u2014 URL routing for all 8 endpoints under `/api/copytrade/`. Metadata front matter included. |\n| `config/urls.py` | **Modified** \u2014 Added `path(\"\", include(\"copytrade.urls\"))` to wire the copytrade routes into the root URL configuration. |\n| `copytrade/tests/test_copytrade_api_ac631.py` | **New** \u2014 33 deterministic API tests over a banked cop \u2026",
       "tester_status": "approved",
       "tester_notes": "All 3 ACs approved. Requirements are fully specified and testable. AC-63.1: API tests over a banked copytrade fixture with deterministic assertion of PnL/positions/summary + action endpoints \u2014 no live data required. AC-63.2: frontend wiring checks (component present, App.jsx route, PnL table sortable, no candle-chart import) are static/structural \u2014 testable in CI. AC-63.3: H1 ImportError traps lock the surfaces into the canonical test job; celery-container constraint verifiable structurally. VPS gate (Copy-Trade tab + APIs HTTP 200, containers Up, solanaBilly untouched) is a runtime gate \u2014 approved for planning; tester re-confirms at sprint review after an actual green deploy run."
     }
@@ -271,5 +271,5 @@
     ]
   },
   "build_order": "US-58 (the \u00a75-isolated copytrade.* config namespace + the four copytrade_-prefixed tables + the cohort-JSON validator) is the FOUNDATION and runs FIRST \u2014 everything else reads its config/tables. After US-58, US-59 (the isolated copytrade_engine worker + Helius wallet-subscription seam, in both compose files, VPS-deployed) and US-60 (the correctness-critical copy-BUY trigger logic) are independent and may run in PARALLEL. US-61 (observe-mode position lifecycle + OUR TP/SL/CURVE/TIMER exits, observe-default safety gate) depends on US-60 (it consumes triggers). US-62 (cohort fresh-start lifecycle + ON/OFF) depends on US-58 (validator/tables) and US-61 (it settles open positions on wipe). US-63 (the 'Copy Trade' tab + export) depends on US-58/US-61/US-62 (the backends it surfaces) and US-48 (the React frontend it extends) + US-31 (the export channel it reuses). Every AC is independently verifiable OFFLINE/replay against synthetic wallet-tx streams + existing price/tape data + the existing US-31 export \u2014 ZERO firehose activation this sprint (8 Birdeye + 8 Helius remain banked). LIVE real-order execution is OUT OF SCOPE (depends on the deferred P8 execution path); observe-complete is the SPEC's default and its validation arbiter, making it the correct non-over-committed first sprint of the epic.",
-  "last_updated": "2026-06-18T11:51:37+00:00"
+  "last_updated": "2026-06-18T12:06:06+00:00"
 }
