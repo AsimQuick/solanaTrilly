@@ -141,8 +141,55 @@ Engine code is on main but **NOT yet deployed/observed live**. To observe:
 
 ---
 
-## 4. Budget & safety
-- Firehose activations: **1 of 3 used** (the inference window). Turn OFF after each
-  window (`firehose_state off` + `docker rm -f st_fh`). 2 remain.
-- Real capital NEVER used; `trading_enabled=False`; copytrade `engine_on=False`,
-  `mode=observe`. solanaBilly untouched.
+## 4. LIVE RESULTS (session-2 close — observe/paper)
+
+### Copy-trade FIRED end-to-end on real data ✅ (DoD #2 — detection + open proven live)
+Within ~5 min of turning the engine on, a cohort scalp wallet (`57stAMFv`) made a
+qualifying ≥ $250 pump.fun buy and the engine copied it (paper):
+```
+[copytrade] copy-buy: head=consistent_scalp wallet=57stAMFv mint=AeFdnEYr usd=25.00 entry=5.15e-05
+[copytrade] sell-signal: wallet=57stAMFv mint=AeFdnEYr (mirror trigger queued)   # source wallet sold ~6s later
+```
+A `CopytradePosition` (head=consistent_scalp, $25, open) + a shared `trading.Position`
+(source=copytrade) were written; the mirror SELL-signal was correctly detected.
+
+**Bug found live + FIXED (#325):** the mirror close could not BOOK — Birdeye REST has
+no price for a fresh pre-grad mint, so `manage_positions` silently skipped and the
+position sat open. Fix: book the mirror exit at the **source wallet's sell price**
+(curve price from its sell event), unit-consistent with the curve-price entry and
+independent of Birdeye. Deployed. (One orphan paper position predates the fix — harmless;
+re-upload the cohort to wipe it.)
+
+**Copy-trade still open:** observe a full scalp OPEN→CLOSE live *with the #325 fix*
+(needs another trigger+sell); the **moonshot `our_trailing`** head needs a continuous
+pre-grad price feed (the wallet sub only sees cohort-wallet swaps, not all swaps on the
+held mint; Birdeye REST has no pre-grad price) — a documented price-source follow-up;
+Dashboard Copy-Trade tab.
+
+### Inference — root cause FIXED (#323); clean validation window running
+The score-join never fired because the collection task DIED on the first Helius WS close
+(~49 min in, no reconnect — §2). Fixed + deployed; reconnect code confirmed in the live
+image. **A clean 3 h window is running** (the FINAL activation) to validate the reconnect
+live (watch for `collection: started … attempt=2` at ~49 min) and catch a
+`score (N>0) → paper-buy → paper-sell` in the back half.
+**IMPORTANT LESSON:** a mid-window `deploy.yml` run KILLS `st_fh` (the deploy's compose
+recreates services / removes orphans). **Do NOT deploy while a firehose window is
+running.** (This cut the earlier combined window short.)
+
+## 5. Budget & safety
+- Firehose activations: **3 of 3 used** (window 1 = 90 min diagnosis; window 2 = brief
+  combined run, killed early by a mid-window deploy; window 3 = clean 3 h validation,
+  running). **0 remain — ask the operator before another.** TURN OFF after the window
+  (`firehose_state off` + `docker rm -f st_fh`); the daemon auto-stops at max-runtime but
+  the `firehose_active` flag persists. Copy-trade `engine_on=True` keeps its own Helius
+  wallet sub running for ongoing observation — `engine_on=False` to stop that spend.
+- Real capital NEVER used; `trading_enabled=False`; copytrade `mode=observe`.
+  solanaBilly untouched.
+
+## 6. PRs this session (all merged)
+`#317` sol_usd spot · `#318` cohort-2.0 schema/models/lifecycle · `#319` live Helius
+wallet source + USD trigger · `#320` per-head exit evaluators · `#321` engine runtime ·
+`#322` handoff + seed TTL · `#323` **firehose collection/graduation reconnect** (inference
+root-cause fix) · `#324` handoff correction · `#325` **scalp mirror-exit price**
+(live-found fix). Copy-trade suite **376 green**; firehose reconnect + 131 firehose tests
+green.
