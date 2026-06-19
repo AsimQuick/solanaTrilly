@@ -238,59 +238,51 @@ def _collect_migration_modules():
             yield f.name, migration_cls
 
 
-def test_migrations_only_reference_copytrade_app():
-    """All operations in copytrade migrations must target the copytrade app only.
+_COPYTRADE_MODELS = {
+    "copytradesettings",
+    "copytradecohort",
+    "copytradewallet",
+    "copytradeposition",
+    "copytradepnlbywallet",
+}
 
-    Specifically, RunSQL / RunPython must not reference non-copytrade table names,
-    and CreateModel/AlterField/etc. are only generated for copytrade_ tables.
+
+def _target_model_name(op) -> str:
+    """Best-effort target model name for a migration operation.
+
+    Field ops (AddField/AlterField/RemoveField/RenameField) and index/constraint
+    ops carry ``model_name``; model-level ops (CreateModel/DeleteModel/
+    AlterUniqueTogether/RenameModel) carry ``name``.  Run* ops and
+    SeparateDatabaseAndState carry neither and are handled by the caller.
+    """
+    return getattr(op, "model_name", "") or getattr(op, "name", "") or ""
+
+
+def test_migrations_only_reference_copytrade_app():
+    """Every copytrade migration operation must target a copytrade_ model (§5).
+
+    Resolves the target model correctly per operation type — field ops report the
+    model via ``model_name`` (NOT ``name``, which is the field), so a plain
+    ``AddField`` no longer needs to be wrapped in SeparateDatabaseAndState to pass.
+    RunSQL/RunPython carry no model and are guarded by the dependency test below.
     """
     for fname, migration_cls in _collect_migration_modules():
         for op in migration_cls.operations:
-            op_type = type(op).__name__
-            # Check dependencies — should only be within copytrade or none
-            # (we only flag actual schema operations)
-            if hasattr(op, "name"):
-                # CreateModel, DeleteModel, AlterUniqueTogether etc have .name
-                table_name = getattr(op, "name", "") or ""
-                # Django operation .name is the model name, not table name.
-                # Model name check: must NOT be a known core model.
-                if table_name and table_name not in (
-                    "CopyTradeSettings",
-                    "CopytradeCohort",
-                    "CopytradeWallet",
-                    "CopytradePosition",
-                    "CopytradePnlByWallet",
-                ):
-                    # Allow index operations on known copytrade models
-                    if op_type in ("AddIndex", "RemoveIndex"):
-                        idx = getattr(op, "index", None)
-                        if idx is not None:
-                            # The model_name attribute identifies the target model
-                            model_name = getattr(op, "model_name", "")
-                            assert model_name.lower() in (
-                                "copytradesettings",
-                                "copytradecohort",
-                                "copytradewallet",
-                                "copytradeposition",
-                                "copytradepnlbywallet",
-                            ), (
-                                f"{fname}: operation {op_type} targets non-copytrade model '{model_name}'"
-                            )
-                    elif op_type == "AlterUniqueTogether":
-                        model_name = getattr(op, "name", "")
-                        assert model_name.lower() in (
-                            "copytradesettings",
-                            "copytradecohort",
-                            "copytradewallet",
-                            "copytradeposition",
-                            "copytradepnlbywallet",
-                        ), (
-                            f"{fname}: AlterUniqueTogether targets non-copytrade model '{model_name}'"
-                        )
-                    else:
-                        pytest.fail(
-                            f"{fname}: operation {op_type} targets non-copytrade model '{table_name}'"
-                        )
+            # SeparateDatabaseAndState: inspect its inner state operations.
+            if type(op).__name__ == "SeparateDatabaseAndState":
+                candidates = list(getattr(op, "state_operations", []) or [])
+            else:
+                candidates = [op]
+            for cand in candidates:
+                cand_type = type(cand).__name__
+                if cand_type in ("RunSQL", "RunPython"):
+                    continue  # no model target — covered by the dependency guard
+                model_name = _target_model_name(cand)
+                if not model_name:
+                    continue
+                assert model_name.lower() in _COPYTRADE_MODELS, (
+                    f"{fname}: operation {cand_type} targets non-copytrade model '{model_name}'"
+                )
 
 
 def test_migration_dependencies_do_not_reference_core():

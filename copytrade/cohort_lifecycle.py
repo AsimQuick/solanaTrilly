@@ -46,7 +46,7 @@ from copytrade.models import (
     CopytradeWallet,
 )
 from copytrade.position_manager import close_position
-from copytrade.validators import validate_cohort_json
+from copytrade.validators import validate_cohort_json, validate_cohort_v2
 
 
 def _parse_created_at(s: str) -> datetime:
@@ -160,3 +160,97 @@ def replace_cohort(
         CopytradeWallet.objects.bulk_create(wallet_rows)
 
     return cohort
+
+
+def replace_cohort_v2(
+    new_cohort_json: dict,
+    settlement_price: float,
+    settlement_ts: datetime,
+) -> CopytradeCohort:
+    """SPEC §6 full cohort REPLACEMENT for the `copytrade-2.0` contract.
+
+    Same fresh-start discipline as ``replace_cohort`` (validate-first, then a
+    single atomic stop -> settle -> purge -> persist -> subscribe), adapted to the
+    two-head 2.0 cohort:
+
+      - the full cohort dict (``global`` + ``strategies``) is stored verbatim in
+        ``CopytradeCohort.trade_config`` (the audit record + the per-head exit
+        source the engine reads at runtime),
+      - ``CopyTradeSettings`` is updated with the engine-wide ``global`` knobs
+        (mode / usd_size_per_trade / min_trigger_buy_usd / pump_fun_only /
+        max_concurrent_positions / copy_first_buy_only / dedupe), and
+      - each wallet row is tagged with its ``strategy_id`` (which head owns it),
+        so a trigger resolves the right exit.
+
+    ``mirror_wallet_sells`` on the settings row stays False — mirror-sell is a
+    PER-HEAD exit (consistent_scalp) read from ``strategies``, not a global flag.
+
+    Validates BEFORE any mutation so a bad payload never leaves the system
+    without an active cohort.  ``settlement_ts`` is injected (never datetime.now()).
+    """
+    cohort = validate_cohort_v2(new_cohort_json)
+
+    with transaction.atomic():
+        settings = CopyTradeSettings.get()
+
+        # --- Step 1: Auto-stop engine ---
+        settings.engine_on = False
+        settings.save()
+
+        # --- Step 2: Settle open positions ---
+        open_positions = list(
+            CopytradePosition.objects.filter(status=CopytradePosition.STATUS_OPEN)
+        )
+        for pos in open_positions:
+            close_position(pos, CopytradePosition.EXIT_SETTLE, settlement_price, settlement_ts)
+
+        # --- Step 3: Purge all copytrade_* records ---
+        CopytradePnlByWallet.objects.all().delete()
+        CopytradePosition.objects.all().delete()
+        CopytradeWallet.objects.all().delete()
+        CopytradeCohort.objects.all().delete()
+
+        # --- Step 4: Persist new cohort (full 2.0 dict verbatim) ---
+        created_at_dt = _parse_created_at(cohort.created_at)
+        cohort_row = CopytradeCohort.objects.create(
+            cohort_id=cohort.cohort_id,
+            created_at=created_at_dt,
+            description=cohort.description,
+            trade_config=new_cohort_json,
+            active=True,
+        )
+
+        # Apply the engine-wide `global` knobs to the settings singleton.
+        g = cohort.global_
+        settings.active_cohort_id = cohort.cohort_id
+        settings.mode = g.mode
+        settings.usd_size_per_trade = g.usd_size_per_trade
+        settings.min_trigger_buy_usd = g.trigger.min_trigger_buy_usd
+        settings.pump_fun_only = g.trigger.pump_fun_only
+        settings.max_concurrent_positions = g.max_concurrent_positions
+        settings.copy_first_buy_only = g.trigger.copy_first_buy_only
+        settings.dedupe_token_across_wallets = g.trigger.dedupe_token_across_wallets
+        settings.mirror_wallet_sells = False  # per-head exit, not a global flag
+        settings.save()
+
+        # --- Step 5: Subscribe new wallets, tagged with their head ---
+        # Dedupe by address (a wallet in two enabled heads is subscribed ONCE;
+        # the FIRST head in declaration order owns it — the cross-head dedupe rule).
+        wallet_rows = []
+        seen: set[str] = set()
+        for strat in cohort.enabled_strategies():
+            for w in strat.wallets:
+                if w.address in seen:
+                    continue
+                seen.add(w.address)
+                wallet_rows.append(
+                    CopytradeWallet(
+                        cohort_id=cohort.cohort_id,
+                        address=w.address,
+                        rank=w.rank,
+                        strategy_id=strat.id,
+                    )
+                )
+        CopytradeWallet.objects.bulk_create(wallet_rows)
+
+    return cohort_row
