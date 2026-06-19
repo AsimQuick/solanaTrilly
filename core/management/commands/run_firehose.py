@@ -263,6 +263,23 @@ class FirehoseDaemon:
     # Task a — COLLECTION (Helius birth tape -> TapeRecorder -> TapeStore)
     # ------------------------------------------------------------------
 
+    def _on_recorded_swap(self, mint: str, ns) -> None:
+        """STREAM-AS-RECORDED tap: tee each recorded swap into the TapeStore NOW.
+
+        Fired synchronously by the collection TapeRecorder the instant a landed
+        swap is normalized — i.e. while the continuous Helius birth-tape source is
+        STILL streaming, long before recorder.run() would return.  This is the fix
+        for the batch-vs-stream bug: previously self._tape was only populated
+        AFTER recorder.run() returned, but for a continuous live source run()
+        never returns until shutdown, so the scoring task always read an empty
+        tape ("0 swaps — deferring") and the model never scored.
+
+        Keyed by the mint string (matching Token.mint, which the scoring task's
+        self._tape.get(mint) uses); the stored value is the SAME swap-dict shape
+        assemble_pregrad_features() / _swaps_to_trade_tuples() already expect.
+        """
+        self._tape.add(mint, _ns_to_swap(ns))
+
     async def _collection_loop(self) -> None:
         try:
             recorder, source = await sync_to_async(
@@ -275,13 +292,13 @@ class FirehoseDaemon:
             self._active_sources.append(source)
         if recorder is None:
             return
-        logger.info("%s collection: started (Helius birth-tape -> recorder).", LOG_PREFIX)
-        # recorder.run() drives the recorder until its (bounded/live) source ends
-        # or the task is cancelled on shutdown.
+        logger.info("%s collection: started (Helius birth-tape -> recorder, streaming into TapeStore).", LOG_PREFIX)
+        # recorder.run() drives the recorder until its (continuous/bounded) source
+        # ends or the task is cancelled on shutdown.  Each landed swap is teed into
+        # self._tape IN REAL TIME via the recorder's on_swap tap (see
+        # _build_collection / _on_recorded_swap) — NOT mirrored after run() returns,
+        # which for a continuous live source never happens until shutdown.
         await recorder.run()
-        # Mirror recorded swaps into the TapeStore for the scoring task.
-        for mint, ns in getattr(recorder, "_normalized_swaps_with_mints", []):
-            self._tape.add(mint, _ns_to_swap(ns))
         logger.info("%s collection: recorder finished (%d swaps).", LOG_PREFIX, len(recorder.normalized_swaps))
 
     # ------------------------------------------------------------------
@@ -454,7 +471,9 @@ class FirehoseDaemon:
             logger.warning("%s collection: HELIUS_API_KEY missing — collection disabled.", LOG_PREFIX)
             return None, None
         token_store = self._load_token_store_sync()
-        recorder = build_birth_tape_recorder(api_key, token_store)
+        recorder = build_birth_tape_recorder(
+            api_key, token_store, on_swap=self._on_recorded_swap
+        )
         return recorder, recorder._source  # the bounded source for disconnect
 
     def _build_graduation(self):
