@@ -389,61 +389,135 @@ class FirehoseDaemon:
         """
         from core.firehose.live_pregrad_buffer import LivePreGradBuffer
 
-        try:
-            source = await sync_to_async(
-                self._collection_factory, thread_sensitive=True
-            )()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("%s collection: factory failed (%s) — skipping collection.", LOG_PREFIX, exc)
-            return
-        if source is None:
-            logger.warning("%s collection: no source built — collection disabled.", LOG_PREFIX)
-            return
-        self._active_sources.append(source)
-
-        # Resolve the pre-grad idle TTL in a SYNC context (ORM read) so the buffer
-        # itself never touches the ORM on the async hot path.
+        # Resolve the pre-grad idle TTL ONCE in a SYNC context (ORM read) so the
+        # buffer never touches the ORM on the async hot path.
         idle_ttl_s = await sync_to_async(
             self._resolve_pre_grad_ttl_sync, thread_sensitive=True
         )()
 
-        buffer = LivePreGradBuffer(
-            source=source,
-            store=self._tape,
-            clock=self._clock,
-            is_graduated=self._collection_graduated,
-            idle_ttl_s=idle_ttl_s,
-        )
-        logger.info(
-            "%s collection: started (Helius birth-tape -> live pre-grad buffer, "
-            "ALL mints, no anchor gate; idle_ttl=%.0fs).",
-            LOG_PREFIX, buffer._idle_ttl_s,
-        )
-        await buffer.run()
-        logger.info(
-            "%s collection: buffer finished (%d swaps across %d mints).",
-            LOG_PREFIX, buffer._buffered_count, len(self._tape.mints()),
-        )
+        # RECONNECT LOOP (fix): the live Helius WS closes after a while (idle /
+        # plan limit) — ``buffer.run()`` then returns NORMALLY ("buffer
+        # finished").  The OLD code ran it ONCE, so over a long window collection
+        # silently DIED mid-run (observed ~49 min in: "buffer finished" then no
+        # further swaps), the buffer went stale, and nothing graduating afterward
+        # could ever score.  Here we rebuild the source and RESTART, RETAINING the
+        # accumulated buffer (self._tape), until the firehose flips inactive or the
+        # daemon stops.  Shutdown/deadline/flip cancels this task -> CancelledError
+        # propagates out of the loop.
+        backoff = 1.0
+        attempt = 0
+        while not self._stop.is_set():
+            try:
+                source = await sync_to_async(
+                    self._collection_factory, thread_sensitive=True
+                )()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s collection: factory failed (%s) — retry in %.0fs.",
+                    LOG_PREFIX, exc, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+                continue
+            if source is None:
+                logger.warning("%s collection: no source built — collection disabled.", LOG_PREFIX)
+                return
+            backoff = 1.0  # a successful build resets the backoff
+            self._active_sources.append(source)
+            buffer = LivePreGradBuffer(
+                source=source,
+                store=self._tape,
+                clock=self._clock,
+                is_graduated=self._collection_graduated,
+                idle_ttl_s=idle_ttl_s,
+            )
+            attempt += 1
+            logger.info(
+                "%s collection: started (Helius birth-tape -> live pre-grad buffer, "
+                "attempt=%d, ALL mints, no anchor gate; idle_ttl=%.0fs).",
+                LOG_PREFIX, attempt, idle_ttl_s,
+            )
+            try:
+                await buffer.run()
+            except asyncio.CancelledError:
+                raise  # daemon shutdown / deadline / flip — propagate to stop cleanly
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s collection: stream error (%s) — will reconnect.", LOG_PREFIX, exc)
+            finally:
+                try:
+                    self._active_sources.remove(source)
+                except ValueError:
+                    pass
+
+            # The WS closed (normal return or error).  Stop only if the firehose
+            # flipped inactive or we are shutting down; otherwise reconnect —
+            # RETAINING the buffer so in-flight pre-grad tape survives the drop.
+            firehose_active, _, _ = await self._read_state()
+            if self._stop.is_set() or not firehose_active:
+                logger.info(
+                    "%s collection: stream ended; firehose inactive/stopping — collection done "
+                    "(buffer retained: %d mints).",
+                    LOG_PREFIX, len(self._tape.mints()),
+                )
+                return
+            logger.info(
+                "%s collection: stream ended (buffer retained: %d swaps across %d mints) "
+                "— reconnecting in %.0fs.",
+                LOG_PREFIX, buffer._buffered_count, len(self._tape.mints()), backoff,
+            )
+            await asyncio.sleep(backoff)
 
     # ------------------------------------------------------------------
     # Task b — GRADUATION (Birdeye new-listing -> DetectionConsumer)
     # ------------------------------------------------------------------
 
     async def _graduation_loop(self) -> None:
-        try:
-            consumer, source = await sync_to_async(
-                self._graduation_factory, thread_sensitive=True
-            )()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("%s graduation: factory failed (%s) — skipping graduation.", LOG_PREFIX, exc)
-            return
-        if source is not None:
-            self._active_sources.append(source)
-        if consumer is None:
-            return
-        logger.info("%s graduation: started (Birdeye new-listing -> DetectionConsumer).", LOG_PREFIX)
-        await consumer.run()
-        logger.info("%s graduation: consumer finished (%d events).", LOG_PREFIX, len(consumer.processed))
+        # RECONNECT LOOP (same fix as collection): the Birdeye new-listing WS can
+        # also close over a long window; running the consumer ONCE would silently
+        # stop graduation detection (no new graduations -> no scoring triggers).
+        # Rebuild + restart until the firehose flips inactive / the daemon stops.
+        backoff = 1.0
+        while not self._stop.is_set():
+            try:
+                consumer, source = await sync_to_async(
+                    self._graduation_factory, thread_sensitive=True
+                )()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s graduation: factory failed (%s) — retry in %.0fs.",
+                    LOG_PREFIX, exc, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+                continue
+            if consumer is None:
+                logger.warning("%s graduation: no consumer built — graduation disabled.", LOG_PREFIX)
+                return
+            backoff = 1.0
+            if source is not None:
+                self._active_sources.append(source)
+            logger.info("%s graduation: started (Birdeye new-listing -> DetectionConsumer).", LOG_PREFIX)
+            try:
+                await consumer.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s graduation: stream error (%s) — will reconnect.", LOG_PREFIX, exc)
+            finally:
+                if source is not None:
+                    try:
+                        self._active_sources.remove(source)
+                    except ValueError:
+                        pass
+            firehose_active, _, _ = await self._read_state()
+            if self._stop.is_set() or not firehose_active:
+                logger.info("%s graduation: stream ended; firehose inactive/stopping — done.", LOG_PREFIX)
+                return
+            logger.info(
+                "%s graduation: stream ended (%d events) — reconnecting in %.0fs.",
+                LOG_PREFIX, len(consumer.processed), backoff,
+            )
+            await asyncio.sleep(backoff)
 
     # ------------------------------------------------------------------
     # Task e — POST-GRAD COLLECTION (bounded BirdeyeSwapSource subscriptions)
@@ -489,11 +563,16 @@ class FirehoseDaemon:
             if mint in self._postgrad_seen:
                 continue  # already subscribed (or completed) this run
             if len(self._postgrad_tasks) >= max_subs:
+                # At capacity.  grad_order is oldest-first, so every later mint is
+                # also over-capacity — log the FIRST and BREAK rather than logging
+                # one line PER over-capacity mint PER tick (that flooded the log
+                # with ~50k lines in a 90-min window).  Remaining mints are retried
+                # on a later tick once a slot frees.
                 logger.info(
                     "%s postgrad: at-capacity skip mint=%s (n_active=%d max=%d) — retry later.",
                     LOG_PREFIX, mint, len(self._postgrad_tasks), max_subs,
                 )
-                continue
+                break
             self._postgrad_seen.add(mint)
             task = asyncio.create_task(
                 self._postgrad_subscription(mint, graduated_block_time, ttl_s),
