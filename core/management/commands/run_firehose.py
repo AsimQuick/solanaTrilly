@@ -6,7 +6,8 @@
 # created-by: dev-team
 # last-updated: 2026-06-19
 # dependencies: django, asyncio, logging, signal, asgiref,
-#               core.tape.birdeye_graduation_source, core.tape.helius_birth_tape_source,
+#               core.tape.birdeye_graduation_source, core.tape.birdeye_swap_source,
+#               core.tape.birdeye_swap_mapper, core.tape.helius_birth_tape_source,
 #               core.management.commands.run_listener, core.detection.consumer,
 #               core.firehose.spine, core.clock, core.resolver, core.models
 # ---
@@ -36,8 +37,19 @@ CONCURRENT TASKS (asyncio) while active
                      PRE_FEATURE_NAMES from the collected tape and score via the
                      active BlendScorer.  Gated by PipelineState.scoring_enabled.
   d. PAPER TRADE   — when a score passes the active gate, open + settle a PAPER
-                     position via the P8 apparatus.  HARD RULE: trading_enabled
-                     is False -> fills booked at observed price, NO real send.
+                     position via the P8 apparatus over the POST-grad tape.  HARD
+                     RULE: trading_enabled is False -> fills booked at observed
+                     price, NO real send.
+  e. POST-GRAD     — a BOUNDED manager that, for each newly-graduated Token,
+                     opens a BirdeyeSwapSource(api_key, mint) and streams that
+                     mint's POST-grad PumpSwap swaps into self._postgrad_tape for
+                     a bounded TTL (= score_at_elapsed_s + outcome.window_s), then
+                     disconnects.  SPEND BOUND: at most
+                     tape.max_postgrad_subscriptions concurrent subscriptions
+                     (default 5); over capacity, new mints are skipped + logged.
+                     These POST-grad swaps are what the paper-trade settler walks
+                     so a paper position can actually be entered + exited (the
+                     PRE-grad tape only ever produces "enterable:False").
 
 OBSERVABILITY
 =============
@@ -45,7 +57,8 @@ Every stage logs a stable, greppable "[FIREHOSE] <stage>: ..." line.
 
 CLEAN SHUTDOWN
 ==============
-SIGTERM/SIGINT and firehose_active->False both cancel all tasks and disconnect.
+SIGTERM/SIGINT and firehose_active->False both cancel all tasks and disconnect
+(including every open post-grad subscription).
 
 SEAMS (Principle #7)
 ====================
@@ -53,6 +66,13 @@ Concrete sources are built ONLY in the source-factory methods (the adapter
 wiring layer).  Those factories are injectable so the offline tests drive the
 daemon with mock sources — the daemon logic itself never instantiates a concrete
 live source in the test path.
+
+CLOCK (AC-2.2)
+==============
+There is NO datetime.now()/time.time() in this module.  All "now" for the
+post-grad TTL (and scoring schedule) comes from the injected daemon clock; the
+asyncio event-loop clock (loop.time()) is used only for cooperative sleeping,
+never as a wall-clock timestamp.
 """
 import asyncio
 import logging
@@ -77,19 +97,22 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_SCORE_TICK_S = 5.0
+DEFAULT_POSTGRAD_TICK_S = 5.0
+DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
 
 
 # ---------------------------------------------------------------------------
-# Tape store — collects pre-grad swaps keyed by mint (shared across tasks)
+# Tape store — collects swaps keyed by mint (shared across tasks)
 # ---------------------------------------------------------------------------
 
 
 class TapeStore:
-    """In-memory pre-grad swap store keyed by mint, fed by the collection task.
+    """In-memory swap store keyed by mint.
 
-    The collection TapeRecorder records swaps; this store lets the scoring task
-    read a mint's pre-grad tape to assemble features.  It is the live analogue of
-    the lake the offline FeatureExtractor reads.
+    Used twice in the daemon: once for the PRE-grad tape (fed by the collection
+    task, read by scoring to assemble features) and once for the POST-grad tape
+    (fed by the post-grad subscription manager, read by the paper-trade settler).
+    It is the live analogue of the lake the offline FeatureExtractor reads.
     """
 
     def __init__(self) -> None:
@@ -119,9 +142,13 @@ class FirehoseDaemon:
         max_runtime_s:      Optional bound (seconds) for the whole run (None =
                             run until firehose_active flips False or a signal).
         score_tick_s:       Seconds between scoring-scheduler ticks.
+        postgrad_tick_s:    Seconds between post-grad subscription-manager ticks.
         collection_factory: () -> (recorder, source) for the COLLECTION task.
                             Injected as None in production (built from settings).
         graduation_factory: () -> (consumer, source) for the GRADUATION task.
+        postgrad_factory:   (mint) -> a BirdeyeSwapSource-like source for the
+                            POST-grad task (connect/events/disconnect).  Injected
+                            for tests; built from settings in production.
         clock:              Injected Clock (defaults to WallClock).
     """
 
@@ -131,20 +158,29 @@ class FirehoseDaemon:
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
         max_runtime_s: float | None = None,
         score_tick_s: float = DEFAULT_SCORE_TICK_S,
+        postgrad_tick_s: float = DEFAULT_POSTGRAD_TICK_S,
         collection_factory=None,
         graduation_factory=None,
+        postgrad_factory=None,
         clock=None,
     ) -> None:
         self._poll_interval_s = poll_interval_s
         self._max_runtime_s = max_runtime_s
         self._score_tick_s = score_tick_s
+        self._postgrad_tick_s = postgrad_tick_s
         self._collection_factory = collection_factory or self._build_collection
         self._graduation_factory = graduation_factory or self._build_graduation
+        self._postgrad_factory = postgrad_factory or self._build_postgrad_source
         self._clock = clock or WallClock()
         self._tape = TapeStore()
+        self._postgrad_tape = TapeStore()
         self._scored_mints: set[str] = set()
         self._stop = asyncio.Event()
         self._active_sources: list = []
+        # POST-grad subscription bookkeeping.
+        self._postgrad_tasks: dict[str, asyncio.Task] = {}
+        self._postgrad_seen: set[str] = set()
+        self._postgrad_sources: dict[str, object] = {}
 
     # ------------------------------------------------------------------
     # PipelineState reads (sync ORM -> async via sync_to_async)
@@ -215,26 +251,31 @@ class FirehoseDaemon:
             pass
 
     # ------------------------------------------------------------------
-    # Active run — launch the four concurrent tasks + the flip-watcher
+    # Active run — launch the concurrent tasks + the flip-watcher
     # ------------------------------------------------------------------
 
     async def _run_active(self, deadline) -> None:
-        """Launch collection/graduation/scoring tasks; stop on flip/stop/deadline."""
+        """Launch collection/graduation/scoring/post-grad tasks; stop on flip/stop/deadline."""
         self._active_sources = []
+        self._postgrad_tasks = {}
+        self._postgrad_seen = set()
+        self._postgrad_sources = {}
 
         collection_task = asyncio.create_task(self._collection_loop(), name="firehose-collection")
         graduation_task = asyncio.create_task(self._graduation_loop(), name="firehose-graduation")
         scoring_task = asyncio.create_task(self._scoring_loop(), name="firehose-scoring")
+        postgrad_task = asyncio.create_task(self._postgrad_loop(), name="firehose-postgrad")
         watcher_task = asyncio.create_task(self._flip_watcher(deadline), name="firehose-watcher")
 
-        tasks = [collection_task, graduation_task, scoring_task, watcher_task]
+        tasks = [collection_task, graduation_task, scoring_task, postgrad_task, watcher_task]
         try:
             # The watcher returns when firehose flips False / stop / deadline.
             await watcher_task
         finally:
-            for t in (collection_task, graduation_task, scoring_task):
+            for t in (collection_task, graduation_task, scoring_task, postgrad_task):
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            await self._cancel_postgrad_subscriptions()
             await self._disconnect_all_sources()
             logger.info("%s active run stopped — all tasks cancelled, sources disconnected.", LOG_PREFIX)
 
@@ -258,6 +299,25 @@ class FirehoseDaemon:
             except Exception:  # noqa: BLE001 - best-effort cleanup
                 logger.debug("%s source disconnect raised (ignored).", LOG_PREFIX)
         self._active_sources = []
+
+    async def _cancel_postgrad_subscriptions(self) -> None:
+        """Cancel + await every open post-grad subscription (clean shutdown).
+
+        Each subscription task disconnects its BirdeyeSwapSource in its own
+        finally; this also disconnects any source whose task is mid-cancellation.
+        """
+        tasks = list(self._postgrad_tasks.values())
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for src in list(self._postgrad_sources.values()):
+            try:
+                await src.disconnect()
+            except Exception:  # noqa: BLE001 - best-effort cleanup
+                logger.debug("%s postgrad: source disconnect raised (ignored).", LOG_PREFIX)
+        self._postgrad_tasks = {}
+        self._postgrad_sources = {}
 
     # ------------------------------------------------------------------
     # Task a — COLLECTION (Helius birth tape -> TapeRecorder -> TapeStore)
@@ -322,6 +382,145 @@ class FirehoseDaemon:
         logger.info("%s graduation: consumer finished (%d events).", LOG_PREFIX, len(consumer.processed))
 
     # ------------------------------------------------------------------
+    # Task e — POST-GRAD COLLECTION (bounded BirdeyeSwapSource subscriptions)
+    # ------------------------------------------------------------------
+
+    async def _postgrad_loop(self) -> None:
+        """Manager: open a bounded set of per-mint post-grad swap subscriptions.
+
+        On each tick it polls the graduated Token rows (in graduation order) and,
+        for any newly graduated mint not yet subscribed, opens a BirdeyeSwapSource
+        subscription IF there is capacity (tape.max_postgrad_subscriptions
+        concurrent).  Over capacity, the mint is logged "at-capacity skip" and
+        retried on a later tick (no silent drop).  Each subscription self-terminates
+        after its per-mint TTL; finished tasks free a capacity slot.
+        """
+        while not self._stop.is_set():
+            try:
+                await self._postgrad_tick()
+            except Exception as exc:  # noqa: BLE001 - never let one tick kill the loop
+                logger.warning("%s postgrad: tick error (%s).", LOG_PREFIX, exc)
+            await self._sleep_or_stop(self._postgrad_tick_s, None)
+
+    async def _postgrad_tick(self) -> None:
+        """One post-grad manager pass: reap finished tasks, open up to capacity."""
+        firehose_active, _, _ = await self._read_state()
+        if not firehose_active:
+            return
+
+        # Reap finished subscriptions (TTL-expired / errored) to free slots.
+        for mint in [m for m, t in self._postgrad_tasks.items() if t.done()]:
+            self._postgrad_tasks.pop(mint, None)
+
+        try:
+            max_subs, ttl_s, grad_order = await sync_to_async(
+                self._postgrad_plan_sync, thread_sensitive=True
+            )()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s postgrad: cannot build plan (%s).", LOG_PREFIX, exc)
+            return
+
+        # grad_order is (mint, graduated_block_time) in graduation order (oldest first).
+        for mint, graduated_block_time in grad_order:
+            if mint in self._postgrad_seen:
+                continue  # already subscribed (or completed) this run
+            if len(self._postgrad_tasks) >= max_subs:
+                logger.info(
+                    "%s postgrad: at-capacity skip mint=%s (n_active=%d max=%d) — retry later.",
+                    LOG_PREFIX, mint, len(self._postgrad_tasks), max_subs,
+                )
+                continue
+            self._postgrad_seen.add(mint)
+            task = asyncio.create_task(
+                self._postgrad_subscription(mint, graduated_block_time, ttl_s),
+                name=f"firehose-postgrad-{mint[:8]}",
+            )
+            self._postgrad_tasks[mint] = task
+            logger.info(
+                "%s postgrad: subscribe mint=%s (n_active=%d max=%d ttl=%.0fs)",
+                LOG_PREFIX, mint, len(self._postgrad_tasks), max_subs, ttl_s,
+            )
+
+    async def _postgrad_subscription(
+        self, mint: str, graduated_block_time: int, ttl_s: float
+    ) -> None:
+        """Stream one mint's POST-grad swaps into self._postgrad_tape until TTL.
+
+        Opens a BirdeyeSwapSource (via the injectable factory), reads its events,
+        maps each to the internal swap-dict shape the settler / _swaps_to_trade_tuples
+        expect, anchors ``rel`` to graduation, and appends only POST-grad swaps
+        (rel >= 0) into the post-grad tape.  Tears down at TTL or on cancellation;
+        ALWAYS disconnects the source in finally.
+
+        TTL is measured against the injected daemon clock (AC-2.2): the deadline
+        is ``clock.now() + ttl_s`` and each loop iteration re-reads clock.now().
+        """
+        from datetime import timedelta
+
+        source = self._postgrad_factory(mint)
+        self._postgrad_sources[mint] = source
+        count = 0
+        deadline = self._clock.now() + timedelta(seconds=ttl_s)
+        try:
+            await source.connect()
+            async for event in source.events():
+                if self._stop.is_set() or self._clock.now() >= deadline:
+                    break
+                swap = _postgrad_event_to_swap(event, mint, graduated_block_time)
+                if swap is None:
+                    continue
+                # Only POST-grad swaps feed the settler (entry/exit walk lives at
+                # grad + score_at_elapsed_s onward).  rel >= 0 == post-grad.
+                if swap["rel"] < 0:
+                    continue
+                self._postgrad_tape.add(mint, swap)
+                count += 1
+                logger.info(
+                    "%s postgrad: swap mint=%s (count=%d)", LOG_PREFIX, mint, count,
+                )
+                if self._clock.now() >= deadline:
+                    break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one mint's stream must not kill others
+            logger.warning("%s postgrad: stream error mint=%s (%s).", LOG_PREFIX, mint, exc)
+        finally:
+            try:
+                await source.disconnect()
+            except Exception:  # noqa: BLE001 - best-effort cleanup
+                logger.debug("%s postgrad: disconnect raised mint=%s (ignored).", LOG_PREFIX, mint)
+            self._postgrad_sources.pop(mint, None)
+            logger.info(
+                "%s postgrad: ttl-expired mint=%s total=%d swaps", LOG_PREFIX, mint, count,
+            )
+
+    def _postgrad_plan_sync(self) -> tuple[int, float, list[tuple[str, int]]]:
+        """Return (max_concurrent, per_mint_ttl_s, [(mint, grad_bt) ...] grad order).
+
+        max_concurrent  = tape.max_postgrad_subscriptions (config-driven bound).
+        per_mint_ttl_s  = scoring.score_at_elapsed_s + outcome.window_s — covers
+                          entry at grad+score_at_elapsed_s plus the exit horizon.
+        grad order      = Token rows ordered by graduated_block_time (oldest first)
+                          so we subscribe to the earliest graduates first.
+        """
+        from core.models import Token
+        from core.resolver import get_active_config
+
+        config = get_active_config()
+        if config is None:
+            return DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS, 0.0, []
+
+        max_subs = int(
+            getattr(config.tape, "max_postgrad_subscriptions", DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS)
+        )
+        ttl_s = float(config.scoring.score_at_elapsed_s + config.outcome.window_s)
+
+        grad_order: list[tuple[str, int]] = []
+        for tok in Token.objects.order_by("graduated_block_time"):
+            grad_order.append((tok.mint, int(tok.graduated_block_time)))
+        return max_subs, ttl_s, grad_order
+
+    # ------------------------------------------------------------------
     # Task c — SCORING SCHEDULER (+ Task d paper-trade, gated)
     # ------------------------------------------------------------------
 
@@ -368,21 +567,56 @@ class FirehoseDaemon:
             result = score_pregrad(features, scorer=scorer, ref_dist=ref_dist)
             blend = float(result["blend_score"])
             passed = gate_passes(blend, gate=scoring["gate"], threshold=threshold)
-            self._scored_mints.add(mint)
+            # Mark scored ONLY once we've scored — the paper leg may still defer
+            # below if the post-grad tape has not arrived yet (re-checked next tick
+            # via _scored_mints exclusion being bypassed for the deferred set).
             logger.info(
                 "%s score: mint=%s score=%.4f gate=%s",
                 LOG_PREFIX, mint, blend, "pass" if passed else "fail",
             )
 
             if not passed:
+                self._scored_mints.add(mint)
                 continue
 
-            # --- Task d: PAPER TRADE (gated, observe/paper only) ---
-            trades = _swaps_to_trade_tuples(swaps)
+            # --- Task d: PAPER TRADE over the POST-grad tape (gated) ---
+            postgrad_swaps = self._postgrad_tape.get(mint)
             entry_ts_epoch = float(graduated_block_time + scoring["score_at_elapsed_s"])
+            if not self._postgrad_enterable(postgrad_swaps, entry_ts_epoch, scoring):
+                logger.info(
+                    "%s paper: mint=%s awaiting post-grad swaps — deferring "
+                    "(have %d post-grad swaps).",
+                    LOG_PREFIX, mint, len(postgrad_swaps),
+                )
+                # Do NOT mark scored: retry the paper leg on a later tick while the
+                # post-grad subscription is still filling its TTL window.
+                continue
+
+            self._scored_mints.add(mint)
+            trades = _swaps_to_trade_tuples(postgrad_swaps)
             await sync_to_async(self._paper_trade_sync, thread_sensitive=True)(
                 mint, blend, trades, entry_ts_epoch, trading_cfg, size_sol, sol_usd, trading_enabled,
             )
+
+    @staticmethod
+    def _postgrad_enterable(
+        postgrad_swaps: list[dict], entry_ts_epoch: float, scoring: dict
+    ) -> bool:
+        """Cheap pre-check: is there enough post-grad tape to attempt a settle?
+
+        The settler needs at least one swap in the pre-entry quote window
+        [entry-30, entry] AND at least one swap at/after entry+2 (the fill).  This
+        mirrors the settler's own 'dead' guard so we DEFER (retry) rather than
+        book nothing when the post-grad stream simply hasn't arrived yet.
+        """
+        if not postgrad_swaps:
+            return False
+        gap_s = 30
+        lat_s = 2
+        bts = [float(s.get("block_time", 0)) for s in postgrad_swaps]
+        has_quote = any(entry_ts_epoch - gap_s <= t <= entry_ts_epoch for t in bts)
+        has_fill = any(t >= entry_ts_epoch + lat_s for t in bts)
+        return has_quote and has_fill
 
     # ------------------------------------------------------------------
     # Sync ORM/scoring helpers (run via sync_to_async)
@@ -494,6 +728,18 @@ class FirehoseDaemon:
         consumer = DetectionConsumer(source=source, clock=self._clock, config_fn=get_active_config)
         return consumer, source
 
+    def _build_postgrad_source(self, mint: str):
+        """Build a POST-grad BirdeyeSwapSource for one mint (adapter wiring layer).
+
+        REUSES the existing BirdeyeSwapSource(api_key, mint) — the proven Birdeye
+        SUBSCRIBE_TXS PumpSwap swap client (no handshake rewrite).  This is the
+        ONLY place the concrete post-grad source is instantiated.
+        """
+        from core.tape.birdeye_swap_source import BirdeyeSwapSource
+
+        api_key = getattr(settings, "BIRDEYE_API_KEY", None)
+        return BirdeyeSwapSource(api_key=api_key, mint=mint)
+
     @staticmethod
     def _load_token_store_sync() -> dict[str, object]:
         from types import SimpleNamespace
@@ -525,6 +771,37 @@ def _ns_to_swap(ns) -> dict:
     }
 
 
+def _postgrad_event_to_swap(event: dict, mint: str, graduated_block_time: int) -> dict | None:
+    """Map one BirdeyeSwapSource event to the settler's collected-swap dict shape.
+
+    The BirdeyeSwapSource yields RAW Birdeye SUBSCRIBE_TXS events; map_birdeye_swap
+    is the one pure mapper to the internal §7.1 swap shape (block_time, price,
+    vol_sol, side, ...).  ``rel`` is anchored to graduation
+    (block_time - graduated_block_time) EXACTLY as _ns_to_swap / assemble use it,
+    so the settler's entry/exit walk (over absolute block_time) lines up with the
+    grad + score_at_elapsed_s entry the scoring task computes.
+
+    Returns None for an unmappable event (the caller skips None).
+    """
+    from core.tape.birdeye_swap_mapper import map_birdeye_swap
+
+    mapped = map_birdeye_swap(event)
+    if mapped is None:
+        return None
+    block_time = int(mapped.get("block_time", 0))
+    return {
+        "block_time": block_time,
+        "slot": int(mapped.get("slot", 0)),
+        "signature": str(mapped.get("signature", "")),
+        "rel": float(block_time - graduated_block_time),
+        "price": float(mapped.get("price", 0.0) or 0.0),
+        "side": str(mapped.get("side", "")),
+        "vol": float(mapped.get("vol_sol", 0.0) or 0.0),
+        "vol_usd": float(mapped.get("vol_usd", 0.0) or 0.0),
+        "owner": mapped.get("owner"),
+    }
+
+
 def _swaps_to_trade_tuples(swaps) -> list[tuple[float, float, float]]:
     """Convert collected swaps to (block_time, price, usd_volume) settler tuples.
 
@@ -551,8 +828,9 @@ class Command(BaseCommand):
     help = (
         "Run the gated live firehose daemon (OBSERVE/PAPER only). Polls "
         "PipelineState.firehose_active; while active runs collection -> "
-        "graduation -> score -> paper-trade. NEVER places real orders; NEVER "
-        "mutates firehose_active. Clean shutdown on SIGTERM and on flip-to-False."
+        "graduation -> score -> paper-trade (over a bounded post-grad swap "
+        "collection). NEVER places real orders; NEVER mutates firehose_active. "
+        "Clean shutdown on SIGTERM and on flip-to-False."
     )
 
     def add_arguments(self, parser):
@@ -565,12 +843,16 @@ class Command(BaseCommand):
         parser.add_argument(
             "--score-tick-seconds", type=float, default=DEFAULT_SCORE_TICK_S,
             help=f"Seconds between scoring-scheduler ticks (default {DEFAULT_SCORE_TICK_S}).")
+        parser.add_argument(
+            "--postgrad-tick-seconds", type=float, default=DEFAULT_POSTGRAD_TICK_S,
+            help=f"Seconds between post-grad subscription-manager ticks (default {DEFAULT_POSTGRAD_TICK_S}).")
 
     def handle(self, *args, **options):
         daemon = FirehoseDaemon(
             poll_interval_s=options["poll_interval"],
             max_runtime_s=options.get("max_runtime_seconds"),
             score_tick_s=options["score_tick_seconds"],
+            postgrad_tick_s=options["postgrad_tick_seconds"],
         )
         try:
             asyncio.run(self._run(daemon))
