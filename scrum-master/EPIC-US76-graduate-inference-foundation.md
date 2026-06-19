@@ -177,3 +177,26 @@ team implements against this section. File:line from the live tree.
 **DoD additions (binding):** `reference_dist.json` committed + CI guard against the `None` fallback; 3600s
 cap enforced + tested on a >60-min token; ≥20-swaps gate enforced + tested; threshold sourced from the
 artifact; AC-1 fixtures committed; gap-heal source named + normalized.
+
+---
+
+## Dev Team Status
+
+**Dev Team Status:** in-progress (SCORING-CORRECTNESS slice P1.1/P1.2/P2.4/P2.5 complete; P3/P6 AC-1/AC-3 remaining)
+
+**Dev Team Notes:**
+- PR #329: `feature/US-76-scoring-correctness` — all four binding Tester revisions implemented
+- P1.1 (pool-of-1 bug): generated `reference_dist.json` (24708 samples, ctrl/oracle/liq) from full
+  `pregrad_enrich.csv` via all 15 v3.2 LightGBM boosters; committed to `models/trilly_pregrad_v3_2/`;
+  `.gitignore` negation + `git add -f` to bypass the `models/` exclusion; `ConfigurationError` guard
+  blocks the `ref_dist=None` silent fallback when `scoring_enabled=True`
+- P1.2 (3600s cap): `assemble_pregrad_features` now filters `windowed = [s for s in normalized if -3600 <= s["rel"] < 0]`
+- P2.4 (>=20 gate): `assemble_pregrad_features` returns `None` if `len(windowed) < 20`; all existing
+  6-swap test fixtures expanded to 20 swaps (4 test files updated)
+- P2.5 (threshold): `_threshold_from_model()` reads `rank_cut` from `meta.json` `depth_menu`
+  (30/day -> 0.7916); fallback 0.7916 if meta absent
+- Test count: 42 pass, 3 skip (local solanatrills path needed), full suite 2819 pass
+- Pre-existing failure `test_sprint14_guard_passes` (sprint14.json phase stale) confirmed pre-exists on main
+- Remaining work (not in this slice): P3 gap-heal source naming (AC-3), P6 AC-1 fixture with decimals,
+  P3/P6 AC-5 golden-parity Tier-1 replay corpus
+- blocker-type: none
