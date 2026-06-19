@@ -734,7 +734,12 @@ class FirehoseDaemon:
         # Trading knobs come from the shared TradingSettings singleton (P8).
         trading_cfg = TradingSettings.get().to_schema()
         # Paper size: prefer config.trading.paper_size_usd (USD) -> SOL via sol_usd.
-        sol_usd = 140.0
+        # SOL/USD comes from the shared cached spot (core.pricing.sol_usd) — one
+        # USD oracle for BOTH heads; replaces the former hardcoded 140.0 (a latent
+        # staleness bug).  Fail-safe: falls back to 140.0 on any price miss.
+        from core.pricing.sol_usd import get_sol_usd
+
+        sol_usd = get_sol_usd()
         paper_size_usd = None
         if config and config.trading:
             paper_size_usd = config.trading.paper_size_usd
