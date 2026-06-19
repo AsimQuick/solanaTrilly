@@ -134,3 +134,57 @@ is first opened. Budget is NOT consumed until that moment.
 - **Fixture schema:** the exact raw Birdeye SUBSCRIBE_TXS payload (inner `data` of each `TXS_DATA` envelope), one JSON object per gzipped line — Birdeye-native fields (`blockUnixTime`, `txHash`, `tokenAddress`, `tokenPrice`, `volumeUSD`, `owner`, `side`, `from`/`to` legs, `poolId`, `blockNumber` …). Raw = immutable truth; normalized views are re-derivable.
 - **Tooling:** `tools/firehose_activate.py` (deliberate, time-boxed, NO synthetic fallback — banks reality or nothing).
 - **Budget after this row:** **9 Birdeye / 10 Helius**.
+
+---
+
+## Live Firehose Runtime Spine (observe/paper) — feat/live-firehose-spine
+
+The live runtime that ties **collection → graduation → score → paper-trade** is wired
+in this branch. It is **OBSERVE/PAPER ONLY** and gated by
+`PipelineState.firehose_active`. It **never places real orders** and **never mutates**
+`firehose_active`, `scoring_enabled`, or `trading_enabled`.
+
+### Components
+- `core/tape/birdeye_graduation_source.py` — `BirdeyeGraduationSource(DataSource)`:
+  Birdeye new-listing/graduation WS (`SUBSCRIBE_TOKEN_NEW_LISTING` → `TOKEN_NEW_LISTING_DATA`,
+  both config-driven). Emits `MEME_DATA` graduation events for `DetectionConsumer`.
+- `core/management/commands/run_firehose.py` — the gated daemon (collection via
+  Helius birth-tape recorder; graduation via Birdeye new-listing → DetectionConsumer;
+  scoring scheduler over the 20 `PRE_FEATURE_NAMES` via the active `BlendScorer`;
+  paper-trade via the P8 apparatus).
+- `core/firehose/spine.py` — deterministic scoring + paper-trade helpers
+  (`assemble_pregrad_features`, `score_pregrad`, `gate_passes`, `settle_paper_trade`)
+  with the `RealCapitalGuardError` paper-only invariant.
+- `tools/firehose_state.py` + `core/management/commands/firehose_state.py` — the
+  operator ON/OFF toggle for `PipelineState.firehose_active` (only that flag).
+
+### Operate the firehose
+```bash
+# Turn the firehose ON (operator-gated; only touches firehose_active):
+docker compose run --rm web python manage.py firehose_state on
+#   or via shell-redirect with an env var:
+docker compose run --rm -e FIREHOSE_STATE=on web python manage.py shell < tools/firehose_state.py
+
+# Run the gated daemon (OBSERVE/PAPER; bounded example):
+docker compose run --rm web python manage.py run_firehose --max-runtime-seconds 1800
+
+# Turn the firehose OFF:
+docker compose run --rm web python manage.py firehose_state off
+```
+
+### Safety guarantees
+- `trading_enabled` is **False** (default) — paper fills are booked at the observed
+  tape price; the real RPC/Sender send path is **structurally unreachable**
+  (`core/firehose/spine.py` imports neither `trading.sender` nor `trading.execution_core`;
+  `assert_paper_only()` refuses to run if `trading_enabled` is True).
+- No firehose budget is spent by this runtime spine itself; the live WS connections
+  are only opened while `firehose_active=True` (operator-gated).
+
+### Interface assumptions to confirm during the live window
+- **Birdeye graduation frame format** — the exact subscribe `type`
+  (`SUBSCRIBE_TOKEN_NEW_LISTING`) and inbound frame `type` (`TOKEN_NEW_LISTING_DATA`),
+  plus the mint/pool/blockTime key spellings, are **assumed** and made **config-driven**
+  (`detection.graduation_subscribe_type` / `graduation_data_type` /
+  `graduation_subscribe_data` / `event_source`). Raw frames are debug-logged
+  (`[FIREHOSE] graduation raw-frame: …`) so the live shape can be confirmed and the
+  config adjusted **without a code change**.
