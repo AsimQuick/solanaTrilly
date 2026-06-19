@@ -4,7 +4,7 @@
 # story: US-59 AC-59.1, US-59 AC-59.2, copytrade-runtime
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-19
+# last-updated: 2026-06-20
 # dependencies: django, asyncio, signal, sys, asgiref, copytrade.models,
 #   copytrade.wallet_consumer, copytrade.helius_wallet_source,
 #   copytrade.engine_runtime, copytrade.price_source, copytrade.validators,
@@ -62,7 +62,7 @@ from copytrade.helius_wallet_source import HeliusWalletTxSource, decode_wallet_t
 from copytrade.models import CopytradeCohort, CopytradePosition, CopyTradeSettings, CopytradeWallet
 from copytrade.price_source import fetch_mint_price_usd
 from copytrade.schemas import MirrorWalletSellExit, OurTrailingExit
-from copytrade.validators import validate_cohort_v2
+from copytrade.validators import validate_cohort_any
 from copytrade.wallet_consumer import WalletSubscriptionConsumer
 from core.clock import WallClock
 from core.pricing.sol_usd import get_sol_usd
@@ -144,13 +144,24 @@ class Command(BaseCommand):
         cohort_row: CopytradeCohort = await sync_to_async(
             lambda: CopytradeCohort.objects.get(cohort_id=cohort_id)
         )()
-        cohort = await sync_to_async(validate_cohort_v2)(cohort_row.trade_config)
+        # validate_cohort_any dispatches on schema_version (2.1 or 2.0).
+        cohort = await sync_to_async(validate_cohort_any)(cohort_row.trade_config)
 
         # --- Build wallet_to_strategy + exit_by_strategy from cohort ---
-        wallet_to_strategy: dict[str, str] = cohort.wallet_to_strategy()
-        exit_by_strategy: dict[str, OurTrailingExit | MirrorWalletSellExit] = {
-            s.id: s.exit for s in cohort.enabled_strategies()
-        }
+        # Cohort 2.0: wallet -> strategy_id; exit keyed by strategy_id.
+        # Cohort 2.1: wallet -> style (strategy_id=style in DB); exit keyed by style.
+        from copytrade.schemas import CohortV21
+        if isinstance(cohort, CohortV21):
+            wallet_to_strategy: dict[str, str] = cohort.wallet_to_style()
+            exit_by_strategy: dict[str, OurTrailingExit | MirrorWalletSellExit] = (
+                cohort.wallet_to_exit()
+            )
+        else:
+            # CohortV2 (2.0 path)
+            wallet_to_strategy = cohort.wallet_to_strategy()
+            exit_by_strategy = {
+                s.id: s.exit for s in cohort.enabled_strategies()
+            }
 
         # --- Load wallet addresses from DB (strategy-aware) ---
         wallet_addresses: list[str] = await sync_to_async(

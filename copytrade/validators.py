@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.validators
-# sprint: sprint-12
-# story: US-58 AC-58.3
+# sprint: sprint-12, copytrade-2.1-loader
+# story: US-58 AC-58.3, copytrade-v2.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-20
 # dependencies: pydantic>=2.0
 # ---
 """Cohort-JSON validator for the leaderboard.json contract (SPEC §2).
@@ -26,7 +26,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 from pydantic import ValidationError as PydanticValidationError
 
-from copytrade.schemas import CohortV2
+from copytrade.schemas import CohortV2, CohortV21
 
 # ---------------------------------------------------------------------------
 # Sub-schemas
@@ -174,20 +174,49 @@ def validate_cohort_v2(data: dict) -> CohortV2:
         ) from exc
 
 
+def validate_cohort_v2_1(data: dict) -> CohortV21:
+    """Parse and validate a cohort.json payload against the `copytrade-2.1` contract.
+
+    Schema 2.1 is a single graded watchlist (≤20 wallets with per-wallet `style`
+    tags) that collapses the 2.0 two-head strategies[] into one flat list.  The
+    per-wallet exit is determined by style: "ride" -> our_trailing (parsed from
+    global.exit.ride_tagged); every other style -> mirror_wallet_sell.
+
+    Args:
+        data: The parsed JSON dict from cohort.json.
+
+    Returns:
+        A validated CohortV21 instance on success.
+
+    Raises:
+        CohortJsonValidationError: On any schema or bounds violation.
+    """
+    try:
+        return CohortV21.model_validate(data)
+    except PydanticValidationError as exc:
+        raise CohortJsonValidationError(
+            f"cohort.json (copytrade-2.1) failed validation: {exc}"
+        ) from exc
+
+
 def validate_cohort_any(data: dict):
     """Validate a cohort payload, dispatching on its declared schema version.
 
-    - `copytrade-2.0` -> CohortV2 (the live engine's contract)
+    - `copytrade-2.1` -> CohortV21 (single graded watchlist, per-wallet style exit)
+    - `copytrade-2.0` -> CohortV2 (the prior live engine's contract: two strategy heads)
     - `1.0`           -> CohortJsonSchema (legacy SPEC §2, retained for back-compat)
 
     Raises CohortJsonValidationError when the schema version is missing/unknown
     or validation fails.
     """
     version = data.get("schema_version")
+    if version == "copytrade-2.1":
+        return validate_cohort_v2_1(data)
     if version == "copytrade-2.0":
         return validate_cohort_v2(data)
     if version == "1.0":
         return validate_cohort_json(data)
     raise CohortJsonValidationError(
-        f"unknown cohort schema_version {version!r}; expected 'copytrade-2.0' or '1.0'"
+        f"unknown cohort schema_version {version!r}; "
+        "expected 'copytrade-2.1', 'copytrade-2.0', or '1.0'"
     )

@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.schemas
-# sprint: sprint-12
-# story: US-58 AC-58.1
+# sprint: sprint-12, copytrade-2.1-loader
+# story: US-58 AC-58.1, copytrade-v2.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-20
 # dependencies: pydantic>=2.0
 # ---
 """Pydantic v2 schema for the copytrade.* config namespace (SPEC §2, §5).
@@ -25,6 +25,7 @@ Save-time invariants enforced at construction:
   - max_concurrent_positions must be > 0
 """
 
+import re
 from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -251,3 +252,166 @@ class CohortV2(BaseModel):
             for w in strat.wallets:
                 mapping.setdefault(w.address, strat.id)
         return mapping
+
+
+# ===========================================================================
+# COHORT 2.1 SCHEMA — single graded watchlist (schema `copytrade-2.1`)
+# ===========================================================================
+#
+# Schema 2.1 collapses the two-head strategies[] array of 2.0 into ONE graded
+# watchlist of ≤20 wallets with per-wallet `style` tags.  Exit policy is driven
+# by style: "ride" wallets use `exit.ride_tagged` (our_trailing); every other
+# wallet uses `exit.default` (mirror_wallet_sell).
+#
+# The `exit.ride_tagged` value is a compact string encoding the trailing params:
+#   "our_trailing(SL=-50%,trail=-40%,TP=+900%)"
+# This is parsed into an OurTrailingExit instance at validation time so the
+# engine can consume typed params without string manipulation at runtime.
+#
+# The engine routes via style -> exit config exactly as in 2.0 (strategy_id ->
+# exit_cfg), but instead of strategy head ids we use "ride" / "scalp" (or any
+# non-ride style) as the key.  The wallet's style is persisted on CopytradeWallet
+# (new `style` field, migration 0006) so the engine can read it from the DB.
+
+# Regex for parsing the ride_tagged exit string.
+_RIDE_TAGGED_RE = re.compile(
+    r"our_trailing\(\s*SL=-(?P<sl>\d+(?:\.\d+)?)%\s*,"
+    r"\s*trail=-(?P<trail>\d+(?:\.\d+)?)%\s*,"
+    r"\s*TP=\+(?P<tp>\d+(?:\.\d+)?)%\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _parse_ride_tagged(ride_tagged: str) -> "OurTrailingExit":
+    """Parse 'our_trailing(SL=-50%,trail=-40%,TP=+900%)' into OurTrailingExit.
+
+    Raises ValueError if the string does not match the expected format.
+    """
+    m = _RIDE_TAGGED_RE.match(ride_tagged.strip())
+    if not m:
+        raise ValueError(
+            f"ride_tagged {ride_tagged!r} does not match expected format "
+            "'our_trailing(SL=-<N>%,trail=-<N>%,TP=+<N>%)'"
+        )
+    return OurTrailingExit(
+        type="our_trailing",
+        stop_loss_pct=float(m.group("sl")),
+        trailing_giveback_pct=float(m.group("trail")),
+        take_profit_pct=float(m.group("tp")),
+        max_hold_seconds=None,
+    )
+
+
+class V21ExitConfig(BaseModel):
+    """The cohort-2.1 `global.exit` sub-block.
+
+    `default` is the exit type for non-ride wallets (mirror_wallet_sell).
+    `ride_tagged` encodes the trailing exit params for "ride"-style wallets.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    default: str = "mirror_wallet_sell"
+    ride_tagged: str
+
+
+class GlobalConfigV21(BaseModel):
+    """The cohort-2.1 `global` block — engine-wide knobs (same shape as 2.0 global
+    except `exit` replaces the per-strategy exit configs)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    mode: Literal["observe", "live"] = "observe"
+    usd_size_per_trade: float = Field(default=25.0, gt=0)
+    trigger: TriggerConfig = Field(default_factory=TriggerConfig)
+    max_concurrent_positions: int = Field(default=30, gt=0)
+    reselect_cadence_days: int = Field(default=7, gt=0)
+    exit: V21ExitConfig
+
+
+class CohortV21Wallet(BaseModel):
+    """One wallet entry in a 2.1 cohort watchlist.
+
+    Per-wallet `style` drives exit selection: "ride" -> our_trailing,
+    everything else -> mirror_wallet_sell.  Informational metrics (is_n,
+    is_median_mult, etc.) are carried through for audit; extra fields allowed.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    rank: Optional[int] = None
+    address: str
+    style: str = "scalp"  # "ride" or "scalp" (or future tags)
+
+    @model_validator(mode="after")
+    def _check_address(self) -> "CohortV21Wallet":
+        if not self.address or not self.address.strip():
+            raise ValueError("wallet address must be a non-empty string")
+        return self
+
+
+class CohortV21(BaseModel):
+    """Validated cohort.json (schema `copytrade-2.1`) — single graded watchlist.
+
+    The 20-wallet list is the sole "strategy".  Exit is per-wallet:
+      - style == "ride" -> OurTrailingExit (parsed from global.exit.ride_tagged)
+      - any other style -> MirrorWalletSellExit (global.exit.default)
+
+    `global` is a Python keyword, aliased to `global_` with populate_by_name=True.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    schema_version: Literal["copytrade-2.1"]
+    cohort_id: str
+    created_at: str
+    description: str = ""
+    global_: GlobalConfigV21 = Field(alias="global")
+    wallets: list[CohortV21Wallet] = Field(default_factory=list)
+
+    # Parsed at validation time from global_.exit.ride_tagged
+    _ride_exit: Optional[OurTrailingExit] = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "CohortV21":
+        if not self.cohort_id or not self.cohort_id.strip():
+            raise ValueError("cohort_id must be a non-empty string")
+        if not self.created_at or not self.created_at.strip():
+            raise ValueError("created_at must be a non-empty string")
+        if not self.wallets:
+            raise ValueError("wallets list must not be empty")
+        if len(self.wallets) > 20:
+            raise ValueError(
+                f"copytrade-2.1 supports at most 20 wallets; got {len(self.wallets)}"
+            )
+        # Parse ride_tagged up-front so errors surface at load time, not runtime.
+        object.__setattr__(
+            self, "_ride_exit", _parse_ride_tagged(self.global_.exit.ride_tagged)
+        )
+        return self
+
+    def ride_exit(self) -> OurTrailingExit:
+        """The parsed OurTrailingExit for 'ride'-tagged wallets."""
+        return self._ride_exit  # type: ignore[return-value]
+
+    def mirror_exit(self) -> MirrorWalletSellExit:
+        """A MirrorWalletSellExit for non-ride wallets (24h fallback, no hard stop)."""
+        return MirrorWalletSellExit(
+            type="mirror_wallet_sell",
+            max_hold_seconds=86400,
+            hard_stop_loss_pct=None,
+        )
+
+    def exit_for_wallet(self, wallet: "CohortV21Wallet") -> Union[OurTrailingExit, MirrorWalletSellExit]:
+        """Return the appropriate exit config for this wallet based on its style."""
+        if wallet.style == "ride":
+            return self.ride_exit()
+        return self.mirror_exit()
+
+    def wallet_to_style(self) -> dict[str, str]:
+        """Map each wallet address -> its style tag."""
+        return {w.address: w.style for w in self.wallets}
+
+    def wallet_to_exit(self) -> dict[str, Union[OurTrailingExit, MirrorWalletSellExit]]:
+        """Map each wallet address -> its exit config (for EngineState.exit_by_strategy)."""
+        return {w.address: self.exit_for_wallet(w) for w in self.wallets}
