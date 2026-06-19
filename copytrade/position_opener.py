@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.position_opener
-# sprint: sprint-12, sprint-13
-# story: US-61 AC-61.1, US-68 AC-68.1, US-68 AC-68.2
+# sprint: sprint-12, sprint-13, cutover (copy-trade live)
+# story: US-61 AC-61.1, US-68 AC-68.1, US-68 AC-68.2, copytrade-runtime
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-19
 # dependencies: copytrade.models, copytrade.schemas, copytrade.trigger_pipeline,
 #   trading.models, trading.execution_core
 # ---
@@ -37,11 +37,38 @@ so the P8 gate cannot be bypassed accidentally.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
+
 from copytrade.models import CopytradePosition
 from copytrade.schemas import CopyTradeConfig
 from copytrade.trigger_pipeline import OpenedPositionRecord
 from trading.execution_core import ExecuteResult, ExecutionCore
 from trading.models import Position as SharedPosition
+
+# ---------------------------------------------------------------------------
+# V2 record type — used by the cohort-2.0 engine path
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OpenedPositionRecordV2:
+    """Minimal position record for the cohort-2.0 engine path.
+
+    Carries only the fields open_observe_position_v2 needs — the engine
+    assembles these from the WalletTxEvent directly, without going through
+    the legacy run_trigger_pipeline.
+    """
+
+    cohort_id: str
+    mint: str
+    trigger_wallet: str
+    entry_ts: datetime
+
+
+# ---------------------------------------------------------------------------
+# Legacy 1.0 observe opener (unchanged — all AC-61.1 tests still pass)
+# ---------------------------------------------------------------------------
 
 
 def open_observe_position(
@@ -130,6 +157,87 @@ def open_observe_position(
     )
     position.save()
     return position
+
+
+# ---------------------------------------------------------------------------
+# Cohort-2.0 observe opener — USD-sized + strategy-tagged + high_water seeded
+# ---------------------------------------------------------------------------
+
+
+def open_observe_position_v2(
+    record: OpenedPositionRecordV2,
+    entry_price: float,
+    *,
+    usd_size: float,
+    sol_usd: float,
+    strategy_id: str,
+) -> CopytradePosition:
+    """Open a cohort-2.0 paper position in OBSERVE mode (USD-sized, strategy-tagged).
+
+    Books a fill at *entry_price* without placing any real Solana transaction.
+
+    Like open_observe_position but for the cohort-2.0 path:
+      - USD sizing: sol_in = usd_size / sol_usd, size_usd = usd_size
+      - strategy_id tag: which head owns this position's exit
+      - high_water_price seeded to entry_price at open (moonshot trailing needs it)
+
+    Writes exactly one CopytradePosition row AND one shared trading.Position row
+    (AC-68.1 chassis).  The two rows are linked via CopytradePosition.shared_position_id.
+
+    Parameters
+    ----------
+    record:
+        An OpenedPositionRecordV2 (or any object with cohort_id, mint,
+        trigger_wallet, entry_ts attributes).
+    entry_price:
+        The current price at which the paper fill is booked.
+    usd_size:
+        USD notional for this position (from GlobalConfig.usd_size_per_trade).
+    sol_usd:
+        SOL/USD spot at trigger time — used to compute sol_in.
+    strategy_id:
+        The strategy head that owns this position's exit.
+
+    Returns
+    -------
+    The saved CopytradePosition instance (status='open', mode='observe').
+    """
+    sol_in = usd_size / sol_usd if sol_usd > 0 else 0.0
+
+    # --- Write shared trading.Position row (AC-68.1 shared chassis) ---
+    shared_pos = SharedPosition(
+        mint=record.mint,
+        source=SharedPosition.SOURCE_COPYTRADE,
+        mode=SharedPosition.MODE_OBSERVE,
+        status=SharedPosition.STATUS_PAPER,
+        entry_ts=record.entry_ts,
+        entry_price=entry_price,
+        size_sol=sol_in,
+    )
+    shared_pos.save()
+
+    # --- Write copytrade-specific position row ---
+    position = CopytradePosition(
+        cohort_id=record.cohort_id,
+        mint=record.mint,
+        trigger_wallet=record.trigger_wallet,
+        status=CopytradePosition.STATUS_OPEN,
+        mode=CopytradePosition.MODE_OBSERVE,
+        entry_ts=record.entry_ts,
+        entry_price=entry_price,
+        sol_in=sol_in,
+        size_usd=usd_size,
+        strategy_id=strategy_id,
+        high_water_price=entry_price,
+        shared_position_id=shared_pos.pk,
+    )
+    position.save()
+    return position
+
+
+# ---------------------------------------------------------------------------
+# Live position opener (AC-68.2 gated boundary — NOT called by the 2.0 engine)
+# ---------------------------------------------------------------------------
 
 
 def open_live_position(
