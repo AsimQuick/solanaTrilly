@@ -116,5 +116,47 @@ def should_copy_buy(event: WalletTxEvent) -> bool:
     Multiplicity controls (copy_first_buy_only, dedupe_token_across_wallets,
     max_concurrent_positions — SPEC §3 #4–#6) are evaluated by the caller and
     are out of scope for this predicate (AC-60.2).
+
+    NOTE: this is the legacy 1.0 predicate (pre-graduation-only).  The live engine
+    uses ``should_copy_buy_v2`` (cohort-2.0) below.
     """
     return is_buyer(event) and is_pumpfun_token(event) and is_on_bonding_curve(event)
+
+
+# ---------------------------------------------------------------------------
+# Cohort-2.0 trigger (the live consumption contract)
+# ---------------------------------------------------------------------------
+
+
+def trigger_usd(event: WalletTxEvent, sol_usd: float) -> float:
+    """USD value of the watched wallet's buy = on-chain SOL amount × SOL/USD spot.
+
+    The cohort's ``min_trigger_buy_usd`` conviction gate is in USD; the on-chain
+    event carries SOL, so we value it with the shared cached spot (passed in).
+    """
+    return float(event.sol_amount) * float(sol_usd)
+
+
+def should_copy_buy_v2(
+    event: WalletTxEvent,
+    *,
+    min_trigger_buy_usd: float,
+    sol_usd: float,
+) -> bool:
+    """Cohort-2.0 BUY-COPY predicate: watched wallet's first ≥ $min pump.fun buy.
+
+    ALL must hold:
+      1. The watched wallet is the BUYER (tx_type == "buy").
+      2. The token is a pump.fun token (mint suffix OR bonding-curve program).
+      3. The buy is >= ``min_trigger_buy_usd`` (the validated conviction filter),
+         valued as ``sol_amount × sol_usd``.
+
+    UNLIKE the 1.0 predicate, this does NOT require pre-graduation: the cohort
+    copies the first >= $250 buy "whenever it happens" (still pump.fun-scoped).
+    Multiplicity controls (first-buy / dedupe / cap) remain the caller's job.
+    """
+    if not is_buyer(event):
+        return False
+    if not is_pumpfun_token(event):
+        return False
+    return trigger_usd(event, sol_usd) >= float(min_trigger_buy_usd)
