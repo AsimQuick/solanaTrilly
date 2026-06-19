@@ -71,6 +71,11 @@ class TapeConfig(BaseModel):
     lake_ship_window_days: int = Field(default=1, gt=0, le=7)
     # US-38 AC-38.2: retention window — partitions older than this many days are expired (≤7)
     lake_retention_days: int = Field(default=7, gt=0, le=7)
+    # POST-GRAD collection (firehose paper-trade): the SPEND BOUND on the number
+    # of concurrent Birdeye post-grad swap subscriptions the firehose daemon opens
+    # to feed the paper-trade settler.  At capacity, new graduated mints are skipped
+    # (logged "at-capacity skip"), never silently dropped.  Default 5.
+    max_postgrad_subscriptions: int = Field(default=5, gt=0)
 
 
 class ScoringConfig(BaseModel):
