@@ -4,14 +4,14 @@
 # story: US-16 AC-16.3, US-22 AC-22.1, US-22 AC-22.3, US-34 AC-34.2, US-37 AC-37.3
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-17
+# last-updated: 2026-06-19
 # dependencies: django, asyncio, os, types,
 #               core.tape.birdeye_swap_source, core.tape.mapped_source,
 #               core.tape.bounded_source, core.tape.birdeye_swap_mapper,
 #               core.tape.helius_birth_tape_source,
 #               core.tape.birdeye_snapshot_source,
 #               core.tape.recorder, core.tape.lake_writer, core.tape.swap_writer,
-#               core.snapshot_fetcher, core.clock
+#               core.snapshot_fetcher, core.clock, core.normalized_swap
 # ---
 """run_listener — entry point for the dedicated listener container.
 
@@ -55,11 +55,13 @@ import logging
 import signal
 import sys
 from types import SimpleNamespace
+from typing import Callable
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from core.clock import WallClock
+from core.normalized_swap import NormalizedSwap
 from core.snapshot_fetcher import SnapshotFetcher
 from core.tape.birdeye_snapshot_source import BirdeyeSnapshotSource
 from core.tape.birdeye_swap_mapper import map_birdeye_swap
@@ -143,6 +145,7 @@ def build_birth_tape_recorder(
     max_events: int | None = None,
     max_seconds: float | None = None,
     lake_base_dir: str = "lake/tapes",
+    on_swap: "Callable[[str, NormalizedSwap], None] | None" = None,
 ) -> TapeRecorder:
     """Build a fully-wired TapeRecorder for a deliberate Helius birth-tape activation.
 
@@ -179,6 +182,12 @@ def build_birth_tape_recorder(
         max_events:     Stop after N swaps (None = rely on the time-box).
         max_seconds:    Time-box in seconds (None = until source ends).
         lake_base_dir:  Base dir for the jsonl.gz lake parts (SAME lake as Birdeye).
+        on_swap:        Optional STREAM-AS-RECORDED tap fired as (mint,
+                        NormalizedSwap) the instant each landed swap is recorded —
+                        inside run(), BEFORE it returns.  The firehose daemon
+                        injects this to fill its in-memory TapeStore in real time
+                        during the continuous live stream (where run() never
+                        returns until shutdown).  None = unaffected (default).
     """
     source: HeliusBirthTapeSource = HeliusBirthTapeSource(api_key=api_key)
     bounded = BoundedSource(
@@ -195,6 +204,7 @@ def build_birth_tape_recorder(
         swap_phase="pre",
         lake_writer=LakeWriter(lake_base_dir),
         swap_writer=SwapWriter(),
+        on_swap=on_swap,
     )
 
 

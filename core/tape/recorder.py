@@ -5,7 +5,7 @@
 #        US-19 AC-19.1, US-19 AC-19.2, US-20 AC-20.2, US-20 AC-20.3
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-16
+# last-updated: 2026-06-19
 # dependencies: core.datasource, core.clock, core.normalized_swap,
 #               core.tape.idle_kill, core.tape.lake_writer, core.tape.swap_writer,
 #               datetime, typing
@@ -31,10 +31,19 @@ AC-18.4 / S8 / #405 — degenerate-swap guard:
     SKIPPED before NormalizedSwap emission.  They are never emitted as a silent
     0-value row and never raise ZeroDivisionError.  Skipped swaps are tracked in
     TapeRecorder.skipped_degenerate for audit.
+
+STREAM-AS-RECORDED tap (firehose live scoring):
+    An optional ``on_swap`` callback is fired synchronously with
+    (mint, NormalizedSwap) the instant each landed swap is normalized — i.e.
+    inside the run() consume loop, BEFORE run() returns.  For a CONTINUOUS live
+    source (Helius birth tape) run() never returns until shutdown/cancel, so the
+    only way a concurrent reader (the firehose TapeStore feeding the scoring task)
+    can see swaps mid-run is via this incremental tap.  The tap is purely
+    additive: lake/DB persistence behaviour is unchanged.
 """
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from core.clock import Clock, stamp_events
 from core.datasource import DataSource
@@ -140,6 +149,15 @@ class TapeRecorder:
                       on each landed swap for a tracked mint, enabling TTL-based
                       deactivation and re-attachment driven by get_active_config().
                       Defaults to None — existing callers are unaffected.
+        on_swap:      Optional callback fired synchronously as (mint, NormalizedSwap)
+                      the instant each landed swap is normalized — inside the run()
+                      consume loop, BEFORE run() returns.  This is the
+                      STREAM-AS-RECORDED tap the firehose daemon uses to fill its
+                      in-memory TapeStore in real time during a continuous live
+                      stream (where run() would otherwise never return).  Purely
+                      additive: lake/DB persistence is unaffected.  Defaults to
+                      None — existing callers are unaffected.  The callback MUST be
+                      cheap and non-blocking (it runs on the event loop thread).
     """
 
     def __init__(
@@ -153,6 +171,7 @@ class TapeRecorder:
         lake_writer: "LakeWriter | None" = None,
         swap_writer: "SwapWriter | None" = None,
         idle_monitor: "IdleKillMonitor | None" = None,
+        on_swap: "Callable[[str, NormalizedSwap], None] | None" = None,
     ) -> None:
         self._source: DataSource = source
         self._clock: Clock = clock
@@ -162,6 +181,7 @@ class TapeRecorder:
         self._lake_writer: "LakeWriter | None" = lake_writer
         self._swap_writer: "SwapWriter | None" = swap_writer
         self._idle_monitor: "IdleKillMonitor | None" = idle_monitor
+        self._on_swap: "Callable[[str, NormalizedSwap], None] | None" = on_swap
         self._processed: list[tuple[dict[str, Any], datetime]] = []
         # AC-19.2: track (mint, NormalizedSwap) pairs so SwapWriter has the base-token mint.
         self._normalized_swaps_with_mints: list[tuple[str, NormalizedSwap]] = []
@@ -201,7 +221,9 @@ class TapeRecorder:
           1. The (event, timestamp) pair is appended to self._processed.
           2. If failed=True the event is DROPPED — no NormalizedSwap emitted (§6.2).
           3. For landed swaps whose mint is in token_store, exactly one NormalizedSwap
-             is emitted with owner=signer, rel anchored to graduated_block_time.
+             is emitted with owner=signer, rel anchored to graduated_block_time, and
+             — if an on_swap tap was injected — the tap is fired immediately with
+             (mint, NormalizedSwap) so concurrent readers see it mid-stream.
 
         AC-19.1: After all events are consumed, if a lake_writer was injected and
         there are normalized swaps, they are persisted to the daily-partitioned lake.
@@ -247,6 +269,17 @@ class TapeRecorder:
                 )
                 # AC-19.2: track (mint, NormalizedSwap) so SwapWriter can upsert by mint.
                 self._normalized_swaps_with_mints.append((mint, normalized))
+
+                # STREAM-AS-RECORDED tap: fire the per-swap hook synchronously so a
+                # concurrent reader (firehose TapeStore -> scoring task) sees this
+                # swap NOW — not after run() returns (which, for a continuous live
+                # source, never happens until shutdown).  Best-effort: a misbehaving
+                # tap must never break recording/persistence.
+                if self._on_swap is not None:
+                    try:
+                        self._on_swap(mint, normalized)
+                    except Exception:  # noqa: BLE001 - tap must never break recording
+                        pass
 
         # AC-19.1: persist to lake after all events consumed
         if self._lake_writer is not None and self._normalized_swaps_with_mints:
