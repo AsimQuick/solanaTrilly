@@ -27,9 +27,13 @@ tools/firehose_state.py).
 
 CONCURRENT TASKS (asyncio) while active
 =======================================
-  a. COLLECTION    — HeliusBirthTapeSource -> TapeRecorder (run_listener's
-                     build_birth_tape_recorder wiring), continuous, storing
-                     pre-grad swaps keyed by mint.
+  a. COLLECTION    — HeliusBirthTapeSource -> MappedSwapSource(decode) ->
+                     LivePreGradBuffer, continuous, buffering EVERY pump.fun
+                     bonding-curve swap by mint with NO graduation anchor (the
+                     anchor is applied RETROACTIVELY at score time).  A two-tier
+                     idle-kill evicts dead UNgraduated mints; graduated mints are
+                     retained for scoring.  (The OLD token_store-filtered birth-
+                     tape recorder dropped all pre-grad swaps — chicken-and-egg.)
   b. GRADUATION    — BirdeyeGraduationSource -> DetectionConsumer.run(),
                      persisting Token rows on graduation (config-driven WS).
   c. SCORING SCHED — for each graduated Token not yet scored, at
@@ -127,6 +131,14 @@ class TapeStore:
     def count(self, mint: str) -> int:
         return len(self._by_mint.get(mint, []))
 
+    def drop(self, mint: str) -> None:
+        """Remove a mint's buffered swaps entirely (idle-kill eviction)."""
+        self._by_mint.pop(mint, None)
+
+    def mints(self) -> list[str]:
+        """Return the mints currently buffered (snapshot)."""
+        return list(self._by_mint.keys())
+
 
 # ---------------------------------------------------------------------------
 # FirehoseDaemon — the runnable, testable core
@@ -175,6 +187,10 @@ class FirehoseDaemon:
         self._tape = TapeStore()
         self._postgrad_tape = TapeStore()
         self._scored_mints: set[str] = set()
+        # Mints known to have graduated (Token row exists).  Refreshed by the
+        # scoring task and read by the collection buffer's two-tier idle-kill so
+        # a graduated mint is PROTECTED from pre-grad eviction (kept for scoring).
+        self._graduated_mints: set[str] = set()
         self._stop = asyncio.Event()
         self._active_sources: list = []
         # POST-grad subscription bookkeeping.
@@ -323,43 +339,91 @@ class FirehoseDaemon:
     # Task a — COLLECTION (Helius birth tape -> TapeRecorder -> TapeStore)
     # ------------------------------------------------------------------
 
-    def _on_recorded_swap(self, mint: str, ns) -> None:
-        """STREAM-AS-RECORDED tap: tee each recorded swap into the TapeStore NOW.
+    def _collection_graduated(self, mint: str) -> bool:
+        """Return True if *mint* has graduated (protected from pre-grad eviction).
 
-        Fired synchronously by the collection TapeRecorder the instant a landed
-        swap is normalized — i.e. while the continuous Helius birth-tape source is
-        STILL streaming, long before recorder.run() would return.  This is the fix
-        for the batch-vs-stream bug: previously self._tape was only populated
-        AFTER recorder.run() returned, but for a continuous live source run()
-        never returns until shutdown, so the scoring task always read an empty
-        tape ("0 swaps — deferring") and the model never scored.
-
-        Keyed by the mint string (matching Token.mint, which the scoring task's
-        self._tape.get(mint) uses); the stored value is the SAME swap-dict shape
-        assemble_pregrad_features() / _swaps_to_trade_tuples() already expect.
+        A mint is "graduated" for the live pre-grad buffer's two-tier idle-kill
+        if a Token row exists for it (the graduation path persisted it) OR the
+        daemon has already scored it.  Graduated mints are retained through
+        scoring; only dead UNgraduated mints are evicted.  Reads the in-memory
+        scored set directly and falls back to the cached graduated mint set the
+        scoring task refreshes — never an ORM call on the streaming hot path.
         """
-        self._tape.add(mint, _ns_to_swap(ns))
+        if mint in self._scored_mints:
+            return True
+        return mint in self._graduated_mints
+
+    @staticmethod
+    def _resolve_pre_grad_ttl_sync() -> float:
+        """Resolve tape.pre_grad_idle_kill_ttl_s from the active config (sync ORM).
+
+        Falls back to the LivePreGradBuffer default (300s) when no config is
+        resolvable, so the buffer always has a finite, bounded TTL.
+        """
+        from core.firehose.live_pregrad_buffer import (
+            DEFAULT_PRE_GRAD_IDLE_KILL_TTL_S,
+        )
+        from core.resolver import get_active_config
+
+        try:
+            config = get_active_config()
+        except Exception:  # noqa: BLE001 - never let config break collection
+            return float(DEFAULT_PRE_GRAD_IDLE_KILL_TTL_S)
+        if config is None:
+            return float(DEFAULT_PRE_GRAD_IDLE_KILL_TTL_S)
+        return float(
+            getattr(config.tape, "pre_grad_idle_kill_ttl_s", DEFAULT_PRE_GRAD_IDLE_KILL_TTL_S)
+            or DEFAULT_PRE_GRAD_IDLE_KILL_TTL_S
+        )
 
     async def _collection_loop(self) -> None:
+        """Buffer ALL pump.fun bonding-curve swaps by mint — NO graduation anchor.
+
+        THE FIX (chicken-and-egg): the OLD wiring used the token_store-filtered
+        birth-tape recorder, which dropped every swap whose mint had not yet
+        graduated — i.e. every PRE-grad swap, which is exactly what scoring needs.
+        Here a LivePreGradBuffer reads the SAME Helius source + mapper but BYPASSES
+        the token_store filter, buffering every mint's swaps (absolute block_time,
+        no rel) into self._tape.  The graduation anchor is applied RETROACTIVELY by
+        assemble_pregrad_features at score time.
+        """
+        from core.firehose.live_pregrad_buffer import LivePreGradBuffer
+
         try:
-            recorder, source = await sync_to_async(
+            source = await sync_to_async(
                 self._collection_factory, thread_sensitive=True
             )()
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s collection: factory failed (%s) — skipping collection.", LOG_PREFIX, exc)
             return
-        if source is not None:
-            self._active_sources.append(source)
-        if recorder is None:
+        if source is None:
+            logger.warning("%s collection: no source built — collection disabled.", LOG_PREFIX)
             return
-        logger.info("%s collection: started (Helius birth-tape -> recorder, streaming into TapeStore).", LOG_PREFIX)
-        # recorder.run() drives the recorder until its (continuous/bounded) source
-        # ends or the task is cancelled on shutdown.  Each landed swap is teed into
-        # self._tape IN REAL TIME via the recorder's on_swap tap (see
-        # _build_collection / _on_recorded_swap) — NOT mirrored after run() returns,
-        # which for a continuous live source never happens until shutdown.
-        await recorder.run()
-        logger.info("%s collection: recorder finished (%d swaps).", LOG_PREFIX, len(recorder.normalized_swaps))
+        self._active_sources.append(source)
+
+        # Resolve the pre-grad idle TTL in a SYNC context (ORM read) so the buffer
+        # itself never touches the ORM on the async hot path.
+        idle_ttl_s = await sync_to_async(
+            self._resolve_pre_grad_ttl_sync, thread_sensitive=True
+        )()
+
+        buffer = LivePreGradBuffer(
+            source=source,
+            store=self._tape,
+            clock=self._clock,
+            is_graduated=self._collection_graduated,
+            idle_ttl_s=idle_ttl_s,
+        )
+        logger.info(
+            "%s collection: started (Helius birth-tape -> live pre-grad buffer, "
+            "ALL mints, no anchor gate; idle_ttl=%.0fs).",
+            LOG_PREFIX, buffer._idle_ttl_s,
+        )
+        await buffer.run()
+        logger.info(
+            "%s collection: buffer finished (%d swaps across %d mints).",
+            LOG_PREFIX, buffer._buffered_count, len(self._tape.mints()),
+        )
 
     # ------------------------------------------------------------------
     # Task b — GRADUATION (Birdeye new-listing -> DetectionConsumer)
@@ -633,11 +697,17 @@ class FirehoseDaemon:
         score_at = config.scoring.score_at_elapsed_s
         now = self._clock.now()
         due: list[tuple[str, int]] = []
+        graduated: set[str] = set()
         for tok in Token.objects.all():
+            # Refresh the graduated-mint set so the collection buffer's two-tier
+            # idle-kill protects every graduated mint (retained for scoring) — not
+            # just the ones already scored.  A Token row == graduated.
+            graduated.add(tok.mint)
             if tok.mint in self._scored_mints:
                 continue
             if score_time_reached(tok.graduated_at, score_at, now):
                 due.append((tok.mint, int(tok.graduated_block_time)))
+        self._graduated_mints = graduated
         return due
 
     def _build_scoring_context_sync(self):
@@ -697,18 +767,30 @@ class FirehoseDaemon:
     # ------------------------------------------------------------------
 
     def _build_collection(self):
-        """Build the COLLECTION recorder + its source (Helius birth tape)."""
-        from core.management.commands.run_listener import build_birth_tape_recorder
+        """Build the COLLECTION source: program-wide Helius birth tape, mapped.
+
+        Returns a SINGLE DataSource that yields internal §7.1 swap dicts for
+        EVERY pump.fun bonding-curve swap, with NO token_store filter — exactly
+        the source/mapper build_birth_tape_recorder uses, minus the recorder's
+        graduation-anchor gate.  The LivePreGradBuffer buffers every mint's swaps
+        from this source without needing a graduation anchor.
+
+        This is the ONLY place the concrete live collection source is built
+        (Principle #7): HeliusBirthTapeSource + decode_helius_notification, the
+        SAME pair the offline birth-tape path uses (the offline recorder semantics
+        in run_listener are left untouched).
+        """
+        from core.tape.helius_birth_tape_source import (
+            HeliusBirthTapeSource,
+            decode_helius_notification,
+        )
+        from core.tape.mapped_source import MappedSwapSource
 
         api_key = getattr(settings, "HELIUS_API_KEY", None)
         if not api_key:
             logger.warning("%s collection: HELIUS_API_KEY missing — collection disabled.", LOG_PREFIX)
-            return None, None
-        token_store = self._load_token_store_sync()
-        recorder = build_birth_tape_recorder(
-            api_key, token_store, on_swap=self._on_recorded_swap
-        )
-        return recorder, recorder._source  # the bounded source for disconnect
+            return None
+        return MappedSwapSource(HeliusBirthTapeSource(api_key), decode_helius_notification)
 
     def _build_graduation(self):
         """Build the GRADUATION consumer + its source (Birdeye new-listing)."""
@@ -740,16 +822,6 @@ class FirehoseDaemon:
         api_key = getattr(settings, "BIRDEYE_API_KEY", None)
         return BirdeyeSwapSource(api_key=api_key, mint=mint)
 
-    @staticmethod
-    def _load_token_store_sync() -> dict[str, object]:
-        from types import SimpleNamespace
-
-        from core.models import Token
-
-        store: dict[str, object] = {}
-        for tok in Token.objects.exclude(graduated_block_time__isnull=True):
-            store[tok.mint] = SimpleNamespace(graduated_block_time=int(tok.graduated_block_time))
-        return store
 
 
 # ---------------------------------------------------------------------------
