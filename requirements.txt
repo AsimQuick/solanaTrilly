@@ -3,9 +3,9 @@
 # stack: django+channels+celery
 # purpose: Python dependencies (lean — psycopg binary wheel, no compiler needed)
 # created-by: dev-team
-# sprint: sprint-1, sprint-3
-# story: US-1 AC-1.1, AC-1.2, US-9 AC-9.2
-# last-updated: 2026-06-15
+# sprint: sprint-1, sprint-3, sprint-14
+# story: US-1 AC-1.1, AC-1.2, US-9 AC-9.2, live-firehose-spine
+# last-updated: 2026-06-19
 # ---
 
 # Core (Django 5.2 LTS — supported through April 2028)
@@ -37,7 +37,7 @@ pandas>=2.0,<3                   # golden score vector fixture I/O (AC-44.1), sc
 pyarrow>=12.0,<19                # parquet backend for pandas (golden_scores.parquet fixture + scorer parity)
 
 # Dev / Test
-pytest>=8.0
-pytest-django>=4.8
+pytest>=8.0,<9                   # pin <9: pytest 9.x + pytest-django 4.12 regresses on the DB fixture finalizer ("assert not self._finalizers"), erroring every django_db test. Pin explicitly so fresh image builds don't drift onto the broken combo (mirrors the tzlocal pin rationale above).
+pytest-django>=4.8,<5
 pytest-cov>=5.0
 ruff>=0.5
