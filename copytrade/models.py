@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.models
-# sprint: sprint-12
-# story: US-58 AC-58.1, US-58 AC-58.2, US-62 AC-62.1
+# sprint: sprint-12, copytrade-2.1-loader
+# story: US-58 AC-58.1, US-58 AC-58.2, US-62 AC-62.1, copytrade-v2.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-20
 # dependencies: django, copytrade.schemas, pydantic
 # ---
 """Django models for the copytrade §5-isolated namespace (SPEC §2, §5, §7, §9).
@@ -180,6 +180,9 @@ class CopytradeWallet(models.Model):
     # moonshot).  Drives which exit applies when this wallet triggers a position.
     # Empty string for legacy 1.0 cohorts (single, head-less wallet list).
     strategy_id = models.CharField(max_length=64, default="", blank=True, db_index=True)
+    # Cohort-2.1: per-wallet style tag ("ride" | "scalp").  In 2.1 cohorts this
+    # drives exit selection instead of strategy_id.  Empty string for pre-2.1 cohorts.
+    style = models.CharField(max_length=32, default="", blank=True, db_index=True)
 
     class Meta:
         app_label = "copytrade"

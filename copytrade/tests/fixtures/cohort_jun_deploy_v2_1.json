@@ -1,0 +1,236 @@
+{
+  "schema_version": "copytrade-2.1",
+  "cohort_id": "copy_2026-06-20_jun_deploy",
+  "created_at": "2026-06-20",
+  "description": "v2 formula on the freshest cached window (Jun 1-14). Single graded watchlist (<=20) ranked by full-population realized copy-mult (blend = median + 0.25*log1p(mean)). DEPLOY FOR ~1 WEEK then re-run (data ends ~Jun 14; wallets do not persist).",
+  "global": {
+    "mode": "observe",
+    "usd_size_per_trade": 25,
+    "max_concurrent_positions": 30,
+    "trigger": {
+      "event": "watched_wallet_buy",
+      "copy_first_buy_only": true,
+      "min_trigger_buy_usd": 250,
+      "pump_fun_only": true,
+      "dedupe_token_across_wallets": true
+    },
+    "exit": {
+      "default": "mirror_wallet_sell",
+      "ride_tagged": "our_trailing(SL=-50%,trail=-40%,TP=+900%)"
+    },
+    "reselect_cadence_days": 7,
+    "staleness_note": "selection data ends ~2026-06-14; deploy <=7 days then re-run on recorder"
+  },
+  "formula": {
+    "pool": "early(first-10 by time)+big(first-buy>=$250) on >=2 graduates in lookback",
+    "score": "blend = median(full_pop_copy_mult) + 0.25*log1p(mean_copy_mult)",
+    "n_floor": 8,
+    "top_n": 20,
+    "note": "graduate-only ranking FAILS the placebo; the non-grad denominator is the signal"
+  },
+  "selection_window": "2026-06-01..2026-06-14",
+  "data_completeness": "39/43 pool-wallet histories cached (91%); 2904 graduates parsed",
+  "wallets": [
+    {
+      "rank": 1,
+      "address": "EKFo92sGrop9YSLeh7ho5w1AodJHc4pSnF3GdjHrm9ad",
+      "is_n": 16,
+      "is_median_mult": 1.647,
+      "is_mean_mult": 3.482,
+      "is_win_rate": 0.688,
+      "is_precision": 0.312,
+      "style": "ride"
+    },
+    {
+      "rank": 2,
+      "address": "GhA8SoXSYieW9pdiftRdbf1LF1HZpApMDUgPzVKrySWe",
+      "is_n": 15,
+      "is_median_mult": 1.337,
+      "is_mean_mult": 4.224,
+      "is_win_rate": 0.667,
+      "is_precision": 0.267,
+      "style": "ride"
+    },
+    {
+      "rank": 3,
+      "address": "9cU81cZim9EZbuoStfCii5xcpksPPN7NkxotbCUawLsq",
+      "is_n": 12,
+      "is_median_mult": 1.427,
+      "is_mean_mult": 1.419,
+      "is_win_rate": 0.833,
+      "is_precision": 0.167,
+      "style": "scalp"
+    },
+    {
+      "rank": 4,
+      "address": "5C1JAeFwk9CneMCu3Qa4vNuJh8Ny6tofevQUaScp2Fxn",
+      "is_n": 26,
+      "is_median_mult": 1.278,
+      "is_mean_mult": 1.329,
+      "is_win_rate": 0.923,
+      "is_precision": 0.077,
+      "style": "scalp"
+    },
+    {
+      "rank": 5,
+      "address": "57stAMFvwctAjkBS76RXGoK4QKyS1QoxbGMbzFFe4DyZ",
+      "is_n": 189,
+      "is_median_mult": 1.277,
+      "is_mean_mult": 1.31,
+      "is_win_rate": 0.91,
+      "is_precision": 0.111,
+      "style": "scalp"
+    },
+    {
+      "rank": 6,
+      "address": "7ys19kSMtRxvzogw2bYVrZfvMAsFFbXa2V8YZTADLqyN",
+      "is_n": 37,
+      "is_median_mult": 1.146,
+      "is_mean_mult": 1.653,
+      "is_win_rate": 0.703,
+      "is_precision": 0.108,
+      "style": "scalp"
+    },
+    {
+      "rank": 7,
+      "address": "bYeXgdiuAoxd5eRUdRjzBAmCAeYDpLTQFMdNvowgeAK",
+      "is_n": 39,
+      "is_median_mult": 1.134,
+      "is_mean_mult": 1.583,
+      "is_win_rate": 0.769,
+      "is_precision": 0.205,
+      "style": "scalp"
+    },
+    {
+      "rank": 8,
+      "address": "niggerd597QYedtvjQDVHZTCCGyJrwHNm2i49dkm5zS",
+      "is_n": 906,
+      "is_median_mult": 1.137,
+      "is_mean_mult": 1.34,
+      "is_win_rate": 0.747,
+      "is_precision": 0.34,
+      "style": "scalp"
+    },
+    {
+      "rank": 9,
+      "address": "J6AuAn2GLHiz3TzyAGa5itH2kpDbzzfrBhUXYW1hyGER",
+      "is_n": 196,
+      "is_median_mult": 1.148,
+      "is_mean_mult": 1.21,
+      "is_win_rate": 0.77,
+      "is_precision": 0.179,
+      "style": "scalp"
+    },
+    {
+      "rank": 10,
+      "address": "2CQgjcdNEo7WtbQLpJTAVcC3Ga61pNvRDTgP5grzctFG",
+      "is_n": 1599,
+      "is_median_mult": 1.14,
+      "is_mean_mult": 1.253,
+      "is_win_rate": 0.809,
+      "is_precision": 0.12,
+      "style": "scalp"
+    },
+    {
+      "rank": 11,
+      "address": "3nG9zBc6fTne3j9kkS1CB5quyt25CS29GEjvMGNKmDSz",
+      "is_n": 144,
+      "is_median_mult": 1.114,
+      "is_mean_mult": 1.2,
+      "is_win_rate": 0.743,
+      "is_precision": 0.826,
+      "style": "scalp"
+    },
+    {
+      "rank": 12,
+      "address": "Hqu85svBmrKDaPyFgwKFXzz1XbfCQZeR5sWMaXbFcVEa",
+      "is_n": 230,
+      "is_median_mult": 1.069,
+      "is_mean_mult": 1.1,
+      "is_win_rate": 0.683,
+      "is_precision": 0.239,
+      "style": "scalp"
+    },
+    {
+      "rank": 13,
+      "address": "CNjo9vqVUHLaTNCqb5XYa5nsoeFChQysjYyi1vunYgwv",
+      "is_n": 78,
+      "is_median_mult": 1.058,
+      "is_mean_mult": 1.114,
+      "is_win_rate": 0.731,
+      "is_precision": 0.09,
+      "style": "scalp"
+    },
+    {
+      "rank": 14,
+      "address": "7nCRbePZDbVyybQjZx5qXFh4NnBadVNSV13Djef6z7R2",
+      "is_n": 469,
+      "is_median_mult": 1.045,
+      "is_mean_mult": 1.056,
+      "is_win_rate": 0.923,
+      "is_precision": 0.277,
+      "style": "scalp"
+    },
+    {
+      "rank": 15,
+      "address": "7CtW3vMTyNm9u8ByWWoTjGg7XYZteUjYwjEevHypVHb4",
+      "is_n": 451,
+      "is_median_mult": 1.046,
+      "is_mean_mult": 1.049,
+      "is_win_rate": 0.922,
+      "is_precision": 0.302,
+      "style": "scalp"
+    },
+    {
+      "rank": 16,
+      "address": "FsG3BaPmRTdSrPaivbgJsFNCCa8cPfkUtk8VLWXkHpHP",
+      "is_n": 87,
+      "is_median_mult": 0.981,
+      "is_mean_mult": 1.29,
+      "is_win_rate": 0.46,
+      "is_precision": 0.563,
+      "style": "scalp"
+    },
+    {
+      "rank": 17,
+      "address": "BLw4fXAc9P7NYhnRH9GyccXKUmvpUSiqc67BGbanxcDp",
+      "is_n": 195,
+      "is_median_mult": 0.985,
+      "is_mean_mult": 1.116,
+      "is_win_rate": 0.421,
+      "is_precision": 0.169,
+      "style": "scalp"
+    },
+    {
+      "rank": 18,
+      "address": "3M9QdRkKg9WHKkV6fR69eTzLidC3uFvgYtPVHvQLUhr8",
+      "is_n": 37,
+      "is_median_mult": 0.961,
+      "is_mean_mult": 1.183,
+      "is_win_rate": 0.432,
+      "is_precision": 0.568,
+      "style": "scalp"
+    },
+    {
+      "rank": 19,
+      "address": "85YwZaQa8SATizDxCwZ8z5EpdpLvy5Ub9zp1a3TkaHrL",
+      "is_n": 16,
+      "is_median_mult": 0.975,
+      "is_mean_mult": 1.061,
+      "is_win_rate": 0.312,
+      "is_precision": 0.125,
+      "style": "scalp"
+    },
+    {
+      "rank": 20,
+      "address": "tAg2tgyHmkGTsmq8wBSKsGvUUgoH37cxmCfRUZSXdtB",
+      "is_n": 228,
+      "is_median_mult": 0.973,
+      "is_mean_mult": 1.07,
+      "is_win_rate": 0.412,
+      "is_precision": 0.32,
+      "style": "scalp"
+    }
+  ],
+  "provenance": "full-pop realized copy-mult from Birdeye trader/seek_by_time caches (jun_deploy); v2 formula validated walk-forward Mar/Apr/May vs placebo (z=7.9 @N=20); offline != live, the solanatrilly observe soak is the arbiter."
+}

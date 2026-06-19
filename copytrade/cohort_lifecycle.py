@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.cohort_lifecycle
-# sprint: sprint-12
-# story: US-62 AC-62.1
+# sprint: sprint-12, copytrade-2.1-loader
+# story: US-62 AC-62.1, copytrade-v2.1
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-20
 # dependencies: copytrade.models, copytrade.position_manager, copytrade.validators
 # ---
 """SPEC §6 cohort fresh-start lifecycle: replace_cohort.
@@ -46,7 +46,7 @@ from copytrade.models import (
     CopytradeWallet,
 )
 from copytrade.position_manager import close_position
-from copytrade.validators import validate_cohort_json, validate_cohort_v2
+from copytrade.validators import validate_cohort_json, validate_cohort_v2, validate_cohort_v2_1
 
 
 def _parse_created_at(s: str) -> datetime:
@@ -251,6 +251,96 @@ def replace_cohort_v2(
                         strategy_id=strat.id,
                     )
                 )
+        CopytradeWallet.objects.bulk_create(wallet_rows)
+
+    return cohort_row
+
+
+def replace_cohort_v2_1(
+    new_cohort_json: dict,
+    settlement_price: float,
+    settlement_ts: datetime,
+) -> CopytradeCohort:
+    """SPEC §6 full cohort REPLACEMENT for the `copytrade-2.1` contract.
+
+    Schema 2.1 is a single graded watchlist (≤20 wallets, per-wallet `style` exit).
+    The fresh-start discipline mirrors ``replace_cohort_v2`` exactly:
+    validate-first, then atomic stop -> settle -> purge -> persist -> subscribe.
+
+    Key differences from 2.0:
+      - No strategies[] array; the wallet list IS the single "strategy".
+      - Each wallet carries a `style` tag that is persisted on CopytradeWallet.style
+        (migration 0006).  At runtime, style=="ride" -> our_trailing exit;
+        every other style -> mirror_wallet_sell (global.exit.default).
+      - strategy_id on CopytradeWallet is set to the wallet's style value ("ride" /
+        "scalp") so the existing engine's wallet_to_strategy lookup continues to
+        work transparently — it just returns the style instead of a head id.
+      - The ride exit config is constructed from global.exit.ride_tagged and stored
+        in the CopytradeCohort.trade_config verbatim dict for the engine to read.
+
+    ``mirror_wallet_sells`` on the settings row stays False (per-wallet exit, not
+    a global flag).  ``settlement_ts`` is injected (never datetime.now()).
+    """
+    cohort = validate_cohort_v2_1(new_cohort_json)
+
+    with transaction.atomic():
+        settings = CopyTradeSettings.get()
+
+        # --- Step 1: Auto-stop engine ---
+        settings.engine_on = False
+        settings.save()
+
+        # --- Step 2: Settle open positions ---
+        open_positions = list(
+            CopytradePosition.objects.filter(status=CopytradePosition.STATUS_OPEN)
+        )
+        for pos in open_positions:
+            close_position(pos, CopytradePosition.EXIT_SETTLE, settlement_price, settlement_ts)
+
+        # --- Step 3: Purge all copytrade_* records ---
+        CopytradePnlByWallet.objects.all().delete()
+        CopytradePosition.objects.all().delete()
+        CopytradeWallet.objects.all().delete()
+        CopytradeCohort.objects.all().delete()
+
+        # --- Step 4: Persist new cohort (full 2.1 dict verbatim) ---
+        created_at_dt = _parse_created_at(cohort.created_at)
+        cohort_row = CopytradeCohort.objects.create(
+            cohort_id=cohort.cohort_id,
+            created_at=created_at_dt,
+            description=cohort.description,
+            trade_config=new_cohort_json,
+            active=True,
+        )
+
+        # Apply the engine-wide `global` knobs to the settings singleton.
+        g = cohort.global_
+        settings.active_cohort_id = cohort.cohort_id
+        settings.mode = g.mode
+        settings.usd_size_per_trade = g.usd_size_per_trade
+        settings.min_trigger_buy_usd = g.trigger.min_trigger_buy_usd
+        settings.pump_fun_only = g.trigger.pump_fun_only
+        settings.max_concurrent_positions = g.max_concurrent_positions
+        settings.copy_first_buy_only = g.trigger.copy_first_buy_only
+        settings.dedupe_token_across_wallets = g.trigger.dedupe_token_across_wallets
+        settings.mirror_wallet_sells = False  # per-wallet exit, not a global flag
+        settings.save()
+
+        # --- Step 5: Subscribe wallets, persisting rank + style ---
+        # strategy_id is set to the wallet's style so the existing engine lookup
+        # (wallet_to_strategy -> strategy_id -> exit_by_strategy) works without
+        # modification: EngineState.wallet_to_strategy maps address -> style,
+        # and EngineState.exit_by_strategy maps style -> exit config.
+        wallet_rows = [
+            CopytradeWallet(
+                cohort_id=cohort.cohort_id,
+                address=w.address,
+                rank=w.rank,
+                strategy_id=w.style,   # reuse existing field; style IS the "strategy"
+                style=w.style,         # new 2.1 field — explicit style for introspection
+            )
+            for w in cohort.wallets
+        ]
         CopytradeWallet.objects.bulk_create(wallet_rows)
 
     return cohort_row
