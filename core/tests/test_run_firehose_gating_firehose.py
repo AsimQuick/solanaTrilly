@@ -34,22 +34,29 @@ from core.management.commands.run_firehose import FirehoseDaemon
 
 
 def _noop_collection():
-    """Factory returning (recorder, source) where recorder.run() is a no-op."""
-    recorder = MagicMock()
+    """Factory returning a single no-op collection DataSource (new buffer contract).
 
-    async def _run():
+    The collection task now wraps this source in a LivePreGradBuffer instead of a
+    token_store-gated recorder, so the factory returns ONE source whose events()
+    immediately ends (an empty live stream) and whose connect/disconnect are
+    async no-ops.
+    """
+    source = MagicMock()
+
+    async def _connect():
         return None
 
-    recorder.run = _run
-    recorder.normalized_swaps = []
-    recorder._normalized_swaps_with_mints = []
-    source = MagicMock()
+    async def _events():
+        if False:  # pragma: no cover - empty async generator
+            yield {}
 
     async def _disc():
         return None
 
+    source.connect = _connect
+    source.events = _events
     source.disconnect = _disc
-    return recorder, source
+    return source
 
 
 def _noop_graduation():
