@@ -471,7 +471,7 @@ class FirehoseDaemon:
         detection_dict = {}
         if config is not None:
             detection_dict = config.detection.model_dump()
-        source = BirdeyeGraduationSource(api_key=api_key, config=detection_dict)
+        source = BirdeyeGraduationSource(api_key=api_key, config=detection_dict, clock=self._clock)
         consumer = DetectionConsumer(source=source, clock=self._clock, config_fn=get_active_config)
         return consumer, source
 

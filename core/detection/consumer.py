@@ -1,10 +1,10 @@
 # ---
 # module: core.detection.consumer
 # sprint: sprint-4
-# story: US-15 AC-15.1, US-15 AC-15.2, US-15 AC-15.3
-# status: implemented
+# story: US-15 AC-15.1, US-15 AC-15.2, US-15 AC-15.3, hotfix-graduation-null-pool
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-15
+# last-updated: 2026-06-19
 # dependencies: core.datasource, core.clock, core.schemas, asgiref, datetime, typing
 # ---
 """DetectionConsumer — reads MEME graduation events from a DataSource seam.
@@ -153,7 +153,12 @@ class DetectionConsumer:
         from core.models import Token  # lazy import — avoids circular at load time
 
         mint: str = event["address"]
-        pool_address: str = event.get("poolAddress", "")
+        # Birdeye new-listing (graduation) frames carry NO pool address, so the
+        # graduation source emits poolAddress=None.  pool_address is a non-nullable
+        # CharField — coerce a null/absent pool to "" so a null pool persists
+        # cleanly instead of crashing the chain (downstream scores on pre-grad
+        # Helius features keyed by mint and tolerates an empty pool).
+        pool_address: str = event.get("poolAddress") or ""
         dex_source: str = event.get("source", "")
 
         block_time = event.get("blockTime")
