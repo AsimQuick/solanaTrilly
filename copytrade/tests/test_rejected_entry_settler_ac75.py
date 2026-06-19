@@ -21,15 +21,12 @@ All tests use the real parquet tape — no hand-built mocks for the price data.
 """
 from __future__ import annotations
 
-import math
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from copytrade.rejected_entry_settler import (
-    COUNTERFACTUAL_WINDOW_S,
-    RUG_DROP_THRESHOLD,
     settle_counterfactual,
 )
 
@@ -216,7 +213,6 @@ def test_settle_real_parquet_gapper_forward():
 @pytest.mark.django_db
 def test_settle_rejected_entries_populates_counterfactual():
     """settle_rejected_entries updates DB rows with counterfactual fields."""
-    from datetime import datetime, timezone
     from copytrade.models import CopytradePosition
     from copytrade.rejected_entry_settler import settle_rejected_entries
 
@@ -263,7 +259,6 @@ def test_settle_rejected_entries_populates_counterfactual():
 @pytest.mark.django_db
 def test_settle_rejected_entries_empty_tape_writes_none():
     """settle_rejected_entries with empty tape writes outcome=None (#304 guard)."""
-    from datetime import datetime, timezone
     from copytrade.models import CopytradePosition
     from copytrade.rejected_entry_settler import settle_rejected_entries
 
@@ -298,14 +293,13 @@ def test_settle_rejected_entries_empty_tape_writes_none():
 @pytest.mark.django_db
 def test_settle_rejected_entries_skips_already_settled():
     """settle_rejected_entries skips rows that already have peak_return_pct set."""
-    from datetime import datetime, timezone
     from copytrade.models import CopytradePosition
     from copytrade.rejected_entry_settler import settle_rejected_entries
 
     ts = datetime(2026, 6, 14, 0, 0, 13, tzinfo=timezone.utc)
     cohort_id = "test-cohort-settler-settled-ac75"
 
-    pos = CopytradePosition.objects.create(
+    CopytradePosition.objects.create(
         cohort_id=cohort_id,
         mint="AlreadySettledMint111111111111111111111pump",
         trigger_wallet="Wa11etXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
