@@ -174,7 +174,9 @@ def main() -> int:
     }
     tape = {
         "amm_programs": ["pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"],
-        "pre_grad_idle_kill_ttl_s": 300,   # two-tier idle-kill: aggressive pre-grad
+        # pre-grad idle-kill: 30 min so slow-bonders survive to graduation
+        # (was 300 s, which risked evicting a token before it graduated).
+        "pre_grad_idle_kill_ttl_s": 1800,
         "idle_kill_ttl_s": 1800,           # protected post-grad TTL (>= outcome.window_s)
         "reattach": True,
         "birdeye_interval_s": 15,
