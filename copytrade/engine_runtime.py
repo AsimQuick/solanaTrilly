@@ -363,7 +363,7 @@ def handle_event(
                     trigger_wallet=event.wallet,
                     entry_ts=entry_ts,
                 )
-                rejected_pos = _write_rejected_entry(
+                _write_rejected_entry(
                     record,
                     fill_telemetry=fill_telemetry,
                     reason=fill_check.reason,

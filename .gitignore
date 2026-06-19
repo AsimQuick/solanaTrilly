@@ -47,8 +47,12 @@ coverage/
 *.log
 logs/
 
-# ML models
+# ML models (raw binaries ignored; committed artifacts below are exceptions)
 models/
+# US-76: committed model artifacts — reference distribution and meta for CI access
+!models/trilly_pregrad_v3_2/
+!models/trilly_pregrad_v3_2/reference_dist.json
+!models/trilly_pregrad_v3_2/meta.json
 
 # DevRAG
 devrag-config.json

@@ -79,9 +79,11 @@ asyncio event-loop clock (loop.time()) is used only for cooperative sleeping,
 never as a wall-clock timestamp.
 """
 import asyncio
+import json
 import logging
 import signal
 import sys
+from pathlib import Path
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -103,6 +105,87 @@ DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_SCORE_TICK_S = 5.0
 DEFAULT_POSTGRAD_TICK_S = 5.0
 DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
+
+
+# ---------------------------------------------------------------------------
+# US-76 P1.1 -- configuration guard (blocks the pool-of-1 silent-pass path)
+# ---------------------------------------------------------------------------
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when the scoring configuration is incomplete or inconsistent.
+
+    US-76 P1.1: if scoring_enabled=True and reference_dist_path is null or the
+    file is missing, the daemon refuses to start scoring rather than silently
+    falling back to the pool-of-1 path (which assigns rank=1.0 to every token
+    and causes every graduation to pass any threshold).
+    """
+
+
+# ---------------------------------------------------------------------------
+# US-76 P2.5 -- threshold from model artifact (not a hardcoded constant)
+# ---------------------------------------------------------------------------
+
+# The operator-configured target trades-per-day rate.  This selects which
+# depth_menu row supplies rank_cut.  Defaults to 30/day (meta.json recommended).
+_DEFAULT_PER_DAY = 30
+
+
+def _threshold_from_model(model_entry, *, per_day: int = _DEFAULT_PER_DAY) -> float:
+    """Return the rank_cut for the active model at the given per_day target.
+
+    Reads depth_menu from meta.json in the artifact_dir.  Falls back to the
+    first available per_day entry if the requested rate is not found, and to
+    0.7916 (v3.2 30/day) if no meta.json is readable.
+
+    US-76 P2.5: replaces the hardcoded 0.8 constant.  The threshold comes from
+    the model artifact so it stays in sync with the model at promotion time.
+
+    Args:
+        model_entry: Active ModelRegistry row with artifact_dir populated.
+        per_day:     Trades-per-day target; selects the depth_menu row.
+
+    Returns:
+        float rank_cut from meta.json depth_menu, or 0.7916 as fallback.
+    """
+    _FALLBACK = 0.7916  # v3.2 30/day rank_cut; also the default in depth_menu
+    try:
+        artifact_dir = Path(model_entry.artifact_dir) if model_entry.artifact_dir else None
+        if artifact_dir is None:
+            return _FALLBACK
+        meta_path = artifact_dir / "meta.json"
+        if not meta_path.is_file():
+            logger.warning(
+                "%s _threshold_from_model: meta.json not found at %s -- using fallback %.4f",
+                LOG_PREFIX,
+                meta_path,
+                _FALLBACK,
+            )
+            return _FALLBACK
+        with meta_path.open(encoding="utf-8") as fh:
+            meta = json.load(fh)
+        depth_menu = meta.get("depth_menu", [])
+        if not depth_menu:
+            return _FALLBACK
+        # Find exact per_day match; fall back to first entry.
+        for entry in depth_menu:
+            if entry.get("per_day") == per_day:
+                return float(entry["rank_cut"])
+        logger.warning(
+            "%s _threshold_from_model: per_day=%d not in depth_menu -- using first entry %.4f",
+            LOG_PREFIX,
+            per_day,
+            float(depth_menu[0]["rank_cut"]),
+        )
+        return float(depth_menu[0]["rank_cut"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s _threshold_from_model: error reading meta.json (%s) -- using fallback %.4f",
+            LOG_PREFIX,
+            exc,
+            _FALLBACK,
+        )
+        return _FALLBACK
 
 
 # ---------------------------------------------------------------------------
@@ -790,7 +873,16 @@ class FirehoseDaemon:
         return due
 
     def _build_scoring_context_sync(self):
-        """Build (scorer, ref_dist, scoring, trading_cfg, size_sol, sol_usd, threshold)."""
+        """Build (scorer, ref_dist, scoring, trading_cfg, size_sol, sol_usd, threshold).
+
+        US-76 P1.1 guard: if scoring_enabled=True and reference_dist_path is
+        null or missing, raises ConfigurationError to block the pool-of-1
+        silent-pass path (ref_dist=None -> rank=1.0 for every token).
+
+        US-76 P2.5: threshold comes from rank_cut in meta.json depth_menu, not
+        a hardcoded constant.
+        """
+        from core.models import PipelineState
         from core.resolver import get_active_config, get_active_model
         from core.scorer import BlendScorer, ReferenceDistribution
         from trading.models import TradingSettings
@@ -801,10 +893,31 @@ class FirehoseDaemon:
             raise RuntimeError("no active model in ModelRegistry")
         scorer = BlendScorer.from_registry(model_entry)
 
-        ref_dist = None
-        ref_path = config.scoring.reference_dist_path if config else None
-        if ref_path:
+        # P1.1 -- require ref_dist when scoring is enabled.
+        state = PipelineState.get()
+        if state.scoring_enabled:
+            ref_path = config.scoring.reference_dist_path if config else None
+            if not ref_path:
+                raise ConfigurationError(
+                    "scoring_enabled=True but ScoringConfig.reference_dist_path is null. "
+                    "Set reference_dist_path to the frozen reference_dist.json in the "
+                    "active PipelineConfig to prevent the pool-of-1 silent-pass bug "
+                    "(US-76 P1.1 guard)."
+                )
+            if not Path(ref_path).is_file():
+                raise ConfigurationError(
+                    f"scoring_enabled=True but reference_dist.json is missing: {ref_path!r}. "
+                    "Commit reference_dist.json alongside the model artifact and wire "
+                    "ScoringConfig.reference_dist_path to it (US-76 P1.1 guard)."
+                )
             ref_dist = ReferenceDistribution.from_file(ref_path)
+        else:
+            ref_path = config.scoring.reference_dist_path if config else None
+            ref_dist = (
+                ReferenceDistribution.from_file(ref_path)
+                if (ref_path and Path(ref_path).is_file())
+                else None
+            )
 
         scoring = {
             "gate": config.scoring.gate,
@@ -813,7 +926,7 @@ class FirehoseDaemon:
         # Trading knobs come from the shared TradingSettings singleton (P8).
         trading_cfg = TradingSettings.get().to_schema()
         # Paper size: prefer config.trading.paper_size_usd (USD) -> SOL via sol_usd.
-        # SOL/USD comes from the shared cached spot (core.pricing.sol_usd) — one
+        # SOL/USD comes from the shared cached spot (core.pricing.sol_usd) -- one
         # USD oracle for BOTH heads; replaces the former hardcoded 140.0 (a latent
         # staleness bug).  Fail-safe: falls back to 140.0 on any price miss.
         from core.pricing.sol_usd import get_sol_usd
@@ -826,8 +939,8 @@ class FirehoseDaemon:
             size_sol = float(paper_size_usd) / sol_usd
         else:
             size_sol = trading_cfg.position_size_sol
-        # adaptive_topk / threshold cut — config-driven via trading section when present.
-        threshold = 0.8
+        # P2.5 -- threshold from model artifact (rank_cut from meta.json depth_menu).
+        threshold = _threshold_from_model(model_entry)
         return scorer, ref_dist, scoring, trading_cfg, size_sol, sol_usd, threshold
 
     def _paper_trade_sync(

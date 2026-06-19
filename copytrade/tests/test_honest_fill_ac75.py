@@ -29,7 +29,6 @@ Feature flag: honest_fills_enabled defaults to False (§6.7).
 from __future__ import annotations
 
 import json
-import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,7 +36,6 @@ import pytest
 
 from copytrade.honest_fill import (
     DEFAULT_ENTRY_SLIP_CAP,
-    EntryCheckResult,
     check_copy_entry,
 )
 
@@ -319,6 +317,7 @@ def test_honest_fills_enabled_can_be_set_true():
 def test_wallet_tx_event_block_time_promoted_from_raw():
     """WalletTxEvent.block_time is populated from raw dict (§8 P1 promotion)."""
     from datetime import datetime, timezone
+
     from copytrade.wallet_consumer import WalletTxEvent
 
     ts = datetime(2026, 6, 14, 0, 0, 0, tzinfo=timezone.utc)
@@ -353,6 +352,7 @@ def test_wallet_tx_event_block_time_promoted_from_raw():
 def test_wallet_tx_event_block_time_none_when_absent():
     """WalletTxEvent.block_time is None when raw dict has no block_time."""
     from datetime import datetime, timezone
+
     from copytrade.wallet_consumer import WalletTxEvent
 
     ts = datetime(2026, 6, 14, 0, 0, 0, tzinfo=timezone.utc)
@@ -401,6 +401,7 @@ def test_copytrade_position_has_honest_fill_columns():
 def test_copytrade_position_entry_rejected_pnl_null():
     """ENTRY_REJECTED position has NULL PnL fields (excluded from win-rate)."""
     from datetime import datetime, timezone
+
     from copytrade.models import CopytradePosition
 
     ts = datetime(2026, 6, 14, 0, 0, 0, tzinfo=timezone.utc)

@@ -65,14 +65,29 @@ def _raw_swap(block_time: int, slot: int, sig: str, side: str, owner: str, vol: 
     }
 
 
-# Six PRE-grad swaps (block_time < _GRAD_BT => rel < 0) — enough for a feature row.
+# Twenty PRE-grad swaps (block_time < _GRAD_BT => rel < 0) — satisfies US-76 P2.4
+# secondary gate (>=20 pre-grad swaps required for feature assembly).
 _RAW_SWAPS = [
-    _raw_swap(900, 1, "s1", "buy", "A", 2.0, 0.001),
-    _raw_swap(910, 2, "s2", "buy", "B", 1.0, 0.0011),
-    _raw_swap(920, 3, "s3", "buy", "C", 3.0, 0.0012),
-    _raw_swap(930, 4, "s4", "sell", "A", 1.5, 0.0013),
-    _raw_swap(940, 5, "s5", "buy", "A", 0.5, 0.0014),
-    _raw_swap(950, 6, "s6", "buy", "D", 4.0, 0.0015),
+    _raw_swap(700, 1,  "s1",  "buy",  "A", 2.0,  0.001),
+    _raw_swap(710, 2,  "s2",  "buy",  "B", 1.0,  0.0011),
+    _raw_swap(720, 3,  "s3",  "buy",  "C", 3.0,  0.0012),
+    _raw_swap(730, 4,  "s4",  "sell", "A", 1.5,  0.0013),
+    _raw_swap(740, 5,  "s5",  "buy",  "A", 0.5,  0.0014),
+    _raw_swap(750, 6,  "s6",  "buy",  "D", 4.0,  0.0015),
+    _raw_swap(760, 7,  "s7",  "buy",  "E", 1.2,  0.0016),
+    _raw_swap(770, 8,  "s8",  "buy",  "F", 0.8,  0.0017),
+    _raw_swap(780, 9,  "s9",  "sell", "B", 0.5,  0.0018),
+    _raw_swap(790, 10, "s10", "buy",  "G", 2.1,  0.0019),
+    _raw_swap(800, 11, "s11", "buy",  "H", 0.9,  0.0020),
+    _raw_swap(810, 12, "s12", "buy",  "I", 1.5,  0.0021),
+    _raw_swap(820, 13, "s13", "sell", "C", 2.0,  0.0022),
+    _raw_swap(830, 14, "s14", "buy",  "J", 0.7,  0.0023),
+    _raw_swap(840, 15, "s15", "buy",  "K", 1.1,  0.0024),
+    _raw_swap(850, 16, "s16", "buy",  "L", 0.6,  0.0025),
+    _raw_swap(860, 17, "s17", "buy",  "D", 3.0,  0.0026),
+    _raw_swap(870, 18, "s18", "sell", "E", 0.4,  0.0027),
+    _raw_swap(880, 19, "s19", "buy",  "M", 1.8,  0.0028),
+    _raw_swap(890, 20, "s20", "buy",  "N", 0.3,  0.0029),
 ]
 
 
