@@ -90,15 +90,19 @@ class EngineState:
         Populated from the enabled strategies at startup.
 
     sold_signals:
-        Set of mints where the owning source wallet has issued a SELL event.
-        Used by MirrorWalletSellExit to trigger the mirror-sell close.
+        Map of mint -> the source wallet's SELL price (the curve price from its
+        sell TradeEvent).  A mint present here means the owning source wallet has
+        sold; MirrorWalletSellExit fires the mirror close AND books it at this
+        price (so the scalp exit does NOT depend on an external price feed having
+        a price for a fresh pre-grad token — the Birdeye REST source returns None
+        for not-yet-indexed bonding-curve mints).
     """
 
     multiplicity: MultiplicityState
     open_positions: dict  # mint -> CopytradePosition
     wallet_to_strategy: dict  # address -> strategy_id
     exit_by_strategy: dict  # strategy_id -> exit cfg (OurTrailingExit | MirrorWalletSellExit)
-    sold_signals: set  # set[mint]
+    sold_signals: dict  # mint -> source-wallet sell price (curve price)
 
     @classmethod
     def new(
@@ -124,7 +128,7 @@ class EngineState:
             open_positions=open_positions if open_positions is not None else {},
             wallet_to_strategy=dict(wallet_to_strategy),
             exit_by_strategy=dict(exit_by_strategy),
-            sold_signals=set(),
+            sold_signals={},
         )
         # Seed multiplicity from any pre-existing open positions
         for mint, position in state.open_positions.items():
@@ -228,11 +232,22 @@ def handle_event(
     # ------------------------------------------------------------------
     if event.tx_type == "sell":
         if event.wallet in state.wallet_to_strategy and event.mint in state.open_positions:
-            state.sold_signals.add(event.mint)
+            # Record the source wallet's sell PRICE (curve price from its sell
+            # TradeEvent) so the mirror exit can book at it without depending on an
+            # external feed having a price for this (often pre-grad) mint.
+            sell_price = 0.0
+            raw_price = event.raw.get("price")
+            if raw_price is not None:
+                try:
+                    sell_price = float(raw_price)
+                except (TypeError, ValueError):
+                    sell_price = 0.0
+            state.sold_signals[event.mint] = sell_price
             logger.info(
-                "[copytrade] sell-signal: wallet=%.8s mint=%.8s (mirror trigger queued)",
+                "[copytrade] sell-signal: wallet=%.8s mint=%.8s price=%.8g (mirror trigger queued)",
                 event.wallet,
                 event.mint,
+                sell_price,
             )
         return None
 
@@ -378,7 +393,15 @@ def manage_positions(
             current_price = None
 
         if current_price is None or current_price <= 0:
-            continue  # skip tick — price unavailable
+            # Fallback for a pending mirror exit: a fresh pre-grad mint is often
+            # not yet on the external price feed, but the source wallet's SELL
+            # carried a curve price — book the mirror close at that (unit-
+            # consistent with the curve-price entry).  Other cases skip the tick.
+            sell_price = state.sold_signals.get(mint, 0.0)
+            if sell_price and sell_price > 0:
+                current_price = sell_price
+            else:
+                continue  # skip tick — price unavailable
 
         # 2. Ratchet high_water_price
         prior_hw = float(position.high_water_price or position.entry_price or current_price)
@@ -465,7 +488,7 @@ def manage_positions(
             state.multiplicity.open_positions_count = max(
                 0, state.multiplicity.open_positions_count - 1
             )
-            state.sold_signals.discard(mint)
+            state.sold_signals.pop(mint, None)
 
     return closed
 
