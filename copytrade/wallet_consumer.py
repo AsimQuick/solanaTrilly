@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.wallet_consumer
-# sprint: sprint-12
-# story: US-59 AC-59.2
-# status: implemented
+# sprint: sprint-12, US-75
+# story: US-59 AC-59.2, US-75 AC-1
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-20
 # dependencies: core.datasource, core.clock
 # ---
 """WalletSubscriptionConsumer — injected DataSource + Clock wallet-tx consumer.
@@ -47,6 +47,13 @@ class WalletTxEvent:
     or time.time() on this path).
 
     tx_type values: "buy" | "sell" | "transfer" | "unknown"
+
+    US-75 AC-1: block_time is the on-chain confirmed block timestamp (Unix epoch
+    float, from event.raw["block_time"] populated by decode_wallet_tx / helius
+    decode).  Used to compute copy_latency_s = clock.now() − block_time.  None
+    when the Helius frame does not carry block_time (e.g. non-pump-fun events),
+    in which case honest_fill logs copy_latency_s=None (no ambiguous telemetry —
+    §8 P1 requirement).
     """
 
     wallet: str
@@ -57,6 +64,8 @@ class WalletTxEvent:
     token_amount: float
     timestamp: datetime
     raw: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
+    # US-75 AC-1: on-chain confirmed block time (Unix epoch float), or None.
+    block_time: float | None = field(default=None, compare=False, hash=False)
 
 
 class WalletSubscriptionConsumer:
@@ -142,6 +151,17 @@ class WalletSubscriptionConsumer:
         mint = raw.get("mint", "")
         if not mint:
             return None
+        # US-75 AC-1: promote block_time from raw dict (populated by
+        # decode_wallet_tx from the Helius TradeEvent decode path).  None when
+        # absent — honest_fill logs copy_latency_s=None in that case.
+        raw_bt = raw.get("block_time")
+        block_time: float | None = None
+        if raw_bt is not None:
+            try:
+                block_time = float(raw_bt)
+            except (TypeError, ValueError):
+                block_time = None
+
         return WalletTxEvent(
             wallet=wallet,
             mint=mint,
@@ -151,4 +171,5 @@ class WalletSubscriptionConsumer:
             token_amount=float(raw.get("token_amount", 0.0)),
             timestamp=ts,
             raw=raw,
+            block_time=block_time,
         )

@@ -1,8 +1,8 @@
 # ---
 # module: copytrade.models
-# sprint: sprint-12, copytrade-2.1-loader
-# story: US-58 AC-58.1, US-58 AC-58.2, US-62 AC-62.1, copytrade-v2.1
-# status: implemented
+# sprint: sprint-12, copytrade-2.1-loader, US-75
+# story: US-58 AC-58.1, US-58 AC-58.2, US-62 AC-62.1, copytrade-v2.1, US-75 AC-1
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-20
 # dependencies: django, copytrade.schemas, pydantic
@@ -65,6 +65,18 @@ class CopyTradeSettings(models.Model):
     active_cohort_id = models.CharField(max_length=255, null=True, blank=True)
     engine_on = models.BooleanField(default=False)
 
+    # --- US-75 AC-1: honest-fills feature flag (§6.7) ---
+    # Default False: the running v1/v2 soak is NOT disrupted at merge.
+    # Flip deliberately for the AC-5 soak.
+    honest_fills_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "US-75 AC-1: when True, apply honest-fill slippage cap to OBSERVE "
+            "copy entries and emit ENTRY_REJECTED rows (PnL NULL). "
+            "Default False — does not affect the running soak until deliberately flipped."
+        ),
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -93,6 +105,9 @@ class CopyTradeSettings(models.Model):
                 mirror_wallet_sells=self.mirror_wallet_sells,
                 active_cohort_id=self.active_cohort_id,
                 engine_on=self.engine_on,
+                # US-75 AC-1: honest_fills_enabled is not in CopyTradeConfig
+                # (it is a runtime operational toggle, not a trade-config field).
+                # Validated at the model level by BooleanField — no Pydantic rule needed.
             )
         except PydanticValidationError as exc:
             raise DjangoValidationError(str(exc)) from exc
@@ -223,8 +238,9 @@ class CopytradePosition(models.Model):
     EXIT_CURVE = "CURVE"
     EXIT_TIMER = "TIMER"
     EXIT_SETTLE = "SETTLE"
-    EXIT_TRAIL = "TRAIL"    # moonshot our_trailing: trailing-giveback from high-water
-    EXIT_MIRROR = "MIRROR"  # consistent_scalp: mirror the source wallet's sell
+    EXIT_TRAIL = "TRAIL"            # moonshot our_trailing: trailing-giveback from high-water
+    EXIT_MIRROR = "MIRROR"          # consistent_scalp: mirror the source wallet's sell
+    EXIT_ENTRY_REJECTED = "ENTRY_REJECTED"  # US-75 AC-1: slippage cap exceeded at entry
     EXIT_REASON_CHOICES = [
         (EXIT_TP, "Take Profit"),
         (EXIT_SL, "Stop Loss"),
@@ -233,6 +249,7 @@ class CopytradePosition(models.Model):
         (EXIT_SETTLE, "Cohort Settlement"),
         (EXIT_TRAIL, "Trailing Giveback"),
         (EXIT_MIRROR, "Mirror Wallet Sell"),
+        (EXIT_ENTRY_REJECTED, "Entry Rejected (Slippage Cap)"),
     ]
 
     cohort_id = models.CharField(max_length=255, db_index=True)
@@ -255,10 +272,70 @@ class CopytradePosition(models.Model):
     exit_ts = models.DateTimeField(null=True, blank=True)
     exit_price = models.FloatField(null=True, blank=True)
     sol_out = models.FloatField(null=True, blank=True)
-    exit_reason = models.CharField(max_length=10, choices=EXIT_REASON_CHOICES, null=True, blank=True)
+    # max_length=15 to accommodate "ENTRY_REJECTED" (US-75 AC-1)
+    exit_reason = models.CharField(max_length=15, choices=EXIT_REASON_CHOICES, null=True, blank=True)
 
     realized_pnl_sol = models.FloatField(null=True, blank=True)
     realized_pnl_pct = models.FloatField(null=True, blank=True)
+
+    # --- US-75 AC-1: honest-fills telemetry (§6.1) ---
+    # All nullable; populated only when honest_fills_enabled=True.
+    # On ENTRY_REJECTED rows, PnL columns remain NULL (excluded from win-rate).
+    quote_price = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="US-75 AC-1: watched wallet's confirmed fill price (the 'quote').",
+    )
+    fill_price = models.FloatField(
+        null=True,
+        blank=True,
+        help_text=(
+            "US-75 AC-1: our estimated fill price at detection time "
+            "(curve/AMM state at wallet_buy_ts + copy_latency)."
+        ),
+    )
+    cap_pct = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="US-75 AC-1: slippage cap fraction applied (e.g. 0.15 for 15%).",
+    )
+    copy_latency_s = models.FloatField(
+        null=True,
+        blank=True,
+        help_text=(
+            "US-75 AC-1: seconds from on-chain block_time to our clock arrival. "
+            "None when block_time was absent from the Helius event."
+        ),
+    )
+
+    # --- US-75 AC-2: rejected-entry counterfactual settlement fields ---
+    # Populated by the counterfactual settler (settle_rejected_entries) for
+    # ENTRY_REJECTED rows.  NULL until the settler runs, or if the forward tape
+    # was empty in the window (outcome=None — #304 guard, never a perpetual skip).
+    peak_return_pct = models.FloatField(
+        null=True,
+        blank=True,
+        help_text=(
+            "US-75 AC-2: for ENTRY_REJECTED rows, best return (fraction, "
+            "e.g. 0.5 = +50%) from rejection ts forward in the recorder tape."
+        ),
+    )
+    rug_outcome = models.BooleanField(
+        null=True,
+        blank=True,
+        help_text=(
+            "US-75 AC-2: for ENTRY_REJECTED rows, True if token dropped "
+            ">=50% from peak in the forward window (rug signal)."
+        ),
+    )
+    forward_window_s = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text=(
+            "US-75 AC-2: for ENTRY_REJECTED rows, actual seconds of tape "
+            "consumed by the counterfactual settler (bounded)."
+        ),
+    )
 
     # FK-free integer link to the shared trading.Position row (AC-68.1).
     # IntegerField (not FK) to avoid Django cascade semantics and preserve §5 isolation.
