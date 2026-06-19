@@ -1,0 +1,473 @@
+# ---
+# module: copytrade.engine_runtime
+# sprint: cutover (copy-trade live)
+# story: copytrade-runtime
+# status: implemented
+# created-by: dev-team
+# last-updated: 2026-06-19
+# dependencies: copytrade.buy_trigger, copytrade.exits, copytrade.multiplicity,
+#   copytrade.position_manager, copytrade.position_opener, copytrade.schemas,
+#   copytrade.wallet_consumer, core.clock
+# ---
+"""Pure, injected copy-trade engine runtime (observe/paper only).
+
+This module is the testable orchestration core — it has:
+  - NO live I/O (DataSource is injected by the command)
+  - NO datetime.now() / time.time() (Clock is injected)
+  - NO open_live_position call (OBSERVE/PAPER ONLY — the command asserts mode)
+  - NO import of BirdeyeSwapSource, HeliusBirthTapeSource, TapeRecorder,
+    LakeWriter, SwapWriter, PipelineConfig, or PipelineState (§5 isolation)
+
+The two public functions are:
+
+  ``handle_event(event, ...)``
+      Processes one WalletTxEvent: routes sells as mirror signals, tests buys
+      against the trigger predicate and multiplicity controls, and opens an
+      observe position via open_observe_position_v2.
+
+  ``manage_positions(...)``
+      Evaluates exit conditions for all open positions, closes fired ones via
+      close_position, and returns the list of positions closed this tick.
+
+EngineState holds all in-memory runtime state for one cohort session.  It is
+NOT thread-safe (the asyncio engine loop is single-threaded by construction).
+
+Logging: greppable ``[copytrade]`` prefix on every actionable log line so
+operators can ``grep '[copytrade]'`` in the container log stream.
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Callable, Optional
+
+from copytrade.buy_trigger import should_copy_buy_v2
+from copytrade.exits import (
+    evaluate_mirror_exit,
+    evaluate_trailing_exit,
+)
+from copytrade.models import CopytradePosition
+from copytrade.multiplicity import MultiplicityState, apply_multiplicity_controls
+from copytrade.position_manager import close_position
+from copytrade.position_opener import OpenedPositionRecordV2, open_observe_position_v2
+from copytrade.schemas import MirrorWalletSellExit, OurTrailingExit
+from copytrade.wallet_consumer import WalletTxEvent
+from core.clock import Clock
+
+logger = logging.getLogger("copytrade")
+
+# ---------------------------------------------------------------------------
+# EngineState — in-memory cohort-session state
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EngineState:
+    """All in-memory state for one active cohort session.
+
+    One instance is created at engine startup and passed to every
+    ``handle_event`` / ``manage_positions`` call.  NOT thread-safe
+    (single-threaded asyncio loop by construction).
+
+    Attributes
+    ----------
+    multiplicity:
+        MultiplicityState tracking copy_first_buy_only / dedupe / cap across
+        the full session.
+
+    open_positions:
+        mint -> CopytradePosition map for positions currently open.  Seeded
+        from the DB at startup (existing open rows) and maintained in-memory
+        thereafter.
+
+    wallet_to_strategy:
+        wallet_address -> strategy_id mapping (from CohortV2.wallet_to_strategy()).
+        Determines which head's exit config applies when a wallet triggers.
+
+    exit_by_strategy:
+        strategy_id -> exit config (OurTrailingExit | MirrorWalletSellExit).
+        Populated from the enabled strategies at startup.
+
+    sold_signals:
+        Set of mints where the owning source wallet has issued a SELL event.
+        Used by MirrorWalletSellExit to trigger the mirror-sell close.
+    """
+
+    multiplicity: MultiplicityState
+    open_positions: dict  # mint -> CopytradePosition
+    wallet_to_strategy: dict  # address -> strategy_id
+    exit_by_strategy: dict  # strategy_id -> exit cfg (OurTrailingExit | MirrorWalletSellExit)
+    sold_signals: set  # set[mint]
+
+    @classmethod
+    def new(
+        cls,
+        wallet_to_strategy: dict,
+        exit_by_strategy: dict,
+        open_positions: Optional[dict] = None,
+    ) -> "EngineState":
+        """Create a fresh EngineState for a new cohort session.
+
+        Parameters
+        ----------
+        wallet_to_strategy:
+            Mapping from wallet address to strategy id (from CohortV2).
+        exit_by_strategy:
+            Mapping from strategy_id to the head's exit config.
+        open_positions:
+            Optionally pre-seed from open DB rows (for crash recovery).
+            Defaults to an empty dict (fresh start).
+        """
+        state = cls(
+            multiplicity=MultiplicityState.new(),
+            open_positions=open_positions if open_positions is not None else {},
+            wallet_to_strategy=dict(wallet_to_strategy),
+            exit_by_strategy=dict(exit_by_strategy),
+            sold_signals=set(),
+        )
+        # Seed multiplicity from any pre-existing open positions
+        for mint, position in state.open_positions.items():
+            state.multiplicity.open_mints.add(mint)
+            state.multiplicity.open_positions_count += 1
+        return state
+
+
+# ---------------------------------------------------------------------------
+# Multiplicity-compatible shim
+# ---------------------------------------------------------------------------
+
+class _MultiplicityConfigShim:
+    """Thin shim that exposes multiplicity config fields from CopyTradeSettings.
+
+    apply_multiplicity_controls reads these three flags off the config object;
+    we pull them from the CopyTradeSettings model row (or any object that has
+    these attributes) and expose them with the same names.
+    """
+
+    def __init__(
+        self,
+        copy_first_buy_only: bool,
+        dedupe_token_across_wallets: bool,
+        max_concurrent_positions: int,
+    ) -> None:
+        self.copy_first_buy_only = copy_first_buy_only
+        self.dedupe_token_across_wallets = dedupe_token_across_wallets
+        self.max_concurrent_positions = max_concurrent_positions
+
+
+# ---------------------------------------------------------------------------
+# handle_event — per-event orchestration
+# ---------------------------------------------------------------------------
+
+
+def handle_event(
+    event: WalletTxEvent,
+    *,
+    settings: Any,
+    state: EngineState,
+    cohort: Any,  # CohortV2 instance
+    sol_usd: float,
+    price_fn: Callable[[str], Optional[float]],
+    clock: Clock,
+) -> Optional[CopytradePosition]:
+    """Process one WalletTxEvent and return an opened position or None.
+
+    SELL path
+    ---------
+    If the event is a sell from a watched wallet and we hold the mint, record
+    the sell signal so the mirror-exit evaluator fires on the next manage_positions
+    tick.  Returns None (we do not close synchronously here — close on the
+    periodic manager tick so high_water is persisted consistently).
+
+    BUY path
+    --------
+    1. Trigger predicate: should_copy_buy_v2 — pump.fun token, >= min_trigger_buy_usd.
+    2. Multiplicity controls: copy_first_buy_only / dedupe / max_concurrent cap.
+    3. If action == "open":
+       a. Resolve strategy_id from state.wallet_to_strategy.
+       b. Fetch current price via price_fn; fall back to event.raw["price"].
+       c. Open a paper position via open_observe_position_v2.
+       d. Register in state.open_positions; update multiplicity open count.
+    4. Return the opened CopytradePosition, or None for any skip/dedupe.
+
+    Safety
+    ------
+    This function NEVER calls open_live_position.  Mode safety is asserted by
+    the command (composition root) before the event loop starts — this module
+    simply never references the live path.
+
+    Parameters
+    ----------
+    event:
+        The WalletTxEvent from the WalletSubscriptionConsumer.
+    settings:
+        CopyTradeSettings row (or compatible object) exposing
+        min_trigger_buy_usd, usd_size_per_trade, copy_first_buy_only,
+        dedupe_token_across_wallets, max_concurrent_positions, active_cohort_id.
+    state:
+        The current EngineState (mutated in-place on open).
+    cohort:
+        Validated CohortV2 instance for the active cohort.
+    sol_usd:
+        Current SOL/USD spot (injected — no internal fetch).
+    price_fn:
+        Callable ``(mint: str) -> float | None`` for the current token price.
+        Returns None when price is unavailable; fall back to raw event price.
+    clock:
+        Injected Clock — used to stamp entry_ts on the new position.
+
+    Returns
+    -------
+    CopytradePosition if a position was opened, else None.
+    """
+    cohort_id: str = getattr(settings, "active_cohort_id", "") or ""
+
+    # ------------------------------------------------------------------
+    # SELL path — track mirror signals
+    # ------------------------------------------------------------------
+    if event.tx_type == "sell":
+        if event.wallet in state.wallet_to_strategy and event.mint in state.open_positions:
+            state.sold_signals.add(event.mint)
+            logger.info(
+                "[copytrade] sell-signal: wallet=%.8s mint=%.8s (mirror trigger queued)",
+                event.wallet,
+                event.mint,
+            )
+        return None
+
+    # ------------------------------------------------------------------
+    # BUY path — only process "buy" events
+    # ------------------------------------------------------------------
+    if event.tx_type != "buy":
+        return None
+
+    # 1. Trigger predicate (pump.fun token + >= min_trigger_buy_usd)
+    min_usd = float(getattr(settings, "min_trigger_buy_usd", 250.0))
+    if not should_copy_buy_v2(event, min_trigger_buy_usd=min_usd, sol_usd=sol_usd):
+        return None
+
+    # 2. Multiplicity controls
+    mult_cfg = _MultiplicityConfigShim(
+        copy_first_buy_only=bool(getattr(settings, "copy_first_buy_only", True)),
+        dedupe_token_across_wallets=bool(getattr(settings, "dedupe_token_across_wallets", True)),
+        max_concurrent_positions=int(getattr(settings, "max_concurrent_positions", 30)),
+    )
+    decision = apply_multiplicity_controls(event, state.multiplicity, mult_cfg)
+    if decision.action != "open":
+        logger.debug(
+            "[copytrade] skip: wallet=%.8s mint=%.8s reason=%s",
+            event.wallet,
+            event.mint,
+            decision.reason,
+        )
+        return None
+
+    # 3a. Resolve strategy_id
+    strategy_id: str = state.wallet_to_strategy.get(event.wallet, "")
+
+    # 3b. Entry price — try price_fn; fall back to event.raw["price"]
+    entry_price: Optional[float] = None
+    try:
+        entry_price = price_fn(event.mint)
+    except Exception:  # noqa: BLE001
+        entry_price = None
+
+    if entry_price is None or entry_price <= 0:
+        raw_price = event.raw.get("price")
+        if raw_price is not None:
+            try:
+                entry_price = float(raw_price)
+            except (TypeError, ValueError):
+                entry_price = None
+
+    if not entry_price or entry_price <= 0:
+        logger.warning(
+            "[copytrade] price-unavailable: wallet=%.8s mint=%.8s — skipping open",
+            event.wallet,
+            event.mint,
+        )
+        # Undo multiplicity state since we cannot actually open
+        state.multiplicity.open_positions_count -= 1
+        state.multiplicity.open_mints.discard(event.mint)
+        return None
+
+    # 3c. Open the paper position
+    usd_size = float(getattr(settings, "usd_size_per_trade", 25.0))
+    record = OpenedPositionRecordV2(
+        cohort_id=cohort_id,
+        mint=event.mint,
+        trigger_wallet=event.wallet,
+        entry_ts=clock.now(),
+    )
+
+    position = open_observe_position_v2(
+        record,
+        entry_price,
+        usd_size=usd_size,
+        sol_usd=sol_usd,
+        strategy_id=strategy_id,
+    )
+
+    # 3d. Register in state
+    state.open_positions[event.mint] = position
+
+    logger.info(
+        "[copytrade] copy-buy: head=%s wallet=%.8s mint=%.8s usd=%.2f entry=%.8g",
+        strategy_id,
+        event.wallet,
+        event.mint,
+        usd_size,
+        entry_price,
+    )
+    return position
+
+
+# ---------------------------------------------------------------------------
+# manage_positions — periodic exit tick
+# ---------------------------------------------------------------------------
+
+
+def manage_positions(
+    *,
+    state: EngineState,
+    price_fn: Callable[[str], Optional[float]],
+    clock: Clock,
+    now: datetime,
+) -> list:
+    """Evaluate exit conditions for all open positions and close fired ones.
+
+    Called periodically (every ~15 s) by the command's manager task.
+
+    For each open position:
+      1. Fetch current price via price_fn.  If None, skip this tick (price
+         unavailable — we do NOT close on a price miss).
+      2. Ratchet the high_water_price and persist it on the position.
+      3. Look up the exit config for this position's strategy_id.
+         - OurTrailingExit -> evaluate_trailing_exit
+         - MirrorWalletSellExit -> evaluate_mirror_exit (source_wallet_sold =
+           event.mint in state.sold_signals)
+      4. If decision.should_close: call close_position, remove from open_positions,
+         decrement multiplicity open count, clear sold_signal for this mint.
+
+    Parameters
+    ----------
+    state:
+        Current EngineState (mutated in-place for closes).
+    price_fn:
+        Callable ``(mint: str) -> float | None``.
+    clock:
+        Injected Clock — NOT used for ``now`` (caller passes ``now`` explicitly
+        so both the consumer loop and the test harness control the timestamp).
+    now:
+        Current timestamp used as ``current_ts`` for all exit evaluations.
+
+    Returns
+    -------
+    List of CopytradePosition rows that were closed this tick.
+    """
+    closed: list[CopytradePosition] = []
+
+    for mint in list(state.open_positions.keys()):
+        position = state.open_positions[mint]
+
+        # 1. Fetch current price
+        try:
+            current_price: Optional[float] = price_fn(mint)
+        except Exception:  # noqa: BLE001
+            current_price = None
+
+        if current_price is None or current_price <= 0:
+            continue  # skip tick — price unavailable
+
+        # 2. Ratchet high_water_price
+        prior_hw = float(position.high_water_price or position.entry_price or current_price)
+        new_hw = max(prior_hw, current_price)
+        if new_hw != prior_hw:
+            position.high_water_price = new_hw
+            CopytradePosition.objects.filter(pk=position.pk).update(high_water_price=new_hw)
+
+        # 3. Evaluate exit
+        strategy_id = position.strategy_id or ""
+        exit_cfg = state.exit_by_strategy.get(strategy_id)
+
+        if exit_cfg is None:
+            logger.warning(
+                "[copytrade] no-exit-cfg: strategy=%s mint=%.8s — holding",
+                strategy_id,
+                mint,
+            )
+            continue
+
+        entry_price = float(position.entry_price or current_price)
+        entry_ts = position.entry_ts
+
+        if isinstance(exit_cfg, OurTrailingExit):
+            decision = evaluate_trailing_exit(
+                exit_cfg,
+                entry_price=entry_price,
+                current_price=current_price,
+                high_water_price=new_hw,
+                entry_ts=entry_ts,
+                current_ts=now,
+            )
+            # Persist updated high_water from trailing evaluation (may differ from our ratchet)
+            if decision.high_water_price != new_hw:
+                position.high_water_price = decision.high_water_price
+                CopytradePosition.objects.filter(pk=position.pk).update(
+                    high_water_price=decision.high_water_price
+                )
+
+        elif isinstance(exit_cfg, MirrorWalletSellExit):
+            source_sold = mint in state.sold_signals
+            decision = evaluate_mirror_exit(
+                exit_cfg,
+                source_wallet_sold=source_sold,
+                entry_price=entry_price,
+                current_price=current_price,
+                entry_ts=entry_ts,
+                current_ts=now,
+            )
+        else:
+            logger.warning(
+                "[copytrade] unknown-exit-type: strategy=%s mint=%.8s type=%s",
+                strategy_id,
+                mint,
+                type(exit_cfg).__name__,
+            )
+            continue
+
+        # 4. Close if fired
+        if decision.should_close:
+            exit_reason = decision.exit_reason
+            exit_price = decision.exit_price if decision.exit_price is not None else current_price
+
+            closed_position = close_position(position, exit_reason, exit_price, now)
+            closed.append(closed_position)
+
+            # Compute PnL% for logging
+            try:
+                pnl_pct = float(closed_position.realized_pnl_pct or 0.0)
+            except (TypeError, ValueError):
+                pnl_pct = 0.0
+
+            logger.info(
+                "[copytrade] copy-sell: head=%s mint=%.8s reason=%s pnl=%.1f%%",
+                strategy_id,
+                mint,
+                exit_reason,
+                pnl_pct,
+            )
+
+            # Clean up state
+            del state.open_positions[mint]
+            state.multiplicity.open_mints.discard(mint)
+            state.multiplicity.open_positions_count = max(
+                0, state.multiplicity.open_positions_count - 1
+            )
+            state.sold_signals.discard(mint)
+
+    return closed
+
+
+__all__ = ["EngineState", "handle_event", "manage_positions"]
