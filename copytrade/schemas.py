@@ -25,9 +25,9 @@ Save-time invariants enforced at construction:
   - max_concurrent_positions must be > 0
 """
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CopyTradeConfig(BaseModel):
@@ -70,3 +70,184 @@ class CopyTradeConfig(BaseModel):
                 "watched wallet's sells (SPEC §3)."
             )
         return self
+
+
+# ===========================================================================
+# COHORT 2.0 SCHEMA — the real consumption contract (cohort.json `copytrade-2.0`)
+# ===========================================================================
+#
+# The committed engine (above) was built for the never-shipped schema "1.0":
+# one flat trade_config, ONE exit model (TP/SL/CURVE/TIMER), SOL sizing, and a
+# hard invariant FORBIDDING mirror-sell.  The real cohort the operator hands us
+# (`copy_2026-06-19_v1/cohort.json`, schema "copytrade-2.0") is fundamentally
+# different and AUTHORITATIVE:
+#
+#   - a `global` block (mode / usd_size_per_trade / a `trigger` sub-block with
+#     the >= $250 `min_trigger_buy_usd` conviction gate / max_concurrent / cadence)
+#   - a `strategies[]` array of TWO independent heads, each with its OWN wallet
+#     list and its OWN deterministic exit:
+#       * consistent_scalp -> exit type "mirror_wallet_sell" (REQUIRES the
+#         mirror-sell the 1.0 schema forbade — its validated edge IS the wallet's
+#         exit timing)
+#       * moonshot         -> exit type "our_trailing" (SL / trailing-giveback / TP)
+#   - USD sizing/triggering (not SOL), and NO pre-graduation-only restriction
+#     ("copy the first >= $250 buy whenever it happens", still pump.fun-scoped).
+#
+# These classes are ADDITIVE — the legacy CopyTradeConfig above is retained
+# (unused by the 2.0 path) until a later cleanup PR removes the dead 1.0 path.
+# The 2.0 path is the one the live engine consumes.
+
+
+class TriggerConfig(BaseModel):
+    """The cohort-2.0 `global.trigger` block — when to copy a watched wallet.
+
+    `min_trigger_buy_usd` is the conviction filter the formula was validated on:
+    skip the signal unless the wallet's buy is >= this many USD.  `pump_fun_only`
+    keeps us in the validated universe (pump.fun tokens); note the validated rule
+    does NOT restrict to pre-graduation buys.
+    """
+
+    model_config = ConfigDict(extra="ignore")  # underscore "_notes" siblings ignored
+
+    event: str = "watched_wallet_buy"
+    copy_first_buy_only: bool = True
+    min_trigger_buy_usd: float = Field(default=250.0, ge=0)
+    pump_fun_only: bool = True
+    dedupe_token_across_wallets: bool = True
+
+
+class GlobalConfig(BaseModel):
+    """The cohort-2.0 `global` block — engine-wide trigger/size/mode knobs."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    mode: Literal["observe", "live"] = "observe"
+    usd_size_per_trade: float = Field(default=25.0, gt=0)
+    trigger: TriggerConfig = Field(default_factory=TriggerConfig)
+    max_concurrent_positions: int = Field(default=30, gt=0)
+    reselect_cadence_days: int = Field(default=14, gt=0)
+
+
+class MirrorWalletSellExit(BaseModel):
+    """`consistent_scalp` exit — mirror the SOURCE wallet's sell (no imposed TP/SL).
+
+    This head's edge IS the wallet's exit timing, so we sell our copy as the
+    source wallet sells; `max_hold_seconds` is a fallback market-sell only.
+    `hard_stop_loss_pct` is intentionally optional (None = no stop; imposing one
+    was tested and LOSES for these low-precision scalp wallets).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["mirror_wallet_sell"]
+    max_hold_seconds: int = Field(default=86400, gt=0)
+    hard_stop_loss_pct: Optional[float] = Field(default=None, gt=0, le=100)
+
+
+class OurTrailingExit(BaseModel):
+    """`moonshot` exit — OUR own trailing ride (we do NOT mirror their scalp sell).
+
+    Hard SL, a trailing giveback from the high-water mark once profitable, and a
+    hard TP cap.  `max_hold_seconds` optional (None = no time cap; the trailing
+    stop ends the ride).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["our_trailing"]
+    stop_loss_pct: float = Field(gt=0, le=100)
+    trailing_giveback_pct: float = Field(gt=0, le=100)
+    take_profit_pct: float = Field(gt=0)
+    max_hold_seconds: Optional[int] = Field(default=None, gt=0)
+    mirror_wallet_sell: bool = False
+
+
+#: Discriminated union on the `type` tag — pydantic selects the right exit model.
+StrategyExit = Annotated[
+    Union[MirrorWalletSellExit, OurTrailingExit],
+    Field(discriminator="type"),
+]
+
+
+class StrategyWallet(BaseModel):
+    """One wallet in a strategy head.  Only `address` is needed by the engine;
+    the head-specific metrics (is_precision, is_capped_ride, …) are informational
+    and tolerated via extra="allow"."""
+
+    model_config = ConfigDict(extra="allow")
+
+    address: str
+    rank: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _check_address(self) -> "StrategyWallet":
+        if not self.address or not self.address.strip():
+            raise ValueError("wallet address must be a non-empty string")
+        return self
+
+
+class StrategyConfig(BaseModel):
+    """One strategy head: its id, enabled flag, deterministic exit, and wallets."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    enabled: bool = True
+    description: str = ""
+    exit: StrategyExit
+    wallets: list[StrategyWallet] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_id(self) -> "StrategyConfig":
+        if not self.id or not self.id.strip():
+            raise ValueError("strategy id must be a non-empty string")
+        return self
+
+
+class CohortV2(BaseModel):
+    """Validated cohort.json (schema `copytrade-2.0`) — the consumption contract.
+
+    `global` is a Python keyword, so it is bound to `global_` with an alias;
+    `populate_by_name=True` lets callers use either name.  Unknown top-level keys
+    (e.g. `_schema_notes`, `provenance` notes) are ignored.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    schema_version: Literal["copytrade-2.0"]
+    cohort_id: str
+    created_at: str
+    description: str = ""
+    global_: GlobalConfig = Field(alias="global")
+    strategies: list[StrategyConfig] = Field(default_factory=list)
+    provenance: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check(self) -> "CohortV2":
+        if not self.cohort_id or not self.cohort_id.strip():
+            raise ValueError("cohort_id must be a non-empty string")
+        if not self.created_at or not self.created_at.strip():
+            raise ValueError("created_at must be a non-empty string")
+        ids = [s.id for s in self.strategies]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"strategy ids must be unique; got {ids}")
+        if not any(s.enabled for s in self.strategies):
+            raise ValueError("at least one strategy must be enabled")
+        return self
+
+    def enabled_strategies(self) -> list[StrategyConfig]:
+        """The enabled heads, in declaration order."""
+        return [s for s in self.strategies if s.enabled]
+
+    def wallet_to_strategy(self) -> dict[str, str]:
+        """Map each wallet address -> its strategy id (enabled heads only).
+
+        If the same address appears under more than one enabled head, the FIRST
+        head (declaration order) owns it — matching the cohort's cross-head
+        dedupe rule ("the FIRST trigger's head owns the exit").
+        """
+        mapping: dict[str, str] = {}
+        for strat in self.enabled_strategies():
+            for w in strat.wallets:
+                mapping.setdefault(w.address, strat.id)
+        return mapping

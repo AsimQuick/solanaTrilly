@@ -1,0 +1,93 @@
+{
+  "schema_version": "copytrade-2.0",
+  "cohort_id": "copy_2026-06-19_v1",
+  "created_at": "2026-06-19",
+  "description": "Copy-trade cohort built from graduated-token early-buyer wallets, walk-forward validated (Mar/Apr/May 2026) + placebo. TWO independent strategy heads with DIFFERENT exits: 'consistent_scalp' (high win-rate, mirror the source wallet's exit) and 'moonshot' (fat-tail, our own trailing exit). Run either or both. Wallets are a SNAPSHOT (selected on 2026-06-01..06-14) and DECAY — regenerate every ~14 days (see provenance). offline != live: observe-soak before any capital.",
+
+  "_schema_notes": "NEW format for copy-trade (no prior format existed). The engine reads `global` for trigger/size/mode, then runs each enabled entry in `strategies[]`. Each strategy = its own wallet list + its own deterministic exit. JSON has no comments; fields prefixed `_` are human notes the engine may ignore.",
+
+  "global": {
+    "mode": "observe",
+    "_mode": "'observe' (paper) | 'live'. DEFAULT observe. Do not set live until the operator flips it post-soak.",
+    "usd_size_per_trade": 25,
+    "_usd_size_per_trade": "USD per copy-buy (validated at $25; small keeps the edge). UI may override.",
+    "trigger": {
+      "event": "watched_wallet_buy",
+      "copy_first_buy_only": true,
+      "_copy_first_buy_only": "only the wallet's FIRST buy of a given token (the entry), never their adds",
+      "min_trigger_buy_usd": 250,
+      "_min_trigger_buy_usd": "skip the signal unless the wallet's buy is >= this USD (the conviction filter the formula was validated on)",
+      "pump_fun_only": true,
+      "_pump_fun_only": "only pump.fun tokens (the validated universe). NOTE: the formula did NOT restrict to pre-graduation buys; copy the wallet's first >= $250 buy whenever it happens. Restricting to on-curve buys is an UNTESTED variant.",
+      "dedupe_token_across_wallets": true,
+      "_dedupe_token_across_wallets": "if 2+ watched wallets buy the same token, open ONE position; attribute to the first trigger; if the two wallets are in different heads, the FIRST trigger's head owns the exit"
+    },
+    "max_concurrent_positions": 30,
+    "reselect_cadence_days": 14,
+    "_reselect_cadence_days": "wallets show ZERO cross-fold persistence (see provenance.findings); a stale list is worthless. Re-run the formula every ~14 days and upload a new cohort_id."
+  },
+
+  "strategies": [
+    {
+      "id": "consistent_scalp",
+      "enabled": true,
+      "description": "High win-rate, low variance. Copy the wallet's >= $250 first-buy, then EXIT WHEN THE WALLET EXITS (mirror their sell). Validated: median 1.27-1.35x, win 88-92%, +33-46% mean/trade across 3 folds, beats random pool z=2.0-3.8.",
+      "exit": {
+        "type": "mirror_wallet_sell",
+        "_type": "exit OUR copy as the source wallet sells (proportional to how much they sell); this head's edge IS the wallet's exit timing, so do NOT impose our own TP/SL",
+        "max_hold_seconds": 86400,
+        "_max_hold_seconds": "fallback only: if the wallet has not fully exited by this, market-sell the remainder",
+        "hard_stop_loss_pct": null,
+        "_hard_stop_loss_pct": "intentionally none; imposing a stop here was tested and LOSES vs mirroring (see provenance.findings)"
+      },
+      "wallets": [
+        { "address": "5C1JAeFwk9CneMCu3Qa4vNuJh8Ny6tofevQUaScp2Fxn", "rank": 1, "is_signal_trades": 26,  "is_median_mult": 1.28, "is_win_rate": 0.92, "is_precision": 0.08 },
+        { "address": "57stAMFvwctAjkBS76RXGoK4QKyS1QoxbGMbzFFe4DyZ",  "rank": 2, "is_signal_trades": 189, "is_median_mult": 1.28, "is_win_rate": 0.91, "is_precision": 0.11 }
+      ]
+    },
+    {
+      "id": "moonshot",
+      "enabled": true,
+      "description": "Fat-tail. Copy the wallet's >= $250 first-buy, then RIDE with OUR OWN exit (we do NOT mirror their quick scalp). You lose most trades (win ~17-37%, median ~0.5x) but ~10% reach >= 4x. Validated +39-51% mean/trade across 3 folds, beats random pool z=5.9-11.0 (conservative floor: pessimistic non-graduate = -50%, capture capped at 10x).",
+      "exit": {
+        "type": "our_trailing",
+        "stop_loss_pct": 50,
+        "_stop_loss_pct": "hard stop: sell if down >= 50% vs our entry",
+        "trailing_giveback_pct": 40,
+        "_trailing_giveback_pct": "once in profit, sell if price retraces >= 40% from the high-water mark (captures ~60% of the run; this is the modeled trailing capture)",
+        "take_profit_pct": 900,
+        "_take_profit_pct": "hard cap: sell at +900% (10x) regardless (the 10x cap used in validation)",
+        "max_hold_seconds": null,
+        "_max_hold_seconds": "no hard time cap; the trailing stop ends the ride. Operator may add one.",
+        "mirror_wallet_sell": false
+      },
+      "wallets": [
+        { "address": "EKFo92sGrop9YSLeh7ho5w1AodJHc4pSnF3GdjHrm9ad", "rank": 1, "is_signal_trades": 16, "is_graduated_picks": 5,  "is_capped_ride": 2.92, "is_precision": 0.31 },
+        { "address": "GhA8SoXSYieW9pdiftRdbf1LF1HZpApMDUgPzVKrySWe", "rank": 2, "is_signal_trades": 15, "is_graduated_picks": 4,  "is_capped_ride": 2.79, "is_precision": 0.27 },
+        { "address": "5D3JUNscQjKWGcqQNJDEtvTqjELQTiburbJRsDZWS9yb", "rank": 3, "is_signal_trades": 21, "is_graduated_picks": 12, "is_capped_ride": 2.68, "is_precision": 0.57 }
+      ]
+    }
+  ],
+
+  "provenance": {
+    "built_by": "solanatrills research",
+    "selection_window": "2026-06-01..2026-06-14 (most recent complete fortnight; small pool due to Jun 13-14 tape coverage drop -> few wallets passed the gate)",
+    "data_source": "Birdeye /trader/txs/seek_by_time (per-wallet realized swaps, full population incl. non-graduates) + raw30k tapes for peak prices; realized buy->sell PnL, NOT candles",
+    "validation_folds": "Mar 3-16->17-30, Apr 1-14->15-28, May 1-14->15-28 (walk-forward, select-half then measure unseen test-half) + random-pool placebo",
+    "results_docs": ["analysis/whale_graph/out/RESULTS_COPYTRADE.md", "analysis/whale_graph/out/RESULTS_MOONSHOT.md"],
+    "formula_scripts": ["analysis/whale_graph/copytrade_formula.py", "analysis/whale_graph/moonshot_formula.py", "analysis/whale_graph/parse_window_pool.py", "analysis/whale_graph/birdeye_pull.py", "analysis/whale_graph/tape_exit_enrich.py", "analysis/whale_graph/moonshot_persist.py"],
+    "hard_gates": {
+      "pool": "wallet was an EARLY (first-10) + BIG (>= $250) buyer on >= 2 graduates in the lookback fortnight",
+      "consistent_scalp": ">= 20 signal trades AND median copy-multiple >= 1.25x (on the wallet's >= $250 first-buys, own-exit) in the lookback fortnight",
+      "moonshot": ">= 4 graduated picks AND in-sample capped-ride mean >= 1.6x (ride = min(1+0.6*(peak-1),10), non-grad=0.5) in the lookback fortnight"
+    },
+    "findings_that_shaped_this": [
+      "copying EVERYTHING a wallet does ~= 1.0x (noise); must filter to >= $250 first-buys",
+      "wallets have ZERO cross-fold persistence -> re-select every fortnight",
+      "for scalp wallets imposing our own TP/SL LOSES (they have low precision; their fast exit is the edge) -> mirror their sells",
+      "moonshot-catching IS selectable & persistent (peak-rate Spearman in->out +0.49..+0.86), but magnitude is lottery -> select on capped-ride",
+      "validation is OFFLINE + out-of-sample; every offline edge in this project has historically inverted live"
+    ],
+    "what_is_unproven": "live latency/fillability (can the engine detect the curve buy and fill fast enough; can the moonshot trailing exit actually fill into an illiquid peak); the moonshot non-graduate outcome is modeled at -50% (real OHLCV not yet pulled). The observe soak is the arbiter."
+  }
+}

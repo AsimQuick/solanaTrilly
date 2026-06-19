@@ -26,6 +26,8 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 from pydantic import ValidationError as PydanticValidationError
 
+from copytrade.schemas import CohortV2
+
 # ---------------------------------------------------------------------------
 # Sub-schemas
 # ---------------------------------------------------------------------------
@@ -147,3 +149,45 @@ def validate_cohort_json(data: dict) -> CohortJsonSchema:
         raise CohortJsonValidationError(
             f"leaderboard.json failed validation: {exc}"
         ) from exc
+
+
+def validate_cohort_v2(data: dict) -> CohortV2:
+    """Parse and validate a cohort.json payload against the `copytrade-2.0` contract.
+
+    This is the REAL consumption format the engine consumes (two strategy heads,
+    `global`+`strategies[]`, USD sizing, per-head exits including mirror-sell).
+
+    Args:
+        data: The parsed JSON dict from cohort.json.
+
+    Returns:
+        A validated CohortV2 instance on success.
+
+    Raises:
+        CohortJsonValidationError: On any schema or bounds violation.
+    """
+    try:
+        return CohortV2.model_validate(data)
+    except PydanticValidationError as exc:
+        raise CohortJsonValidationError(
+            f"cohort.json (copytrade-2.0) failed validation: {exc}"
+        ) from exc
+
+
+def validate_cohort_any(data: dict):
+    """Validate a cohort payload, dispatching on its declared schema version.
+
+    - `copytrade-2.0` -> CohortV2 (the live engine's contract)
+    - `1.0`           -> CohortJsonSchema (legacy SPEC §2, retained for back-compat)
+
+    Raises CohortJsonValidationError when the schema version is missing/unknown
+    or validation fails.
+    """
+    version = data.get("schema_version")
+    if version == "copytrade-2.0":
+        return validate_cohort_v2(data)
+    if version == "1.0":
+        return validate_cohort_json(data)
+    raise CohortJsonValidationError(
+        f"unknown cohort schema_version {version!r}; expected 'copytrade-2.0' or '1.0'"
+    )

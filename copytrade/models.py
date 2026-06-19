@@ -53,6 +53,14 @@ class CopyTradeSettings(models.Model):
     dedupe_token_across_wallets = models.BooleanField(default=True)
     mirror_wallet_sells = models.BooleanField(default=False)
 
+    # --- Cohort-2.0 global block (the live consumption contract) ---
+    # USD sizing/triggering replaces the legacy SOL sizing.  Per-head exits are
+    # NOT stored here (they live per-strategy in CopytradeCohort.trade_config);
+    # this row holds only the engine-wide `global` knobs + runtime state.
+    usd_size_per_trade = models.FloatField(default=25.0)
+    min_trigger_buy_usd = models.FloatField(default=250.0)
+    pump_fun_only = models.BooleanField(default=True)
+
     # --- Runtime state (not in the JSON — operational toggles) ---
     active_cohort_id = models.CharField(max_length=255, null=True, blank=True)
     engine_on = models.BooleanField(default=False)
@@ -168,6 +176,10 @@ class CopytradeWallet(models.Model):
     rank = models.IntegerField(null=True, blank=True)
     precision = models.FloatField(null=True, blank=True)
     median_lead_min = models.FloatField(null=True, blank=True)
+    # Cohort-2.0: which strategy head this wallet belongs to (consistent_scalp /
+    # moonshot).  Drives which exit applies when this wallet triggers a position.
+    # Empty string for legacy 1.0 cohorts (single, head-less wallet list).
+    strategy_id = models.CharField(max_length=64, default="", blank=True, db_index=True)
 
     class Meta:
         app_label = "copytrade"
@@ -208,23 +220,34 @@ class CopytradePosition(models.Model):
     EXIT_CURVE = "CURVE"
     EXIT_TIMER = "TIMER"
     EXIT_SETTLE = "SETTLE"
+    EXIT_TRAIL = "TRAIL"    # moonshot our_trailing: trailing-giveback from high-water
+    EXIT_MIRROR = "MIRROR"  # consistent_scalp: mirror the source wallet's sell
     EXIT_REASON_CHOICES = [
         (EXIT_TP, "Take Profit"),
         (EXIT_SL, "Stop Loss"),
         (EXIT_CURVE, "Curve Completion"),
         (EXIT_TIMER, "Max Hold Timer"),
         (EXIT_SETTLE, "Cohort Settlement"),
+        (EXIT_TRAIL, "Trailing Giveback"),
+        (EXIT_MIRROR, "Mirror Wallet Sell"),
     ]
 
     cohort_id = models.CharField(max_length=255, db_index=True)
     mint = models.CharField(max_length=64, db_index=True)
     trigger_wallet = models.CharField(max_length=64)
+    # Cohort-2.0: the strategy head that OWNS this position's exit (the first
+    # triggering wallet's head, per the cross-head dedupe rule).  Empty for legacy.
+    strategy_id = models.CharField(max_length=64, default="", blank=True, db_index=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_OPEN)
     mode = models.CharField(max_length=10, choices=MODE_CHOICES, default=MODE_OBSERVE)
 
     entry_ts = models.DateTimeField(null=True, blank=True)
     entry_price = models.FloatField(null=True, blank=True)
     sol_in = models.FloatField(null=True, blank=True)
+    # Cohort-2.0 USD sizing: the USD booked at entry (sol_in stays the SOL leg).
+    size_usd = models.FloatField(null=True, blank=True)
+    # moonshot trailing state: highest price seen since entry (high-water mark).
+    high_water_price = models.FloatField(null=True, blank=True)
 
     exit_ts = models.DateTimeField(null=True, blank=True)
     exit_price = models.FloatField(null=True, blank=True)
