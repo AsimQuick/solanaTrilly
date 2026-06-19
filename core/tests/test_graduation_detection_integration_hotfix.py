@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_graduation_detection_integration_hotfix
 # sprint: sprint-14
-# story: hotfix-graduation-pumpfun-mapping
+# story: hotfix-graduation-pumpfun-mapping, US-76 AC-1
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-19
+# last-updated: 2026-06-20
 # dependencies: pytest, asyncio, datetime, core.detection.consumer, core.models,
 #               core.resolver, core.clock, core.replay_source,
 #               core.tape.birdeye_graduation_source
@@ -32,10 +32,14 @@ from core.models import PipelineConfig, Token
 from core.replay_source import ReplaySource
 from core.resolver import get_active_config, invalidate_active_config_cache
 from core.tape.birdeye_graduation_source import (
-    DEFAULT_DATA_TYPE,
     DEFAULT_DEX_ALLOWLIST,
     map_new_listing_frame,
 )
+
+# The legacy TOKEN_NEW_LISTING_DATA frame type — used explicitly here because
+# map_new_listing_frame is the legacy mapper (DEFAULT_DATA_TYPE is now "MEME_DATA"
+# following the US-76 AC-1 switch to SUBSCRIBE_MEME).
+_LEGACY_DATA_TYPE = "TOKEN_NEW_LISTING_DATA"
 
 # Valid sibling sections (same invariants as test_detection_consumer_ac152.py).
 VALID_TAPE = {
@@ -100,7 +104,7 @@ def _make_active_config(source: str = "pump_dot_fun") -> PipelineConfig:
 def _map(frame):
     return map_new_listing_frame(
         frame,
-        data_type=DEFAULT_DATA_TYPE,
+        data_type=_LEGACY_DATA_TYPE,
         event_source="pump_dot_fun",
         dex_allowlist=frozenset(DEFAULT_DEX_ALLOWLIST),
         fallback_epoch=int(_T0.timestamp()),
