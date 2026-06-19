@@ -1,0 +1,193 @@
+{
+  "_note": "Golden fixture for US-75 AC-1 honest-fill check. Derived from lake/tapes/2026-06-14.parquet. Mint gaps >20% between first two swaps (slip=0.2066 > cap=0.15 -> ENTRY_REJECTED). RED without the fix (would book a fill), GREEN with it (ENTRY_REJECTED). Prices computed as virtual_sol_reserves/virtual_token_reserves.",
+  "mint": "FBKbAPporDMvvmV463PF89xhH55Gs6uVc9FPJGcbpump",
+  "tape_date": "2026-06-14",
+  "quote_price": 2.8124921853191412e-05,
+  "fill_price": 3.393677883240733e-05,
+  "expected_slip": 0.20664437787785106,
+  "cap_pct": 0.15,
+  "expected_enterable": false,
+  "expected_reason": "SLIPPAGE_CAP_6002",
+  "swaps": [
+    {
+      "block_time": 1781398811,
+      "price": 2.8124921853191412e-05,
+      "sol_amount": 88888887,
+      "token_amount": 3169866993400,
+      "side": "buy",
+      "virtual_sol_reserves": 30088888887,
+      "virtual_token_reserves": 1069830133006600
+    },
+    {
+      "block_time": 1781398811,
+      "price": 3.393677883240733e-05,
+      "sol_amount": 2962962962,
+      "token_amount": 95905883677500,
+      "side": "buy",
+      "virtual_sol_reserves": 33051851849,
+      "virtual_token_reserves": 973924249329100
+    },
+    {
+      "block_time": 1781398811,
+      "price": 3.747228727932221e-05,
+      "sol_amount": 1679012344,
+      "token_amount": 47082929659643,
+      "side": "buy",
+      "virtual_sol_reserves": 34730864193,
+      "virtual_token_reserves": 926841319669457
+    },
+    {
+      "block_time": 1781398811,
+      "price": 3.455278396060022e-05,
+      "sol_amount": 1380390197,
+      "token_amount": 38362353471000,
+      "side": "sell",
+      "virtual_sol_reserves": 33350473996,
+      "virtual_token_reserves": 965203673140457
+    },
+    {
+      "block_time": 1781398812,
+      "price": 6.814831700681573e-05,
+      "sol_amount": 926516003,
+      "token_amount": 13869953630402,
+      "side": "buy",
+      "virtual_sol_reserves": 46836890644,
+      "virtual_token_reserves": 687278757585689
+    },
+    {
+      "block_time": 1781398812,
+      "price": 6.547879773090051e-05,
+      "sol_amount": 936400293,
+      "token_amount": 14598573244584,
+      "side": "buy",
+      "virtual_sol_reserves": 45910374641,
+      "virtual_token_reserves": 701148711216091
+    },
+    {
+      "block_time": 1781398812,
+      "price": 6.283499123840684e-05,
+      "sol_amount": 1070417038,
+      "token_amount": 17450706392177,
+      "side": "buy",
+      "virtual_sol_reserves": 44973974348,
+      "virtual_token_reserves": 715747284460675
+    },
+    {
+      "block_time": 1781398812,
+      "price": 5.987953848445713e-05,
+      "sol_amount": 98764,
+      "token_amount": 1649365119,
+      "side": "buy",
+      "virtual_sol_reserves": 43903557310,
+      "virtual_token_reserves": 733197990852852
+    },
+    {
+      "block_time": 1781398812,
+      "price": 5.987926908003945e-05,
+      "sol_amount": 493827159,
+      "token_amount": 8340865448673,
+      "side": "buy",
+      "virtual_sol_reserves": 43903458546,
+      "virtual_token_reserves": 733199640217971
+    },
+    {
+      "block_time": 1781398812,
+      "price": 5.853979796825097e-05,
+      "sol_amount": 98765431,
+      "token_amount": 1690997519629,
+      "side": "buy",
+      "virtual_sol_reserves": 43409631387,
+      "virtual_token_reserves": 741540505666644
+    },
+    {
+      "block_time": 1781398812,
+      "price": 5.827372194306083e-05,
+      "sol_amount": 2390123456,
+      "token_amount": 43411114748477,
+      "side": "buy",
+      "virtual_sol_reserves": 43310865956,
+      "virtual_token_reserves": 743231503186273
+    },
+    {
+      "block_time": 1781398812,
+      "price": 5.201948326602649e-05,
+      "sol_amount": 237037036,
+      "token_amount": 4583246084231,
+      "side": "buy",
+      "virtual_sol_reserves": 40920742500,
+      "virtual_token_reserves": 786642617934750
+    },
+    {
+      "block_time": 1781398812,
+      "price": 5.14185737778461e-05,
+      "sol_amount": 256790122,
+      "token_amount": 5025834487764,
+      "side": "buy",
+      "virtual_sol_reserves": 40683705464,
+      "virtual_token_reserves": 791225864018981
+    },
+    {
+      "block_time": 1781398812,
+      "price": 5.077152791989623e-05,
+      "sol_amount": 372443143,
+      "token_amount": 7403879470470,
+      "side": "buy",
+      "virtual_sol_reserves": 40426915342,
+      "virtual_token_reserves": 796251698506745
+    },
+    {
+      "block_time": 1781398812,
+      "price": 4.984034615900546e-05,
+      "sol_amount": 479389843,
+      "token_amount": 9735022585253,
+      "side": "buy",
+      "virtual_sol_reserves": 40054472199,
+      "virtual_token_reserves": 803655577977215
+    },
+    {
+      "block_time": 1781398812,
+      "price": 4.8654462356257154e-05,
+      "sol_amount": 992493274,
+      "token_amount": 20923549181143,
+      "side": "buy",
+      "virtual_sol_reserves": 39575082356,
+      "virtual_token_reserves": 813390600562468
+    },
+    {
+      "block_time": 1781398812,
+      "price": 4.624467785169007e-05,
+      "sol_amount": 1054971489,
+      "token_amount": 23454130512483,
+      "side": "buy",
+      "virtual_sol_reserves": 38582589082,
+      "virtual_token_reserves": 834314149743611
+    },
+    {
+      "block_time": 1781398812,
+      "price": 4.3750297669897296e-05,
+      "sol_amount": 885868570,
+      "token_amount": 20737819020179,
+      "side": "buy",
+      "virtual_sol_reserves": 37527617593,
+      "virtual_token_reserves": 857768280256094
+    },
+    {
+      "block_time": 1781398812,
+      "price": 4.17091572308787e-05,
+      "sol_amount": 394063667,
+      "token_amount": 9550605253289,
+      "side": "buy",
+      "virtual_sol_reserves": 36641749023,
+      "virtual_token_reserves": 878506099276273
+    },
+    {
+      "block_time": 1781398812,
+      "price": 4.081685907118037e-05,
+      "sol_amount": 312220658,
+      "token_amount": 7715766306951,
+      "side": "buy",
+      "virtual_sol_reserves": 36247685356,
+      "virtual_token_reserves": 888056704529562
+    }
+  ]
+}

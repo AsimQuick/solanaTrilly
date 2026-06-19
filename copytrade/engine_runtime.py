@@ -1,13 +1,14 @@
 # ---
 # module: copytrade.engine_runtime
-# sprint: cutover (copy-trade live)
-# story: copytrade-runtime
-# status: implemented
+# sprint: cutover (copy-trade live), US-75
+# story: copytrade-runtime, US-75 AC-1
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-19
-# dependencies: copytrade.buy_trigger, copytrade.exits, copytrade.multiplicity,
-#   copytrade.position_manager, copytrade.position_opener, copytrade.schemas,
-#   copytrade.wallet_consumer, core.clock
+# last-updated: 2026-06-20
+# dependencies: copytrade.buy_trigger, copytrade.exits, copytrade.honest_fill,
+#   copytrade.models, copytrade.multiplicity, copytrade.position_manager,
+#   copytrade.position_opener, copytrade.schemas, copytrade.wallet_consumer,
+#   core.clock
 # ---
 """Pure, injected copy-trade engine runtime (observe/paper only).
 
@@ -47,6 +48,7 @@ from copytrade.exits import (
     evaluate_mirror_exit,
     evaluate_trailing_exit,
 )
+from copytrade.honest_fill import check_copy_entry
 from copytrade.models import CopytradePosition
 from copytrade.multiplicity import MultiplicityState, apply_multiplicity_controls
 from copytrade.position_manager import close_position
@@ -174,6 +176,7 @@ def handle_event(
     sol_usd: float,
     price_fn: Callable[[str], Optional[float]],
     clock: Clock,
+    honest_fills_enabled: bool = False,
 ) -> Optional[CopytradePosition]:
     """Process one WalletTxEvent and return an opened position or None.
 
@@ -220,10 +223,19 @@ def handle_event(
         Returns None when price is unavailable; fall back to raw event price.
     clock:
         Injected Clock — used to stamp entry_ts on the new position.
+    honest_fills_enabled:
+        US-75 AC-1 feature flag.  When True, apply the honest copy-fill slippage
+        cap (check_copy_entry): quote = event.raw["price"] (the wallet's fill
+        price), our fill = price_fn result, cap = DEFAULT_ENTRY_SLIP_CAP (15%).
+        If fill > quote·(1+cap) → ENTRY_REJECTED (position written with
+        exit_reason=ENTRY_REJECTED, PnL NULL, excluded from win-rate).
+        Default False — the running soak is unaffected until deliberately flipped.
 
     Returns
     -------
     CopytradePosition if a position was opened, else None.
+    Note: an ENTRY_REJECTED position (honest_fills_enabled=True, fill > cap)
+    also returns None — no open position is tracked.
     """
     cohort_id: str = getattr(settings, "active_cohort_id", "") or ""
 
@@ -281,7 +293,7 @@ def handle_event(
     # 3a. Resolve strategy_id
     strategy_id: str = state.wallet_to_strategy.get(event.wallet, "")
 
-    # 3b. Entry price — try price_fn; fall back to event.raw["price"]
+    # 3b. Entry price (our fill) — try price_fn; fall back to event.raw["price"]
     entry_price: Optional[float] = None
     try:
         entry_price = price_fn(event.mint)
@@ -307,13 +319,80 @@ def handle_event(
         state.multiplicity.open_mints.discard(event.mint)
         return None
 
-    # 3c. Open the paper position
+    # 3c. US-75 AC-1: honest-fill slippage check (behind feature flag §6.7)
+    #
+    # quote_price = the watched wallet's confirmed fill price from the TradeEvent
+    #   (event.raw["price"] — the curve price at the wallet's block_time).
+    # fill_price  = our entry price (price_fn result above — the detection-time
+    #   Birdeye spot, which captures copy-latency drift).
+    # If fill > quote·(1+cap): ENTRY_REJECTED (write position row, PnL NULL, return None).
     usd_size = float(getattr(settings, "usd_size_per_trade", 25.0))
+    entry_ts = clock.now()
+
+    fill_telemetry: dict = {}
+    if honest_fills_enabled:
+        # quote = the wallet's own on-chain fill price (from the decoded TradeEvent)
+        raw_quote = event.raw.get("price")
+        quote_price: Optional[float] = None
+        if raw_quote is not None:
+            try:
+                quote_price = float(raw_quote)
+            except (TypeError, ValueError):
+                quote_price = None
+
+        if quote_price is not None and quote_price > 0:
+            fill_check = check_copy_entry(
+                quote_price=quote_price,
+                fill_price=entry_price,
+                clock_arrival_ts=entry_ts,
+                block_time=event.block_time,
+            )
+            fill_telemetry = {
+                "quote_price": fill_check.quote_price,
+                "fill_price": fill_check.fill_price,
+                "cap_pct": fill_check.cap_pct,
+                "copy_latency_s": fill_check.copy_latency_s,
+            }
+
+            if not fill_check.enterable:
+                # Write an ENTRY_REJECTED position row (PnL stays NULL — excluded
+                # from win-rate; no live position tracked; multiplicity undone).
+                record = OpenedPositionRecordV2(
+                    cohort_id=cohort_id,
+                    mint=event.mint,
+                    trigger_wallet=event.wallet,
+                    entry_ts=entry_ts,
+                )
+                rejected_pos = _write_rejected_entry(
+                    record,
+                    fill_telemetry=fill_telemetry,
+                    reason=fill_check.reason,
+                    usd_size=usd_size,
+                    sol_usd=sol_usd,
+                    strategy_id=strategy_id,
+                )
+                logger.info(
+                    "[copytrade] ENTRY_REJECTED: head=%s wallet=%.8s mint=%.8s "
+                    "quote=%.8g fill=%.8g slip=%.4f reason=%s",
+                    strategy_id,
+                    event.wallet,
+                    event.mint,
+                    quote_price,
+                    entry_price,
+                    fill_check.realized_slip_pct if fill_check.realized_slip_pct is not None else float("nan"),
+                    fill_check.reason,
+                )
+                # Undo multiplicity — no open position was taken
+                state.multiplicity.open_positions_count -= 1
+                state.multiplicity.open_mints.discard(event.mint)
+                return None  # no live position
+
+    # 3d. Open the paper position (honest-fill accepted, or flag off)
     record = OpenedPositionRecordV2(
         cohort_id=cohort_id,
         mint=event.mint,
         trigger_wallet=event.wallet,
-        entry_ts=clock.now(),
+        entry_ts=entry_ts,
     )
 
     position = open_observe_position_v2(
@@ -324,7 +403,14 @@ def handle_event(
         strategy_id=strategy_id,
     )
 
-    # 3d. Register in state
+    # Persist honest-fill telemetry onto the position row (if flag on and we got a quote)
+    if fill_telemetry:
+        CopytradePosition.objects.filter(pk=position.pk).update(**fill_telemetry)
+        # Reflect on in-memory object for any downstream callers
+        for k, v in fill_telemetry.items():
+            setattr(position, k, v)
+
+    # 3e. Register in state
     state.open_positions[event.mint] = position
 
     logger.info(
@@ -335,6 +421,68 @@ def handle_event(
         usd_size,
         entry_price,
     )
+    return position
+
+
+def _write_rejected_entry(
+    record: OpenedPositionRecordV2,
+    *,
+    fill_telemetry: dict,
+    reason: str,
+    usd_size: float,
+    sol_usd: float,
+    strategy_id: str,
+) -> CopytradePosition:
+    """Write a closed ENTRY_REJECTED position row (PnL NULL, excluded from win-rate).
+
+    US-75 AC-1: mirrors solanaBilly _honest_entry_fill's rejection path
+    (paper_monitor_tasks.py:287-296).  The position is immediately closed with
+    exit_reason=ENTRY_REJECTED and NULL PnL; it does NOT enter state.open_positions.
+
+    Called only from handle_event when honest_fills_enabled=True and the slippage
+    cap is exceeded.  Never calls place_buy_order (OBSERVE isolation preserved).
+    """
+    from trading.models import Position as SharedPosition  # lazy — copytrade §5 isolation
+
+    sol_in = usd_size / sol_usd if sol_usd > 0 else 0.0
+
+    # Shared trading.Position row (AC-68.1 chassis) — status=PAPER, closed immediately
+    shared_pos = SharedPosition(
+        mint=record.mint,
+        source=SharedPosition.SOURCE_COPYTRADE,
+        mode=SharedPosition.MODE_OBSERVE,
+        status=SharedPosition.STATUS_PAPER,
+        entry_ts=record.entry_ts,
+        entry_price=fill_telemetry.get("quote_price"),  # book at quote (signal price)
+        size_sol=sol_in,
+    )
+    shared_pos.save()
+
+    # CopytradePosition row — immediately closed, PnL fields left NULL
+    position = CopytradePosition(
+        cohort_id=record.cohort_id,
+        mint=record.mint,
+        trigger_wallet=record.trigger_wallet,
+        status=CopytradePosition.STATUS_CLOSED,
+        mode=CopytradePosition.MODE_OBSERVE,
+        entry_ts=record.entry_ts,
+        entry_price=fill_telemetry.get("quote_price"),  # signal-time quote
+        sol_in=sol_in,
+        size_usd=usd_size,
+        strategy_id=strategy_id,
+        exit_ts=record.entry_ts,  # immediate — no hold
+        exit_reason=CopytradePosition.EXIT_ENTRY_REJECTED,
+        # PnL left NULL — excluded from win-rate (the honest-fill discipline)
+        realized_pnl_sol=None,
+        realized_pnl_pct=None,
+        shared_position_id=shared_pos.pk,
+        # Honest-fill telemetry
+        quote_price=fill_telemetry.get("quote_price"),
+        fill_price=fill_telemetry.get("fill_price"),
+        cap_pct=fill_telemetry.get("cap_pct"),
+        copy_latency_s=fill_telemetry.get("copy_latency_s"),
+    )
+    position.save()
     return position
 
 
