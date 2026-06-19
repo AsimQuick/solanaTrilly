@@ -42,8 +42,15 @@ from core.datasource import DataSource
 #: pump.fun bonding-curve program address (the program-wide subscription target)
 PUMP_FUN_PROGRAM: str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 
-#: Helius Atlas mainnet WebSocket endpoint
-HELIUS_WS_URL: str = "wss://atlas-mainnet.helius-rpc.com"
+#: Helius mainnet WebSocket endpoint for transactionSubscribe.
+#: Live-window finding: the `atlas-mainnet` enhanced endpoint connected but
+#: streamed ZERO transactionNotification frames under this account's plan, so
+#: the birth-tape collected nothing. The working reference (solanaBilly,
+#: app/services/helius_listener.py) drives the SAME `transactionSubscribe`
+#: against the STANDARD `wss://mainnet.helius-rpc.com/?api-key=…` endpoint —
+#: match it. Do NOT revert to atlas-mainnet without confirming the plan serves
+#: Atlas/Geyser transactionSubscribe for this key.
+HELIUS_WS_URL: str = "wss://mainnet.helius-rpc.com"
 
 #: Wrapped SOL mint — quote currency for all pump.fun swaps
 WSOL_MINT: str = "So11111111111111111111111111111111111111112"
