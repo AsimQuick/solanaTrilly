@@ -1,0 +1,179 @@
+# EPIC US-76 — Graduate-Inference Foundation (detect → normalize → retain → score v3.2 live)
+
+<!--
+module: scrum-master/EPIC-US76-graduate-inference-foundation.md
+type: epic (engineering design + backlog)
+status: PROPOSED — the core path to "graduate inference fires live". Owner: solanatrilly (core).
+created: 2026-06-20
+contract: solanatrills/docs/solanatrilly_buildout_directives.md §8 (PRE-GRAD MODEL SERVING CONTRACT) — binding
+pairs-with: EPIC-US75 (slippage/copy), future US-77 (v4 wallet bank), US-78 (data contract)
+-->
+
+**Goal:** make the promoted **`trilly_pregrad_v3.2`** model fire live on a real graduation —
+`detect → assemble pre-grad tape → normalize → 20 features → cross-sectional score → gate → paper-trade` —
+parity-true to the offline lab. This is the milestone that satisfies the graduate-inference DoD and is the
+v4 fallback. Serve v3.2 only; v4 is a later promotion (US-77) and the live surface is forward-compatible.
+
+**Why this epic exists:** the live system never scored because it detected the **wrong event** (Birdeye
+`SUBSCRIBE_TOKEN_NEW_LISTING` → any PumpSwap pool listing, `graduated:True` hardcoded) — contaminated with
+instant/direct-to-AMM listings that have no bonding-curve tape. True graduations (Dune `completeevent`) still
+have ~6.5-min median curve life and ~76% rich tapes (`docs/graduation_detection_finding.md`). Fix detection,
+retain the tape, normalize in one place, score cross-sectionally.
+
+---
+
+## The locked contract (from directives §8 — do not deviate without asking the lab)
+- **Model:** `models/trilly_pregrad_v3_2`. **Builder:** vendor `feats_one()` (`solanatrills/analysis/
+  graduated/enrich_pregrad.py:48`) **verbatim** → the 20 `enrich20_buyer_cohort` features in `v3_2/meta.json`
+  order. Already vendored as `core/pregrad_features.py` (`compute_pregrad_features`) — reuse, do not reimplement.
+- **Currency = SOL-space.** Every v3.2 feature is a ratio/share/count/fraction (only cut is `n_whales5` =
+  volume-share > 5%, itself a ratio) → SOL/USD cancels. Compute volume from each Helius swap's **SOL leg**;
+  **no per-trade USD** for v3.2. (Per-trade SOL/USD@block_time is built later, only for v4 + copy-trade.)
+- **Decimals:** resolve **per-mint** (seed from the MEME_DATA `decimals` field, validate once against the
+  mint account on chain — solanaBilly #288). pump.fun curve token = 6, SOL = 9; never hardcode.
+- **Window/anchor:** assemble `[max(graduated_time − 3600, creation_time), graduated_time)`, strict
+  `block_time < graduated_time`, anchored on the MEME_DATA `graduated_time`. For tokens **>60 min old** at
+  graduation, **truncate at grad−3600** (do NOT walk back to creation); clamp to creation only when <60 min.
+- **Scoring is CROSS-SECTIONAL (parity trap):** 15 boosters (3 labels × 5 seeds) → mean 5 seeds/label →
+  **percentile-rank the label score across the candidate pool** → mean of 3 ranks → top-K/day. Never score a
+  token in isolation — rank against a **frozen reference distribution** (or rolling cohort window).
+- **Curve-life gate:** **≥60s** `graduated_time − creation_time` (primary) AND **≥20 pre-grad swaps**
+  (secondary, feature-stability floor; p5=51/p10=100 in a 5k sample, only 0.4% of true graduates < 20).
+  Do NOT gate on buyer count. **Log the skipped fraction** (live instant-rate monitor).
+- **Golden ground truth:** `solanatrills/analysis/graduated/pregrad_enrich.csv` (20-feat per-mint matrix) at
+  **float tolerance ~1e-3**; PLUS a generated `golden_scores.parquet` (run the 15 frozen boosters over those
+  rows) for end-to-end score parity.
+
+## Confirmed live `SUBSCRIBE_MEME` frame (probe 2026-06-20)
+```
+{"type":"MEME_DATA","data":{
+   "address": <mint>, "decimals": 6, "price": <num>, "liquidity": <num>, ...stats...,
+   "meme_info": { "source":"pump_dot_fun", "creation_time": <unix s>, "graduated": <bool>,
+                  "graduated_time": <unix s | null>, "progress_percent": <0-100>,
+                  "pool": {"address": <pool>}, "creator": <wallet> } }}
+```
+It is a continuous `meme_stats` stream filtered by the subscription. Non-graduated tokens carry
+`graduated=false, graduated_time=null, progress_percent<100`. True graduations are ~11/hr (rare vs the old
+listing flood) — the validation window must run long enough to catch one.
+
+---
+
+## Acceptance criteria
+
+### AC-1 — Detection fix: true graduations via `SUBSCRIBE_MEME`
+- Switch the subscription to `{"type":"SUBSCRIBE_MEME","data":{"graduated":true,"source":"pump_dot_fun"}}`
+  (the subscribe type is already config-driven, `graduation_subscribe_type`) **and rewrite the frame-mapper**
+  in `core/tape/birdeye_graduation_source.py` for the MEME_DATA shape above. Remove the hardcoded
+  `graduated:True` (line ~374).
+- **Fire a graduation event ONCE per mint** on the `graduated` false→true transition (dedupe by mint). Emit
+  `mint=address`, `graduated_block_time=meme_info.graduated_time`, `creation_time`, `progress_percent`,
+  `pool_address=meme_info.pool.address`, `decimals`.
+- **Curve-life gate** before scheduling a score: require `graduated_time − creation_time ≥ 60s`; **log + skip**
+  the rest and increment an `instant_skipped` counter (the live early-warning metric).
+- **AC:** against banked real frames (`/tmp/meme_frames.json` + a graduated-frame fixture), the mapper emits
+  exactly one event per graduated mint with the right anchor; non-graduated frames emit nothing; an
+  instant (<60s) graduation is skipped + counted.
+
+### AC-2 — Single `NormalizedSwap` layer (SOL-space, per-mint decimals, guarded)
+- One module every source passes through (Helius live, Birdeye offline-style, any future) → byte-identical
+  fields for the vendored `compute_pregrad_features`. **Reuse the offline feature math; do not reimplement.**
+- **Currency:** volume from the SOL leg (SOL-space); no USD for v3.2. **Decimals:** resolve per-mint, convert
+  raw→ui once, centrally. **Zero/dust:** reject fill price far below local median; guard every division
+  (#405). **Missing:** coerce JSONB `None → np.nan` at the boundary, before any numeric op (#358).
+- **AC:** unit tests for zero-price, None/NaN, Token-2022-vs-SPL decimals; a Helius-sourced swap and an
+  offline-style swap normalize to the same dict shape.
+
+### AC-3 — Durable per-mint tape store (state-based retention, gap-heal)
+- Replace the in-memory idle-kill buffer with a **durable per-mint store** (DB/disk), keyed by mint,
+  append-on-arrival, listening continuously from launch. **Retain by state, not silence:** keep a mint until
+  it graduates (tape consumed) or is provably dead (old + no curve progress) — burst-traders go quiet then
+  graduate. **Gap-heal:** on websocket reconnect, and at graduation if the earliest cached swap ≫ creation,
+  backfill the missing window (Birdeye/Helius REST) before scoring.
+- **AC:** a token born → quiet 35 min → graduates still has its full tape at score time (the idle-kill
+  regression); a simulated reconnect gap is healed.
+
+### AC-4 — Cross-sectional scoring (frozen reference distribution)
+- Implement the percentile-rank step against a **frozen reference distribution** shipped with the model (or a
+  rolling cohort window) — never single-token. Wire the gate (`adaptive_topk`/threshold) over the blend.
+- **AC:** a token scored alone vs in a pool yields the same rank against the frozen reference; matches the
+  offline blend recipe.
+
+### AC-5 — Golden-parity test + Tier-1 replay merge gate
+- Rebuild a sample of real mints **live-style** (durable store → normalize → `compute_pregrad_features`) and
+  assert each feature row equals its `pregrad_enrich.csv` row at **~1e-3**. Generate `golden_scores.parquet`
+  (15 frozen boosters over those rows) and assert end-to-end score parity.
+- **Tier-1 replay:** run the production scoring path over the active model's real corpus; **`crashed > 0 ⇒ do
+  not ship`**. Validate the harness on a known-good case first.
+- **AC:** both gates green in CI; the live-vs-offline feature diff is within tolerance.
+
+---
+
+## Definition of Done
+- A **real graduation** scored live: `score (N>0 swaps) → gate → paper-buy → paper-sell` observed in a
+  firehose validation window (the 2nd granted activation), with the curve-life gate skipping instants and the
+  `instant_skipped` metric logged.
+- Golden-parity (feature + score) green; Tier-1 replay green; trouble-PR guards (#405/#358/#288) unit-tested.
+- Rollout behind a flag; safety floor intact (observe/paper, `trading_enabled=False`, §5 isolation,
+  solanaBilly untouched). v3.2 stays the promoted model; v4 deferred to US-77.
+
+## Sequencing
+AC-1 (detect) + AC-2 (normalize) are independent and parallel. AC-3 (durable store) depends on neither but is
+required for DoD. AC-4 (scoring) + AC-5 (parity) gate the live validation. Re-enable the firehose only after
+AC-5 is green and guards/alerts are in place.
+
+## Testing methodology (directives §4 — binding)
+Tier-1 replay over the real corpus (`crashed>0 ⇒ no ship`); golden fixtures asserted bit/float-exact;
+"green against reality" merge gate (reproduce on real data → fix → prove on real data → flag → observe →
+enable). Validate each harness on a known-good case first. Never "unit green → firehose → pray."
+
+---
+
+## Tester review — binding revisions before dev handoff (2026-06-20)
+
+**Verdict: NEEDS REVISION.** The tester caught two BLOCKING parity defects that would make the system
+*appear* to work (paper trades fire) while being silently wrong. The items below are **binding**; the dev
+team implements against this section. File:line from the live tree.
+
+**Priority 1 — BLOCKING, resolve before dev starts:**
+1. **AC-4 — reference distribution does not exist → pool-of-1 silent failure.** `models/trilly_pregrad_v3_2/`
+   has no `reference_dist.json`. Live `run_firehose._build_scoring_context_sync:804-807` falls back to
+   `ref_dist=None` → `spine.py:185-187` calls `scorer.score_pool([features])[0]` (pool of 1) →
+   `scorer._percentile_rank:179-180` returns **1.0 for every token** → blend 1.0 → with hardcoded
+   `threshold=0.8` **every graduation passes**. FIX: (a) generate + commit
+   `models/trilly_pregrad_v3_2/reference_dist.json` from the **full** `pregrad_enrich.csv` OOT label scores
+   via `BlendScorer.score_pool` (per `meta.json` recipe); (b) set `ScoringConfig.reference_dist_path`;
+   (c) CI guard: if `scoring_enabled=True` and `reference_dist_path` null/missing → **fail loudly** (block
+   the `ref_dist=None` path in prod); (d) test that single-token vs pool gives the same rank against the
+   frozen reference.
+2. **AC-5 — 3600s window cap not enforced live → parity break for >60-min tokens (~30% of graduates).**
+   `to_pregrad_swaps`/`compute_pregrad_features` filter `rel<0` only, not `rel>=-3600`. FIX: in
+   `assemble_pregrad_features` add `swaps = [s for s in normalized if s["rel"] >= -3600]` (clamp to
+   `creation_time` only when <60 min old). AC-5 golden fixture MUST include a >60-min-curve-life token and
+   match `pregrad_enrich.csv` at 1e-3.
+3. **AC-3 — name the gap-heal REST source.** Existing `GapReconciler` uses Birdeye REST, but §1 locks
+   Birdeye = notifier only. Pick the source explicitly; if Birdeye, AC-2's normalization test MUST cover
+   Helius-sourced and Birdeye-sourced swaps converging to the identical dict.
+
+**Priority 2 — before firehose re-enable:**
+4. **≥20-swaps secondary gate** — enforce in the scoring loop / `assemble_pregrad_features` (sub-20 → skip +
+   count), with an explicit test (10 swaps → not scored; 25 → scored). Currently absent.
+5. **Threshold from artifact, not hardcoded.** `run_firehose:830` hardcodes `0.8`; `meta.json` depth_menu =
+   0.7916 @30/day. Wire `rank_cut` from `meta.json`/`ModelRegistry` at promotion; no magic constant.
+6. **AC-1 fixture committed (not `/tmp`).** Add to `core/tests/fixtures/`: a graduated pump.fun frame
+   (≥60s curve life), a non-graduated frame, an instant (<60s) frame, a non-pump.fun frame. Assert the
+   mapper emits all six fields incl. `decimals` + `creation_time` (current mapper emits no `decimals`).
+
+**Priority 3 — before DoD:**
+7. **AC-3 store medium decided.** Likely reuse the existing `swaps` DB table via `SwapWriter` (idempotent on
+   `(mint,signature)`) — but specify the **read path at score time** and **avoid synchronous ORM writes on
+   the Helius hot path** (every program-wide swap). Justify any new store vs the existing table.
+8. **#287 Borsh offset test** — decode a captured real tx with `decode_helius_trade_event`
+   (`helius_birth_tape_source.py:189`, `<QQ` @40) and assert `sol_amount/token_amount/side/owner` vs known
+   values. Committed fixture, no network.
+9. **Tier-1 replay corpus = `pregrad_enrich.csv` assembled live-style** (through `assemble_pregrad_features`
+   WITH the 3600s cap), not via offline `enrich_pregrad.py` directly — the harness must build features the
+   exact way the daemon does.
+
+**DoD additions (binding):** `reference_dist.json` committed + CI guard against the `None` fallback; 3600s
+cap enforced + tested on a >60-min token; ≥20-swaps gate enforced + tested; threshold sourced from the
+artifact; AC-1 fixtures committed; gap-heal source named + normalized.

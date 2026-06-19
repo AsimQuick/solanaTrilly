@@ -91,15 +91,31 @@ def _mapped_swap(mint: str, block_time: int, slot: int, sig: str, side: str,
     }
 
 
-# Six PRE-grad swaps per mint (block_time < _GRAD_BT => rel < 0 once anchored).
+# Twenty PRE-grad swaps per mint (block_time < _GRAD_BT => rel < 0 once anchored).
+# Extended from 6 to 20 to satisfy the US-76 P2.4 secondary gate (>=20 swaps).
 def _pre_swaps(mint: str) -> list[dict]:
+    p = mint[:4]
     return [
-        _mapped_swap(mint, 900, 1, f"{mint[:4]}-s1", "buy", "A", 2.0, 0.001),
-        _mapped_swap(mint, 910, 2, f"{mint[:4]}-s2", "buy", "B", 1.0, 0.0011),
-        _mapped_swap(mint, 920, 3, f"{mint[:4]}-s3", "buy", "C", 3.0, 0.0012),
-        _mapped_swap(mint, 930, 4, f"{mint[:4]}-s4", "sell", "A", 1.5, 0.0013),
-        _mapped_swap(mint, 940, 5, f"{mint[:4]}-s5", "buy", "A", 0.5, 0.0014),
-        _mapped_swap(mint, 950, 6, f"{mint[:4]}-s6", "buy", "D", 4.0, 0.0015),
+        _mapped_swap(mint, 700, 1,  f"{p}-s1",  "buy",  "A", 2.0,  0.001),
+        _mapped_swap(mint, 710, 2,  f"{p}-s2",  "buy",  "B", 1.0,  0.0011),
+        _mapped_swap(mint, 720, 3,  f"{p}-s3",  "buy",  "C", 3.0,  0.0012),
+        _mapped_swap(mint, 730, 4,  f"{p}-s4",  "sell", "A", 1.5,  0.0013),
+        _mapped_swap(mint, 740, 5,  f"{p}-s5",  "buy",  "A", 0.5,  0.0014),
+        _mapped_swap(mint, 750, 6,  f"{p}-s6",  "buy",  "D", 4.0,  0.0015),
+        _mapped_swap(mint, 760, 7,  f"{p}-s7",  "buy",  "E", 1.2,  0.0016),
+        _mapped_swap(mint, 770, 8,  f"{p}-s8",  "buy",  "F", 0.8,  0.0017),
+        _mapped_swap(mint, 780, 9,  f"{p}-s9",  "sell", "B", 0.5,  0.0018),
+        _mapped_swap(mint, 790, 10, f"{p}-s10", "buy",  "G", 2.1,  0.0019),
+        _mapped_swap(mint, 800, 11, f"{p}-s11", "buy",  "H", 0.9,  0.0020),
+        _mapped_swap(mint, 810, 12, f"{p}-s12", "buy",  "I", 1.5,  0.0021),
+        _mapped_swap(mint, 820, 13, f"{p}-s13", "sell", "C", 2.0,  0.0022),
+        _mapped_swap(mint, 830, 14, f"{p}-s14", "buy",  "J", 0.7,  0.0023),
+        _mapped_swap(mint, 840, 15, f"{p}-s15", "buy",  "K", 1.1,  0.0024),
+        _mapped_swap(mint, 850, 16, f"{p}-s16", "buy",  "L", 0.6,  0.0025),
+        _mapped_swap(mint, 860, 17, f"{p}-s17", "buy",  "D", 3.0,  0.0026),
+        _mapped_swap(mint, 870, 18, f"{p}-s18", "sell", "E", 0.4,  0.0027),
+        _mapped_swap(mint, 880, 19, f"{p}-s19", "buy",  "M", 1.8,  0.0028),
+        _mapped_swap(mint, 890, 20, f"{p}-s20", "buy",  "N", 0.3,  0.0029),
     ]
 
 
@@ -140,8 +156,8 @@ def test_all_mints_buffered_without_any_graduation_anchor():
     )
     asyncio.run(buf.run())
 
-    assert tape.count(_MINT_A) == 6, "pre-grad swaps for ungraduated mint A were dropped"
-    assert tape.count(_MINT_B) == 6, "pre-grad swaps for ungraduated mint B were dropped"
+    assert tape.count(_MINT_A) == 20, "pre-grad swaps for ungraduated mint A were dropped"
+    assert tape.count(_MINT_B) == 20, "pre-grad swaps for ungraduated mint B were dropped"
     # Buffered swaps carry absolute block_time and NO rel (anchor applied later).
     for s in tape.get(_MINT_A):
         assert "rel" not in s, "buffered swap must NOT carry a pre-baked rel"
@@ -202,7 +218,7 @@ def test_retroactive_anchoring_yields_features_with_negative_rel():
     # Anchor retroactively now that graduation is known.
     anchored = to_pregrad_swaps(buffered, _GRAD_BT)
     assert all(s["rel"] < 0 for s in anchored), "pre-grad swaps must have negative rel"
-    assert anchored[0]["rel"] == float(900 - _GRAD_BT)
+    assert anchored[0]["rel"] == float(700 - _GRAD_BT)
 
     features = assemble_pregrad_features(buffered, _GRAD_BT)
     assert features is not None

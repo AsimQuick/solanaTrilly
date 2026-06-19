@@ -1,22 +1,24 @@
 # ---
 # module: core.firehose.spine
 # sprint: sprint-14
-# story: live-firehose-spine
-# status: implemented
+# story: live-firehose-spine, US-76
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-19
+# last-updated: 2026-06-20
 # dependencies: core.pregrad_features, core.scorer, trading.tape_settler,
 #               trading.position_closer, trading.schemas, trading.models (lazy)
 # ---
-"""Firehose spine — deterministic scoring + paper-trade helpers (OBSERVE/PAPER only).
+"""Firehose spine -- deterministic scoring + paper-trade helpers (OBSERVE/PAPER only).
 
 These are the pure / dependency-injected building blocks the run_firehose daemon
 composes.  They are factored out of the management command so they can be
 exercised offline (replay/mock) and RUN-TWICE IDENTICAL:
 
   - assemble_pregrad_features(): the 20 PRE_FEATURE_NAMES from collected pre-grad
-    swaps for one mint (rel < 0), via the SAME core.pregrad_features math the
-    offline lab uses (Principle #2).  No live-only feature assembly.
+    swaps for one mint (rel in [-3600, 0)), via the SAME core.pregrad_features math
+    the offline lab uses (Principle #2).  US-76 P1.2: 3600s window cap enforced here
+    (matches offline backfill_pregrad.py CAP=3600).  US-76 P2.4: secondary gate
+    requires >= min_pregrad_swaps (default 20).  No live-only feature assembly.
 
   - score_pregrad(): score the assembled features via the active BlendScorer
     (BlendScorer.from_registry / ReferenceDistribution), gated by scoring_enabled.
@@ -32,7 +34,7 @@ exercised offline (replay/mock) and RUN-TWICE IDENTICAL:
 
 SAFETY INVARIANT
 ================
-assert_paper_only(state) raises if trading_enabled is True — every paper path
+assert_paper_only(state) raises if trading_enabled is True -- every paper path
 calls it first so a real-capital path is structurally unreachable here.
 """
 from __future__ import annotations
@@ -49,7 +51,7 @@ LOG_PREFIX = "[FIREHOSE]"
 
 
 # ---------------------------------------------------------------------------
-# Safety guard — paper-only invariant
+# Safety guard -- paper-only invariant
 # ---------------------------------------------------------------------------
 
 
@@ -73,14 +75,14 @@ def assert_paper_only(trading_enabled: bool) -> None:
     """
     if trading_enabled:
         raise RealCapitalGuardError(
-            "firehose spine is OBSERVE/PAPER only — refusing to run a paper path "
+            "firehose spine is OBSERVE/PAPER only -- refusing to run a paper path "
             "while PipelineState.trading_enabled is True. Real capital must route "
             "through trading.execution_core + the operator-gated Cutover, not here."
         )
 
 
 # ---------------------------------------------------------------------------
-# Swap-shape normalization — collected tape -> §7.1 dicts pregrad math expects
+# Swap-shape normalization -- collected tape -> §7.1 dicts pregrad math expects
 # ---------------------------------------------------------------------------
 
 
@@ -134,28 +136,57 @@ def assemble_pregrad_features(
     graduated_block_time: int,
     *,
     deployer: str | None = None,
+    min_pregrad_swaps: int = 20,
 ) -> dict | None:
     """Assemble the 20 PRE_FEATURE_NAMES features from collected pre-grad swaps.
 
     Delegates to the SAME core.pregrad_features.compute_pregrad_features the
-    offline lab and the shared FeatureExtractor use (Principle #2) — selecting
-    only rel < 0 swaps.  Deterministic: same swaps -> byte-identical features.
+    offline lab and the shared FeatureExtractor use (Principle #2) -- selecting
+    only pre-grad swaps within the 3600s window cap.
+
+    Window cap (US-76 P1.2 / binding-contract Q4):
+        Only swaps with -3600 <= rel < 0 are used.  Offline backfill_pregrad.py
+        truncates at grad-3600 for tokens older than 60 min; live must match.
+        Applied after to_pregrad_swaps() computes rel values so the offline
+        anchor point is honoured (do NOT walk back to creation_time for tokens
+        whose curve life exceeds 60 min).
+
+    Secondary gate (US-76 P2.4 / binding-contract):
+        If fewer than min_pregrad_swaps swaps pass the window filter, returns
+        None and logs a skip.  Feature-stability floor: p5=51, p10=100 for real
+        graduates; only 0.4% of true graduates have <20 pre-grad swaps, so the
+        false-reject rate is negligible while feed-bug (instant) graduations
+        typically have ~0 swaps.
 
     Args:
         swaps:                Collected swaps for ONE mint.
         graduated_block_time: The mint's graduation epoch (anchors rel).
         deployer:             Optional deployer wallet for pre_deployer_* features.
+        min_pregrad_swaps:    Minimum number of pre-grad swaps required to score
+                              (secondary gate, default 20).
 
     Returns:
         Dict of the 20 pre_* features, or None if there are no usable pre-grad
-        swaps (never a zero row).
+        swaps after the window cap or the secondary gate rejects the token.
     """
     normalized = to_pregrad_swaps(swaps, graduated_block_time)
-    return compute_pregrad_features(normalized, deployer=deployer)
+    # P1.2 -- 3600s window cap: match offline backfill_pregrad.py CAP=3600.
+    # Only swaps with rel in [-3600, 0) qualify.
+    windowed = [s for s in normalized if -3600 <= s["rel"] < 0]
+    # P2.4 -- secondary gate: require >= min_pregrad_swaps for feature stability.
+    if len(windowed) < min_pregrad_swaps:
+        logger.info(
+            "%s secondary-gate skip: %d pre-grad swaps in window < min=%d -- not scored",
+            LOG_PREFIX,
+            len(windowed),
+            min_pregrad_swaps,
+        )
+        return None
+    return compute_pregrad_features(windowed, deployer=deployer)
 
 
 # ---------------------------------------------------------------------------
-# Scoring — via the active BlendScorer (reuses score_token's exact recipe)
+# Scoring -- via the active BlendScorer (reuses score_token's exact recipe)
 # ---------------------------------------------------------------------------
 
 
@@ -188,7 +219,7 @@ def score_pregrad(
 
 
 # ---------------------------------------------------------------------------
-# Gate — adaptive_topk / threshold over a blend score
+# Gate -- adaptive_topk / threshold over a blend score
 # ---------------------------------------------------------------------------
 
 
@@ -199,7 +230,7 @@ def gate_passes(blend_score: float, *, gate: str, threshold: float) -> bool:
     single-token live serving moment, to a percentile/threshold comparison:
     a blend percentile-rank >= threshold passes.  (adaptive_topk's "top-K"
     selection over a live pool collapses to a percentile cut because live serving
-    arrives one token at a time — the same resolution as ReferenceDistribution
+    arrives one token at a time -- the same resolution as ReferenceDistribution
     in scorer.py / AC-43.2.)
 
     Pure function.
@@ -216,7 +247,7 @@ def gate_passes(blend_score: float, *, gate: str, threshold: float) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Paper trade — open + settle via the P8 shared apparatus (OBSERVE/PAPER only)
+# Paper trade -- open + settle via the P8 shared apparatus (OBSERVE/PAPER only)
 # ---------------------------------------------------------------------------
 
 
@@ -252,12 +283,12 @@ def settle_paper_trade(
         mint:            Token mint.
         score:           The blend score (stored on the Position row).
         trades:          (block_time_s, price, usd_volume) tuples for the mint's
-                         post-grad tape — the settler's honest-fill input.
+                         post-grad tape -- the settler's honest-fill input.
         entry_ts_epoch:  Entry timestamp as a Unix epoch float (paper entry).
         trading_config:  A trading.schemas.TradingConfig instance.
         size_sol:        Paper position size in SOL.
         sol_usd:         SOL/USD rate for the impact model.
-        trading_enabled: PipelineState.trading_enabled — MUST be False.
+        trading_enabled: PipelineState.trading_enabled -- MUST be False.
         now:             Settlement timestamp (closed_at); defaults to UTC now via
                          the caller (injected for determinism in tests).
         position_factory: Factory that builds + returns a saved Position-like row.
@@ -266,7 +297,7 @@ def settle_paper_trade(
 
     Returns:
         The settled Position (status CLOSED), or None if the tape settler deemed
-        the position un-enterable (no-tape / dead / slip-miss) — never booked as
+        the position un-enterable (no-tape / dead / slip-miss) -- never booked as
         a 0% or -100% row (Principle #5).
 
     Raises:
@@ -289,7 +320,7 @@ def settle_paper_trade(
 
     if not result.get("enterable", False):
         logger.info(
-            "%s paper-skip: mint=%s reason=%s (un-enterable — not booked)",
+            "%s paper-skip: mint=%s reason=%s (un-enterable -- not booked)",
             LOG_PREFIX,
             mint,
             result.get("reason", "unknown"),
@@ -407,7 +438,7 @@ def score_time_reached(
 ) -> bool:
     """Return True when *now* >= graduated_at + score_at_elapsed_s.
 
-    Pure — mirrors ScoreTimeOrchestrator's score-time gate (§7) without any
+    Pure -- mirrors ScoreTimeOrchestrator's score-time gate (§7) without any
     DataSource/snapshot dependency, for the pre-grad-feature scoring path.
     """
     return now >= graduated_at + timedelta(seconds=score_at_elapsed_s)

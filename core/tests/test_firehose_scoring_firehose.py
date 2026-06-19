@@ -29,15 +29,29 @@ from core.pregrad_features import PRE_FEATURE_NAMES
 
 # A banked pre-grad tape for ONE mint: graduation at t0=1000; pre-grad swaps
 # have block_time < t0 so rel < 0.  Mix of buyers/sellers for non-trivial cohort
-# features.
+# features.  Extended to 20 swaps to pass the US-76 P2.4 secondary gate (>=20).
 _GRAD_BT = 1000
 _TAPE = [
-    {"block_time": 900, "slot": 1, "signature": "s1", "side": "buy", "owner": "A", "vol_sol": 2.0, "price": 0.001},
-    {"block_time": 910, "slot": 2, "signature": "s2", "side": "buy", "owner": "B", "vol_sol": 1.0, "price": 0.0011},
-    {"block_time": 920, "slot": 3, "signature": "s3", "side": "buy", "owner": "C", "vol_sol": 3.0, "price": 0.0012},
-    {"block_time": 930, "slot": 4, "signature": "s4", "side": "sell", "owner": "A", "vol_sol": 1.5, "price": 0.0013},
-    {"block_time": 940, "slot": 5, "signature": "s5", "side": "buy", "owner": "A", "vol_sol": 0.5, "price": 0.0014},
-    {"block_time": 950, "slot": 6, "signature": "s6", "side": "buy", "owner": "D", "vol_sol": 4.0, "price": 0.0015},
+    {"block_time": 700, "slot": 1,  "signature": "s1",  "side": "buy",  "owner": "A", "vol_sol": 2.0, "price": 0.001},
+    {"block_time": 710, "slot": 2,  "signature": "s2",  "side": "buy",  "owner": "B", "vol_sol": 1.0, "price": 0.0011},
+    {"block_time": 720, "slot": 3,  "signature": "s3",  "side": "buy",  "owner": "C", "vol_sol": 3.0, "price": 0.0012},
+    {"block_time": 730, "slot": 4,  "signature": "s4",  "side": "sell", "owner": "A", "vol_sol": 1.5, "price": 0.0013},
+    {"block_time": 740, "slot": 5,  "signature": "s5",  "side": "buy",  "owner": "A", "vol_sol": 0.5, "price": 0.0014},
+    {"block_time": 750, "slot": 6,  "signature": "s6",  "side": "buy",  "owner": "D", "vol_sol": 4.0, "price": 0.0015},
+    {"block_time": 760, "slot": 7,  "signature": "s7",  "side": "buy",  "owner": "E", "vol_sol": 1.2, "price": 0.0016},
+    {"block_time": 770, "slot": 8,  "signature": "s8",  "side": "buy",  "owner": "F", "vol_sol": 0.8, "price": 0.0017},
+    {"block_time": 780, "slot": 9,  "signature": "s9",  "side": "sell", "owner": "B", "vol_sol": 0.5, "price": 0.0018},
+    {"block_time": 790, "slot": 10, "signature": "s10", "side": "buy",  "owner": "G", "vol_sol": 2.1, "price": 0.0019},
+    {"block_time": 800, "slot": 11, "signature": "s11", "side": "buy",  "owner": "H", "vol_sol": 0.9, "price": 0.0020},
+    {"block_time": 810, "slot": 12, "signature": "s12", "side": "buy",  "owner": "I", "vol_sol": 1.5, "price": 0.0021},
+    {"block_time": 820, "slot": 13, "signature": "s13", "side": "sell", "owner": "C", "vol_sol": 2.0, "price": 0.0022},
+    {"block_time": 830, "slot": 14, "signature": "s14", "side": "buy",  "owner": "J", "vol_sol": 0.7, "price": 0.0023},
+    {"block_time": 840, "slot": 15, "signature": "s15", "side": "buy",  "owner": "K", "vol_sol": 1.1, "price": 0.0024},
+    {"block_time": 850, "slot": 16, "signature": "s16", "side": "buy",  "owner": "L", "vol_sol": 0.6, "price": 0.0025},
+    {"block_time": 860, "slot": 17, "signature": "s17", "side": "buy",  "owner": "D", "vol_sol": 3.0, "price": 0.0026},
+    {"block_time": 870, "slot": 18, "signature": "s18", "side": "sell", "owner": "E", "vol_sol": 0.4, "price": 0.0027},
+    {"block_time": 880, "slot": 19, "signature": "s19", "side": "buy",  "owner": "M", "vol_sol": 1.8, "price": 0.0028},
+    {"block_time": 890, "slot": 20, "signature": "s20", "side": "buy",  "owner": "N", "vol_sol": 0.3, "price": 0.0029},
 ]
 
 
