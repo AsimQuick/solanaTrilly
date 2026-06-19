@@ -70,13 +70,40 @@ Diagnosis (evidence-based, NOT a code bug):
   a key mismatch. The mint-join logic (`Token.mint == buffered mint`) is sound for
   matching pump.fun tokens.
 
-**Conclusion:** the gap is **lifecycle-overlap / window length**, not a join bug. A
-90-min window is likely too short to reliably catch a genuine pump.fun token that both
-*bonds* and *graduates* inside it. **Recommended next step (operator-gated firehose
-spend): one LONG CONTINUOUS window (3–4 h+), or a continuously-running firehose, so a
-token launched early bonds→graduates while its buffer is still alive.** When it fires,
-confirm: `[FIREHOSE] score: mint=X score=… gate=…` (N>0) → `paper-buy` → `paper-sell`
-→ a `trading.Position` (CLOSED, mode observe) on the Live Positions tab.
+### THE ROOT CAUSE (found + FIXED — supersedes the "just timing" theory above)
+Deeper diagnosis of the window log found the real reason the join never fires: **the
+live collection task SILENTLY DIES mid-window.** At `11:22:59` (~49 min into the
+90-min window) the log shows `collection: buffer finished (60703 swaps across 1355
+mints)` — the Helius WS closed gracefully and the OLD `_collection_loop` ran the
+source **exactly once, with no reconnect**, so the collection task ended. For the
+remaining ~40 min NOTHING was buffered, the pre-grad tape went stale, and every token
+graduating afterward scored 0. **This is almost certainly why the previous agent's
+windows never scored either** — collection was dying partway through every run.
+
+**Fixed in PR #323** (`hotfix/firehose-collection-reconnect`): wrapped collection AND
+graduation in reconnect loops that rebuild the source and restart, **retaining the
+accumulated buffer**, until the firehose flips inactive / the daemon stops. Also
+throttled a 50k-line `postgrad: at-capacity skip` log flood (log first over-capacity
+mint, then break). Deployed to the VPS.
+
+**With the fix, a long window keeps collecting across WS drops**, so a token's full
+bond→graduate lifecycle can finally be captured. There IS still a lifecycle-overlap
+requirement (a token must bond AND graduate within the window), so use a genuinely long
+window. When it fires, confirm: `[FIREHOSE] score: mint=X score=… gate=…` (N>0) →
+`paper-buy` → `paper-sell` → a `trading.Position` (CLOSED, observe) on Live Positions.
+
+### Current live state (session-2 close)
+- **Deployed main to the VPS** (reconnect fix + the full copy-trade engine).
+- **A 2 h combined window is RUNNING** (`st_fh` on `listener`, reconnect code,
+  `idle_ttl=1800s`) **concurrently with the copy-trade engine** (DoD #3): copy-trade is
+  ON in observe/paper, cohort `copy_2026-06-19_v1` loaded (5 wallets: scalp 2 / moonshot
+  3), `[copytrade] engine starting … mode=observe`, wallet consumer subscribed. **This
+  is activation #2.**
+- **TURN THE FIREHOSE OFF after the window** (`firehose_state off` + `docker rm -f
+  st_fh`) — the daemon auto-stops at its `--max-runtime-seconds` but the `firehose_active`
+  flag stays on. The copy-trade engine (`engine_on=True`) keeps its own Helius wallet
+  sub running for ongoing observation; turn it off (`engine_on=False`) when done to stop
+  that spend.
 
 ---
 
