@@ -38,6 +38,12 @@ services:
   web:
     image: ghcr.io/asimquick/solanatrilly:latest
     command: sh -c "python manage.py migrate --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"
+    # Model artifacts (boosters + meta.json) live on the host and are mounted
+    # read-only so promote_blend (here) and the BlendScorer (celery-worker) read
+    # the SAME files from a stable, deploy-surviving path. Host dir is populated
+    # by the operator cutover (scp). solanaBilly untouched (scoped path).
+    volumes:
+      - /root/solanatrilly/models:/app/models:ro
     ports:
       - "8002:8000"
     environment:
@@ -93,6 +99,8 @@ services:
   listener:
     image: ghcr.io/asimquick/solanatrilly:latest
     command: python manage.py run_listener
+    volumes:
+      - /root/solanatrilly/models:/app/models:ro
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
@@ -114,6 +122,8 @@ services:
   copytrade_engine:
     image: ghcr.io/asimquick/solanatrilly:latest
     command: python manage.py run_copytrade_engine
+    volumes:
+      - /root/solanatrilly/models:/app/models:ro
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
@@ -134,6 +144,8 @@ services:
   celery-worker:
     image: ghcr.io/asimquick/solanatrilly:latest
     command: celery -A config worker -l info
+    volumes:
+      - /root/solanatrilly/models:/app/models:ro
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
