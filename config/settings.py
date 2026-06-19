@@ -142,3 +142,37 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 86400.0,  # once per day
     },
 }
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+# Route the application loggers to stdout so containerized runs are observable
+# via `docker logs` — without this, Python's default config swallows everything
+# below WARNING and the live firehose daemon's [FIREHOSE] INFO observability
+# (collection / graduation / score / paper-trade) is invisible. The level is
+# env-configurable (DJANGO_LOG_LEVEL=DEBUG surfaces raw Birdeye/Helius frames
+# for live format confirmation). stdout so structured events read cleanly in
+# `docker logs`.
+LOG_LEVEL = env("DJANGO_LOG_LEVEL", default="INFO")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+            "formatter": "standard",
+        },
+    },
+    "root": {"handlers": ["console"], "level": "WARNING"},
+    "loggers": {
+        "core": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "copytrade": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "trading": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "django": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
