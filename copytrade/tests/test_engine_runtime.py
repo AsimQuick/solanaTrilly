@@ -588,6 +588,59 @@ def test_manage_positions_scalp_closes_on_mirror():
 
 
 @pytest.mark.django_db
+def test_manage_positions_scalp_mirror_books_at_sell_price_when_feed_unavailable():
+    """Mirror exit must book even when the external price feed has no price.
+
+    Regression for the LIVE-observed bug: a fresh pre-grad mint is not yet on the
+    Birdeye REST feed (price_fn -> None), so the mirror close could never book and
+    the position sat open forever despite the source wallet having sold.  The exit
+    now books at the source wallet's SELL price (curve price from its sell event).
+    """
+    state = _fresh_state()
+    clock = VirtualClock(T0)
+
+    handle_event(
+        _make_event(wallet=WALLET_SCALP, mint=MINT_A, sol_amount=2.0),
+        settings=_make_settings(),
+        state=state,
+        cohort=MagicMock(),
+        sol_usd=SOL_USD,
+        price_fn=lambda m: None,  # feed had no price even at entry -> curve fallback
+        clock=clock,
+    )
+    assert MINT_A in state.open_positions
+
+    # Source wallet sells at a profit; the sell event carries the curve price.
+    sell_price = ENTRY_PRICE * 1.3
+    handle_event(
+        _make_event(
+            wallet=WALLET_SCALP, mint=MINT_A, tx_type="sell",
+            raw={"program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "price": sell_price},
+        ),
+        settings=_make_settings(),
+        state=state,
+        cohort=MagicMock(),
+        sol_usd=SOL_USD,
+        price_fn=lambda m: None,
+        clock=clock,
+    )
+    assert state.sold_signals[MINT_A] == sell_price
+
+    # Manage tick with the feed STILL returning None — must still mirror-close,
+    # booking at the source wallet's sell price.
+    closed = manage_positions(
+        state=state,
+        price_fn=lambda m: None,
+        clock=clock,
+        now=T0 + timedelta(seconds=30),
+    )
+    assert len(closed) == 1
+    assert closed[0].exit_reason == EXIT_MIRROR
+    assert closed[0].exit_price == sell_price
+    assert MINT_A not in state.open_positions
+
+
+@pytest.mark.django_db
 def test_manage_positions_price_unavailable_skips_tick():
     """When price_fn returns None, the position is held (no close)."""
     state = _fresh_state()
