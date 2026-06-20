@@ -23,6 +23,7 @@ from .control_api import (
     registry_diff_view,
     registry_history_view,
 )
+from .data_contract_api import data_contract_export_trigger_view
 from .export_api import feature_export_trigger_view
 from .export_result_api import export_result_view
 
@@ -49,6 +50,12 @@ urlpatterns = [
     path("api/control/registry/<int:pk>/activate/", registry_activate_view, name="registry_activate"),
     # US-57 AC-57.1: Feature Builder UI — trigger the US-31 §6.5 labeled export
     path("api/export/trigger/", feature_export_trigger_view, name="feature_export_trigger"),
+    # US-78 AC-78.1/78.2: data-contract Parquet export (swaps + tokens surfaces)
+    path(
+        "api/export/data-contract/trigger/",
+        data_contract_export_trigger_view,
+        name="data_contract_export_trigger",
+    ),
     # US-57 AC-57.2: Feature Builder UI — read back export result + MANIFEST
     path(
         "api/export/result/<str:task_id>/",

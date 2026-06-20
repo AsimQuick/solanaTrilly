@@ -325,3 +325,82 @@ def export_annotations(mint_corpus=None, output_path=None, *, dataset_id="annota
         output_path = "/tmp/annotation_export.csv"
 
     return build_annotation_export(mint_corpus, output_path, dataset_id=dataset_id)
+
+
+@shared_task(name="core.tasks.export_data_contract")
+def export_data_contract(
+    out_dir=None,
+    *,
+    surfaces=None,
+    lake_base_dir=None,
+    dataset_prefix="data_contract",
+):
+    """US-78 data-contract export — write the lab's Parquet surfaces (§10).
+
+    Builds the agreed Parquet surfaces consumed by the solanatrills lab, partitioned
+    by UTC date and queryable by date-range + by-mint + by-wallet(signer).  Runs on
+    the dedicated celery-worker container — NEVER on web/gunicorn (#289 lesson).
+
+    This task only PROJECTS already-persisted state (the raw lake + Token registry)
+    into the contract schema — it performs no scoring, no feature math, and NEVER
+    touches scoring_enabled / trading_enabled.
+
+    Args:
+        out_dir: Export root.  Surfaces are written under {out_dir}/{surface}/.
+            Defaults to /tmp/data_contract.
+        surfaces: Iterable of surface names to build.  Defaults to
+            ("swaps", "tokens").  (predictions_positions is delivered separately.)
+        lake_base_dir: Root of the raw lake tree (defaults to 'lake/tapes').
+        dataset_prefix: Prefix for each surface's manifest dataset_id.
+
+    Returns:
+        {"out_dir": str, "surfaces": {surface: <result dict>}}
+    """
+    from core.data_contract import build_swaps_dataset, build_tokens_dataset
+    from core.models import Token
+    from core.tape.lake_reader import LakeReader
+
+    if out_dir is None:
+        out_dir = "/tmp/data_contract"
+    if lake_base_dir is None:
+        lake_base_dir = "lake/tapes"
+    if surfaces is None:
+        surfaces = ("swaps", "tokens")
+    surfaces = tuple(surfaces)
+
+    # Build the {mint: base_decimals} map once from the Token registry — used to
+    # derive base_amount_raw on the swaps surface.  Defensive dig: decimals live in
+    # raw_graduation (top-level) or raw_graduation.raw.
+    mint_decimals = {}
+    token_dicts = []
+    for tok in Token.objects.all().values(
+        "mint", "graduated_block_time", "dex_source", "raw_graduation"
+    ):
+        token_dicts.append(tok)
+        rg = tok.get("raw_graduation") or {}
+        dec = rg.get("decimals")
+        if dec is None:
+            dec = (rg.get("raw") or {}).get("decimals")
+        if dec is not None:
+            try:
+                mint_decimals[tok["mint"]] = int(dec)
+            except (TypeError, ValueError):
+                pass
+
+    results = {}
+    if "swaps" in surfaces:
+        reader = LakeReader(base_dir=lake_base_dir)
+        results["swaps"] = build_swaps_dataset(
+            reader.iter_rows(),
+            out_dir=out_dir,
+            mint_decimals=mint_decimals,
+            dataset_id=f"{dataset_prefix}_swaps",
+        )
+    if "tokens" in surfaces:
+        results["tokens"] = build_tokens_dataset(
+            token_dicts,
+            out_dir=out_dir,
+            dataset_id=f"{dataset_prefix}_tokens",
+        )
+
+    return {"out_dir": out_dir, "surfaces": results}
