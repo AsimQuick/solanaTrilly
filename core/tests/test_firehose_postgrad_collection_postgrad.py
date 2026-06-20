@@ -523,3 +523,100 @@ def _async_const(value):
         return value
 
     return _method
+
+
+# ---------------------------------------------------------------------------
+# US-76 fix — post-grad subscription plan: recent-only, newest-first
+# (live finding: oldest-first over ALL graduated rows starved fresh graduations
+#  of the bounded slots, so the paper leg could never fire).
+# ---------------------------------------------------------------------------
+
+
+def _make_active_postgrad_config():
+    """Create + return an is_active=True PipelineConfig (ttl_s = 120 + 1800 = 1920)."""
+    from core.models import PipelineConfig
+
+    return PipelineConfig.objects.create(
+        version=1,
+        label="postgrad-plan-test",
+        is_active=True,
+        detection={"filter": {"source": "pump_dot_fun", "graduated": True}},
+        tape={
+            "amm_programs": ["pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"],
+            "idle_kill_ttl_s": 1800,
+            "reattach": True,
+            "max_postgrad_subscriptions": 5,
+        },
+        scoring={"score_at_elapsed_s": 120, "window_s": 180, "capture_buffer_s": 4},
+        outcome={"window_s": 1800, "label_def": {}},
+        trading={"gate": "adaptive_topk", "enabled": False, "position_size_sol": 0.1},
+    )
+
+
+@pytest.mark.django_db
+def test_postgrad_plan_recent_only_newest_first():
+    """_postgrad_plan_sync returns only graduations within ttl_s, newest-first.
+
+    Regression for the live finding: the manager subscribed ALL graduated Token
+    rows OLDEST-first, so the bounded slots were held by long-dead tokens and fresh
+    graduations (the only paper-trade candidates) were starved.  Now stale rows
+    (older than score_at_elapsed_s + outcome.window_s) are excluded entirely and
+    the remainder is ordered newest-first.
+    """
+    from core.models import Token
+    from core.resolver import invalidate_active_config_cache
+
+    _make_active_postgrad_config()
+    # The resolver caches the active config in Redis (not rolled back per-test) —
+    # invalidate so get_active_config() inside _postgrad_plan_sync reads THIS config.
+    invalidate_active_config_cache()
+    clock = VirtualClock(datetime(2026, 6, 20, 12, 0, 0, tzinfo=timezone.utc))
+    now_epoch = int(clock.now().timestamp())
+    ttl_s = 120 + 1800  # 1920
+
+    # recent (within ttl): two, with distinct grad times; stale: one (older than ttl)
+    specs = {
+        "RecentNewer": now_epoch - 60,      # most recent
+        "RecentOlder": now_epoch - 600,     # recent, but older than RecentNewer
+        "StaleDead": now_epoch - (ttl_s + 5000),  # entry window long gone -> excluded
+    }
+    for mint, gbt in specs.items():
+        Token.objects.create(
+            mint=mint,
+            pool_address="pool_" + mint,
+            graduated_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+            graduated_block_time=gbt,
+            dex_source="pumpswap",
+            raw_graduation={"mint": mint},
+        )
+
+    try:
+        daemon = FirehoseDaemon(clock=clock)
+        max_subs, plan_ttl, grad_order = daemon._postgrad_plan_sync()
+
+        assert plan_ttl == float(ttl_s)
+        mints_in_order = [m for m, _bt in grad_order]
+        # Stale token excluded; recent tokens present, NEWEST first.
+        assert mints_in_order == ["RecentNewer", "RecentOlder"], (
+            f"expected only recent graduations newest-first, got {mints_in_order}"
+        )
+        assert "StaleDead" not in mints_in_order, (
+            "a graduation older than ttl_s must be excluded — it can never be paper-entered"
+        )
+    finally:
+        # Don't leak THIS test's config sections into the Redis cache for later tests.
+        invalidate_active_config_cache()
+
+
+def test_scoring_config_per_day_target_default_and_override():
+    """ScoringConfig.per_day_target defaults to 30 and is config-overridable (live calibration)."""
+    from core.schemas import ScoringConfig
+
+    default = ScoringConfig(score_at_elapsed_s=120, window_s=180)
+    assert default.per_day_target == 30, "per_day_target must default to 30/day"
+
+    calibrated = ScoringConfig(score_at_elapsed_s=120, window_s=180, per_day_target=50)
+    assert calibrated.per_day_target == 50, "per_day_target must be overridable for live calibration"
+
+    with pytest.raises(Exception):
+        ScoringConfig(score_at_elapsed_s=120, window_s=180, per_day_target=0)

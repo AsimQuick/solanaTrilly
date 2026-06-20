@@ -241,12 +241,19 @@ def test_banked_fixture_is_gzip_jsonl() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ledger_budget_decremented_to_8_birdeye() -> None:
+def test_ledger_budget_row_internally_consistent() -> None:
+    # The cumulative budget table is decremented as activations are spent, so it is
+    # NOT pinned to a fixed snapshot (a hardcoded count broke on every new spend).
+    # Current state after the US-76 DoD window: | Birdeye | 10 | 3 | 7 |.
     text = LEDGER_PATH.read_text(encoding="utf-8")
-    # budget table row: | Birdeye | 10 | 2 | 8 |
-    assert re.search(r"\|\s*Birdeye\s*\|\s*10\s*\|\s*2\s*\|\s*8\s*\|", text), (
-        "ledger budget table must show Birdeye used=2 remaining=8"
+    m = re.search(r"\|\s*Birdeye\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|", text)
+    assert m, "ledger budget table must have a well-formed Birdeye row"
+    total, used, remaining = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    assert total == 10, "Birdeye project-wide budget total is 10"
+    assert used + remaining == total, (
+        f"Birdeye used({used}) + remaining({remaining}) must equal total({total})"
     )
+    assert remaining == 7, "after the US-76 DoD window, Birdeye remaining=7 (used=3)"
 
 
 def test_ledger_has_activation_row() -> None:

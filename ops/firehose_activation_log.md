@@ -18,9 +18,9 @@ last-updated: 2026-06-17
 
 | Source    | Total | Used | Remaining |
 |-----------|------:|-----:|----------:|
-| Birdeye   |    10 |    2 |         8 |
-| Helius    |    10 |    1 |         9 |
-| **Total** |**20** | **3**|    **17** |
+| Birdeye   |    10 |    3 |         7 |
+| Helius    |    10 |    2 |         8 |
+| **Total** |**20** | **5**|    **15** |
 
 Both Birdeye and Helius API keys are provisioned in `.env` (gitignored + untracked).
 They are **never committed** — not here, not in any source file, not in any workflow file.
@@ -65,6 +65,7 @@ then build against it forever.
 | 2026-06-16 | dev-team (operator) | Birdeye SUBSCRIBE_TXS | US-22 AC-22.3 end-to-end live proof: real PumpSwap swaps flow Birdeye SUBSCRIBE_TXS → BirdeyeSwapSource → map_birdeye_swap → TapeRecorder → `swaps` rows + jsonl.gz on the VPS `listener` container (`-p solanatrilly`). Proves the live recorder path that the offline US-21 replay/parity suite mirrors. | ≤ 150 s box | 8 Birdeye / 10 Helius | `swaps` table on VPS: 8 real `source=pump_amm` swaps for mint `H9L9apxE8RREZZgTaNLmGeUfCYJQfHBwQxuXzvPNpump` (graduated pump.fun token), recorded live (signer=owner, base/quote reserves NULL per §3.3/§7.1) + the AC-22.2 golden fixture remains the durable offline replay anchor. |
 | 2026-06-17 | dev-team | Helius Enhanced TX | US-32 AC-32.2 G2(b) raw-truth spot-check (§7.6): the project's ONE budgeted Helius activation. Fetched Helius Enhanced Transactions for the 40 Birdeye golden signatures (mint `E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump`), confirmed 40/40 coverage and 100% side-parity via pool-flow detection (pool account `DZxWcyPpTyr2NTfmEN2xAUSCb77t1ZLpkg63PbpbKmbC`). Banked as slim raw fixture. CI cross-check (`test_g2b_raw_truth_ac322.py`) runs OFFLINE forever — P5 gate never depends on a live Helius read. | 2s (≤ 30 min box) | 8 Birdeye / 9 Helius | `lake/golden/helius_decoded_txs/dt=2026-06-16/E6ifp2mJy8cYQehUGUtFvrXriRKxRuonLmrvTFypump_helius_g2b_raw.jsonl.gz` — 40 Helius-decoded PumpSwap txs (23 buy / 17 sell), token-transfer + native-transfer + account-change fields, raw = immutable truth (§6.4.1). |
 | 2026-06-17 | dev-team | Helius transactionSubscribe (program-wide) — INFRASTRUCTURE DELIVERY; live window PENDING | US-34 AC-34.3 birth-tape first live bring-up infrastructure: banked deterministic synthetic golden fixture and wired the offline CI gate. Live program-wide WS window budgeted for a 20-min box when opened; carries to next sprint per AC if aborted. Budget NOT consumed until the live window opens. | N/A — offline infrastructure delivery | 8 Birdeye / 9 Helius (unchanged — no live activation yet) | `lake/golden/helius_birth_tape/dt=2026-06-17/helius_birth_tape_pregrad_golden.jsonl.gz` — 6 deterministic synthetic Helius transactionNotification rows (3 pre-grad trades + 1 migrate + 2 post-grad trades) for mint `6SdsCkVYLUUz9gbrpFxRJE2QCjHmvAMWK8Nsh9MZLh2b` (sha256-derived, AC-34.3 golden anchor). CI gate (`test_birth_tape_live_fixture_ac343.py`) runs OFFLINE forever against this fixture — never needs a live read. |
+| 2026-06-20 | operator (Claude, live-run) | Birdeye `SUBSCRIBE_MEME` (graduation) + Helius birth-tape (collection) | **US-76 DoD validation window** — prove the live graduate-inference chain end-to-end after the parity resolution (PR #334: single-spot USD + unified sort + lab serving bundle): detect a real graduation → assemble pre-grad tape → score against the frozen reference grid → gate → paper-buy → paper-sell, observe/paper only (`trading_enabled=False`, copy `mode=observe`). One firehose window opens BOTH the Birdeye graduation WS and the Helius collection WS, so 1 Birdeye + 1 Helius activation. `--max-runtime-seconds 5400` (90-min box). | _in progress — finalised at teardown_ | 7 Birdeye / 8 Helius | _to be banked at teardown: real graduated-mint pre-grad tape (`swaps` rows / jsonl.gz) + the scored `predictions`/`trading_positions` harvest; durable live-faithful corpus for offline replay._ |
 
 ### Activation detail — 2026-06-17 Helius transactionSubscribe infrastructure (AC-34.3)
 

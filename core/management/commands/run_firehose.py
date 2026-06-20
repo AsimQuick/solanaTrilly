@@ -726,8 +726,17 @@ class FirehoseDaemon:
         max_concurrent  = tape.max_postgrad_subscriptions (config-driven bound).
         per_mint_ttl_s  = scoring.score_at_elapsed_s + outcome.window_s — covers
                           entry at grad+score_at_elapsed_s plus the exit horizon.
-        grad order      = Token rows ordered by graduated_block_time (oldest first)
-                          so we subscribe to the earliest graduates first.
+        grad order      = RECENT graduations only (graduated within the last ttl_s),
+                          ordered NEWEST-first.
+
+        US-76 fix (live finding): the manager previously subscribed ALL graduated
+        Token rows OLDEST-first.  In a long-lived deployment the DB accumulates
+        hundreds of stale graduations, so the bounded slots (max_postgrad_subscriptions)
+        were perpetually held by long-dead tokens and FRESH graduations — the only
+        tokens that can actually be paper-entered — were starved of post-grad price
+        data, so the paper leg could never fire.  A token whose entry+exit window
+        (ttl_s) has already elapsed can never be entered, so it is excluded entirely;
+        the remaining recent graduations are served newest-first.
         """
         from core.models import Token
         from core.resolver import get_active_config
@@ -741,8 +750,14 @@ class FirehoseDaemon:
         )
         ttl_s = float(config.scoring.score_at_elapsed_s + config.outcome.window_s)
 
+        # Only graduations whose post-grad entry+exit window is still open are worth
+        # a subscription; newest-first so fresh paper-trade candidates win the slots.
+        now_epoch = int(self._clock.now().timestamp())
+        cutoff = now_epoch - int(ttl_s)
         grad_order: list[tuple[str, int]] = []
-        for tok in Token.objects.order_by("graduated_block_time"):
+        for tok in (
+            Token.objects.filter(graduated_block_time__gte=cutoff).order_by("-graduated_block_time")
+        ):
             grad_order.append((tok.mint, int(tok.graduated_block_time)))
         return max_subs, ttl_s, grad_order
 
@@ -946,7 +961,11 @@ class FirehoseDaemon:
         else:
             size_sol = trading_cfg.position_size_sol
         # P2.5 -- threshold from model artifact (rank_cut from meta.json depth_menu).
-        threshold = _threshold_from_model(model_entry)
+        # US-76 live calibration: per_day target is config-driven (scoring.per_day_target),
+        # so the operator can calibrate picks/day on the live stream without a code change
+        # (the lab's rank_cut is offline-population-derived — calibrate it live).
+        per_day = int(getattr(config.scoring, "per_day_target", _DEFAULT_PER_DAY)) if config else _DEFAULT_PER_DAY
+        threshold = _threshold_from_model(model_entry, per_day=per_day)
         return scorer, ref_dist, scoring, trading_cfg, size_sol, sol_usd, threshold
 
     def _paper_trade_sync(
