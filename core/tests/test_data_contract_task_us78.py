@@ -91,7 +91,7 @@ def test_export_data_contract_task_end_to_end(tmp_path):
 
     out_dir = tmp_path / "export"
     result = export_data_contract(
-        out_dir=str(out_dir), lake_base_dir=str(lake_base)
+        out_dir=str(out_dir), surfaces=["swaps", "tokens"], lake_base_dir=str(lake_base)
     )
 
     assert set(result["surfaces"]) == {"swaps", "tokens"}

@@ -357,3 +357,58 @@ class Annotation(models.Model):
     class Meta:
         app_label = "core"
         db_table = "annotations"
+
+
+class Prediction(models.Model):
+    """Durable score-time record — the per-label breakdown the lab measures (US-78).
+
+    Written by the live scoring path (run_firehose._score_tick) at the moment a
+    graduated token is scored, BEFORE the gate decision, so the full breakdown is
+    persisted whether or not the token is picked.  This is the source for the
+    ``predictions_positions`` data-contract surface (directives §10) and the
+    durable scoring store (AC-3-adjacent): ``Position`` persists only the single
+    blend ``score``, which cannot reconstruct the per-label preds / percentiles the
+    lab needs to compare the live soak against the offline scores.
+
+    label_scores / label_ranks are JSON so the record is robust to a model shipping
+    a different label set; the export projects named columns (ctrl/oracle/liq_pred).
+
+    Idempotent: unique on (mint, score_time, model_id) — re-scoring the same token
+    at the same anchor with the same model updates rather than duplicates.
+    """
+
+    mint = models.CharField(max_length=64, db_index=True)
+    score_time = models.IntegerField(db_index=True)  # unix seconds (grad_block_time + score_at_elapsed_s)
+    model_id = models.CharField(max_length=128, default="")
+
+    # Raw per-label seed-averaged booster predictions ({"ctrl":.., "oracle":.., "liq":..}).
+    label_scores = models.JSONField(default=dict, encoder=JsonSafeEncoder)
+    # Per-label percentile ranks vs the frozen reference distribution.
+    label_ranks = models.JSONField(default=dict, encoder=JsonSafeEncoder)
+    # Blend = mean of the per-label ranks (the gate-relevant cross-sectional score).
+    blend = models.FloatField()
+
+    per_day_target = models.IntegerField()
+    rank_cut = models.FloatField(null=True, blank=True)
+    picked = models.BooleanField(default=False)  # gate decision (blend >= rank_cut)
+    # The single graduation-time SOL/USD spot used to serve features in USD
+    # (US-76 BREAK-1) — also the USD basis for the linked position's size/pnl.
+    sol_usd_spot = models.FloatField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "core"
+        db_table = "predictions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["mint", "score_time", "model_id"],
+                name="uniq_prediction_mint_scoretime_model",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["mint", "score_time"]),
+        ]
+
+    def __str__(self):
+        return f"Prediction({self.mint[:8]}… t={self.score_time} blend={self.blend:.4f} picked={self.picked})"

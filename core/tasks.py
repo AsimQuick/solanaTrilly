@@ -349,14 +349,18 @@ def export_data_contract(
         out_dir: Export root.  Surfaces are written under {out_dir}/{surface}/.
             Defaults to /tmp/data_contract.
         surfaces: Iterable of surface names to build.  Defaults to
-            ("swaps", "tokens").  (predictions_positions is delivered separately.)
+            ("swaps", "tokens", "predictions_positions").
         lake_base_dir: Root of the raw lake tree (defaults to 'lake/tapes').
         dataset_prefix: Prefix for each surface's manifest dataset_id.
 
     Returns:
         {"out_dir": str, "surfaces": {surface: <result dict>}}
     """
-    from core.data_contract import build_swaps_dataset, build_tokens_dataset
+    from core.data_contract import (
+        build_predictions_positions_dataset,
+        build_swaps_dataset,
+        build_tokens_dataset,
+    )
     from core.models import Token
     from core.tape.lake_reader import LakeReader
 
@@ -365,7 +369,7 @@ def export_data_contract(
     if lake_base_dir is None:
         lake_base_dir = "lake/tapes"
     if surfaces is None:
-        surfaces = ("swaps", "tokens")
+        surfaces = ("swaps", "tokens", "predictions_positions")
     surfaces = tuple(surfaces)
 
     # Build the {mint: base_decimals} map once from the Token registry — used to
@@ -402,5 +406,54 @@ def export_data_contract(
             out_dir=out_dir,
             dataset_id=f"{dataset_prefix}_tokens",
         )
+    if "predictions_positions" in surfaces:
+        from core.models import Prediction
+
+        predictions = list(
+            Prediction.objects.all().values(
+                "mint", "score_time", "model_id", "label_scores", "label_ranks",
+                "blend", "per_day_target", "rank_cut", "picked", "sol_usd_spot",
+            )
+        )
+        model_positions = _model_positions_for_export()
+        copy_positions = _copy_positions_for_export()
+        results["predictions_positions"] = build_predictions_positions_dataset(
+            predictions,
+            model_positions,
+            copy_positions,
+            out_dir=out_dir,
+            dataset_id=f"{dataset_prefix}_predictions_positions",
+        )
 
     return {"out_dir": out_dir, "surfaces": results}
+
+
+def _model_positions_for_export():
+    """trading.Position rows with source='model' as plain dicts (export-only read)."""
+    try:
+        from trading.models import Position
+    except Exception:  # noqa: BLE001 — trading app optional at import time
+        return []
+    return list(
+        Position.objects.filter(source="model").values(
+            "mint", "status", "entry_ts", "entry_price", "size_sol",
+            "exit_ts", "exit_price", "exit_trigger", "realized_pnl_sol",
+        )
+    )
+
+
+def _copy_positions_for_export():
+    """copytrade.CopytradePosition rows as plain dicts (export-only read)."""
+    try:
+        from copytrade.models import CopytradePosition
+    except Exception:  # noqa: BLE001 — copytrade app optional at import time
+        return []
+    fields = [
+        "mint", "trigger_wallet", "status", "entry_ts", "entry_price", "size_usd",
+        "exit_ts", "exit_price", "exit_reason", "realized_pnl_sol",
+    ]
+    # cap_pct / copy_latency_s exist only when honest-fills telemetry is on (US-75).
+    optional = ["cap_pct", "copy_latency_s"]
+    model_field_names = {f.name for f in CopytradePosition._meta.get_fields()}
+    fields += [f for f in optional if f in model_field_names]
+    return list(CopytradePosition.objects.all().values(*fields))
