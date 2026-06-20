@@ -2,19 +2,19 @@
 // file: frontend/src/App.jsx
 // stack: react+vite
 // purpose: Root React component for the solanaTrilly research-first dashboard (PRD §13).
-//   Renders the token-detail research view (US-49 AC-49.2) or the cohort wall
-//   (US-50 AC-50.3) based on the ?view= query param.  The cohort wall loads when
-//   view=cohort; the token-detail view loads when view=token (default) with ?mint=.
-//   The config/model control operator skin loads when view=control (US-56 AC-56.3).
-//   The Feature Builder UI loads when view=features (US-57 AC-57.1).
-//   The Copy Trade tab loads when view=copytrade (US-63 AC-63.2).
-//   The Live Positions board loads when view=positions (US-69 AC-69.2).
-//   The Calibration & PnL analytics view loads when view=calibration (US-72 AC-72.2).
-//   The Replay viewer position-open/close overlay loads when view=replay (US-73 AC-73.2).
+//   Renders a persistent top nav bar plus the selected view based on the ?view=
+//   query param.  The cohort wall loads when view=cohort; the token-detail view
+//   loads when view=token with ?mint=.  The config/model control operator skin
+//   loads when view=control (US-56 AC-56.3).  The Feature Builder UI loads when
+//   view=features (US-57 AC-57.1).  The Copy Trade tab loads when view=copytrade
+//   (US-63 AC-63.2).  The Live Positions board loads when view=positions (US-69
+//   AC-69.2) and is the DEFAULT landing view.  The Calibration & PnL analytics view
+//   loads when view=calibration (US-72 AC-72.2).  The Replay viewer loads when
+//   view=replay (US-73 AC-73.2).
 // created-by: dev-team
 // sprint: sprint-14
 // story: US-48 AC-48.1, US-49 AC-49.2, US-50 AC-50.3, US-56 AC-56.3, US-57 AC-57.1, US-63 AC-63.2, US-69 AC-69.2, US-72 AC-72.2, US-73 AC-73.2
-// last-updated: 2026-06-19
+// last-updated: 2026-06-20
 // ---
 
 import CalibrationPnL from './CalibrationPnL.jsx'
@@ -33,9 +33,60 @@ function getQueryParam(name, fallback) {
   return params.get(name) || fallback
 }
 
+// Top-level views reachable from the nav bar (in display order).
+const NAV_ITEMS = [
+  { view: 'positions', label: 'Live Positions' },
+  { view: 'copytrade', label: 'Copy Trade' },
+  { view: 'cohort', label: 'Cohort Wall' },
+  { view: 'calibration', label: 'Calibration & PnL' },
+  { view: 'replay', label: 'Replay' },
+  { view: 'features', label: 'Feature Builder' },
+  { view: 'control', label: 'Config & Models' },
+]
+
+function NavBar({ activeView }) {
+  return (
+    <nav
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '8px',
+        margin: '0 0 18px 0',
+        paddingBottom: '12px',
+        borderBottom: '1px solid #242833',
+      }}
+    >
+      {NAV_ITEMS.map((item) => {
+        const isActive = item.view === activeView
+        return (
+          <a
+            key={item.view}
+            href={`?view=${item.view}`}
+            style={{
+              color: isActive ? '#0f1117' : '#d1d4dc',
+              background: isActive ? '#4f8bff' : '#1a1d27',
+              border: '1px solid #242833',
+              borderRadius: '6px',
+              padding: '6px 12px',
+              fontFamily: 'sans-serif',
+              fontSize: '13px',
+              fontWeight: isActive ? 700 : 500,
+              textDecoration: 'none',
+            }}
+          >
+            {item.label}
+          </a>
+        )
+      })}
+    </nav>
+  )
+}
+
 function App() {
-  const view = getQueryParam('view', 'token')
   const mint = getQueryParam('mint', null)
+  // Default landing view = Live Positions (a useful live board), unless a ?mint=
+  // is present (then show that token's detail view).
+  const view = getQueryParam('view', null) || (mint ? 'token' : 'positions')
   const intervalS = parseInt(getQueryParam('interval_s', '15'), 10)
   const groupBy = getQueryParam('group_by', null)
   const sortBy = getQueryParam('sort_by', null)
@@ -43,7 +94,10 @@ function App() {
 
   return (
     <div id="solanatrilly-app" style={{ background: '#0f1117', minHeight: '100vh', padding: '16px' }}>
-      <h1 style={{ color: '#d1d4dc', fontFamily: 'sans-serif' }}>solanaTrilly Dashboard</h1>
+      <h1 style={{ color: '#d1d4dc', fontFamily: 'sans-serif', margin: '0 0 14px 0' }}>
+        solanaTrilly Dashboard
+      </h1>
+      <NavBar activeView={view} />
       {view === 'cohort' ? (
         <CohortWall intervalS={intervalS} groupBy={groupBy} sortBy={sortBy} />
       ) : view === 'control' ? (
@@ -61,15 +115,9 @@ function App() {
       ) : mint ? (
         <TokenDetail mint={mint} intervalS={intervalS} />
       ) : (
-        <p style={{ color: '#9598a1' }}>
-          Pass <code>?mint=&lt;address&gt;</code> to view a replayed token, or{' '}
-          <code>?view=cohort</code> to open the cohort pattern-mining wall, or{' '}
-          <code>?view=control</code> to open the config &amp; model control panel, or{' '}
-          <code>?view=features</code> to open the Feature Builder (§6.5 export), or{' '}
-          <code>?view=copytrade</code> to open the Copy Trade tab, or{' '}
-          <code>?view=positions</code> to open the Live Positions board, or{' '}
-          <code>?view=calibration</code> to open the Calibration &amp; PnL analytics view, or{' '}
-          <code>?view=replay</code> to open the Replay viewer position-open/close overlay.
+        <p style={{ color: '#9598a1', fontFamily: 'sans-serif' }}>
+          Select a view above, or pass <code>?mint=&lt;address&gt;</code> to open a
+          replayed token&rsquo;s detail view.
         </p>
       )}
     </div>
