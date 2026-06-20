@@ -70,6 +70,32 @@
     "per_day": 30,
     "K": 3210
   },
+  "depth_menu": [
+    {
+      "per_day": 10,
+      "rank_cut": 0.9000,
+      "K": 1070,
+      "note": "conservative; use during initial observe soak"
+    },
+    {
+      "per_day": 20,
+      "rank_cut": 0.8772,
+      "K": 2140,
+      "note": "medium depth"
+    },
+    {
+      "per_day": 30,
+      "rank_cut": 0.8568,
+      "K": 3210,
+      "note": "recommended (lab 30/day validated, rank_cut from reference_dist.json serve field)"
+    },
+    {
+      "per_day": 50,
+      "rank_cut": 0.8200,
+      "K": 5350,
+      "note": "higher depth; calibrate on live stream"
+    }
+  ],
   "gate_30day": {
     "mean": 8.40892765163355,
     "med": 7.357298675373347,
