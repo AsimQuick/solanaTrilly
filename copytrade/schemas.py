@@ -413,5 +413,16 @@ class CohortV21(BaseModel):
         return {w.address: w.style for w in self.wallets}
 
     def wallet_to_exit(self) -> dict[str, Union[OurTrailingExit, MirrorWalletSellExit]]:
-        """Map each wallet address -> its exit config (for EngineState.exit_by_strategy)."""
-        return {w.address: self.exit_for_wallet(w) for w in self.wallets}
+        """Map each *style* -> its exit config (for EngineState.exit_by_strategy).
+
+        CRITICAL: this dict is keyed by STYLE ("scalp"/"ride"), NOT by wallet
+        address. The engine resolves a position's exit via
+        ``exit_by_strategy.get(position.strategy_id)`` where ``strategy_id`` is the
+        wallet's *style* (set in cohort_lifecycle: ``strategy_id=w.style``). Keying
+        this map by address instead silently breaks every 2.1 exit — the lookup
+        misses, the engine logs ``no-exit-cfg ... holding`` every tick, and the
+        position can NEVER close (the 15h-stuck-open bug). All wallets of a given
+        style share the same exit config (ride->ride_exit, others->mirror_exit), so
+        collapsing by style is lossless. See test_engine_resolves_exit_for_every_style.
+        """
+        return {w.style: self.exit_for_wallet(w) for w in self.wallets}
