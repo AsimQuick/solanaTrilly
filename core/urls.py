@@ -26,6 +26,7 @@ from .control_api import (
 from .data_contract_api import data_contract_export_trigger_view
 from .export_api import feature_export_trigger_view
 from .export_result_api import export_result_view
+from .pipeline_control_api import inference_control_view, pipeline_status_view
 
 urlpatterns = [
     path("health/", views.health, name="health"),
@@ -56,6 +57,9 @@ urlpatterns = [
         data_contract_export_trigger_view,
         name="data_contract_export_trigger",
     ),
+    # US-79: operator inference Start/Stop + pipeline status board (dashboard)
+    path("api/control/pipeline/", pipeline_status_view, name="pipeline_status"),
+    path("api/control/inference/", inference_control_view, name="inference_control"),
     # US-57 AC-57.2: Feature Builder UI — read back export result + MANIFEST
     path(
         "api/export/result/<str:task_id>/",
