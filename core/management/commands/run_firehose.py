@@ -782,7 +782,13 @@ class FirehoseDaemon:
 
         for mint, graduated_block_time in due:
             swaps = self._tape.get(mint)
-            features = assemble_pregrad_features(swaps, graduated_block_time)
+            # US-76 BREAK-1: serve in USD via ONE SOL/USD spot (the shared cached
+            # spot resolved in the scoring context).  vol = vol_sol × spot inside
+            # the normalisation layer; reproduces the offline trained feature space
+            # and makes pre_insider_sell_ratio parity-true (directives §8/§9).
+            features = assemble_pregrad_features(
+                swaps, graduated_block_time, sol_usd_spot=sol_usd
+            )
             if features is None:
                 logger.info(
                     "%s score: mint=%s no pre-grad tape yet (%d swaps) — deferring.",

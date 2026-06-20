@@ -256,3 +256,42 @@ artifact; AC-1 fixtures committed; gap-heal source named + normalized.
   - Full suite: 2952 pass, 1 fail (pre-existing sprint14 stale phase), 5 skip, 2 xfail — clean
 - Remaining work: P3 gap-heal source naming (AC-3), AC-4 cross-sectional scoring wire-up
 - blocker-type: none
+
+### Parity resolution — BREAK-1 + BREAK-2 closed (2026-06-20, operator-run, lab-decided)
+
+The AC-5 harness's two xfail breaks are resolved per the lab's directives §8/§9 decisions.
+The harness is **green: 18 features asserted parity-clean at ~1e-3, 2 eb-netpos as a
+permanent blessed xfail.** Full suite: 2953 pass / 1 xfail / 5 skip / 1 pre-existing
+unrelated red (`test_sprint14_guard_passes` — sprint14.json phase staleness, untouched here).
+
+- **BREAK-1 (pre_insider_sell_ratio) — FIXED.** Live now serves the feature `vol` in **USD via
+  ONE graduation-time SOL/USD spot** (`sol_usd_spot` threaded `run_firehose._score_tick` →
+  `assemble_pregrad_features` → `to_pregrad_swaps` → `normalize_raw_for_features`, where
+  `vol = vol_sol × spot`). The spot is the shared cached `core.pricing.get_sol_usd()` resolved
+  in the scoring context (within minutes of graduation; "roughly right" suffices — it cancels
+  in the 19 ratios and only makes the +1.0 smoother negligible at USD scale). ISR max delta vs
+  the offline per-trade-USD golden: **~5.5e-4** (< 1.5e-3). Now ASSERTED, not xfail.
+- **BREAK-2 (same-block sort) — FIXED** with one blessed residual. `compute_pregrad_features`
+  now sorts by **`(block_time, signature)`** (slot dropped) to match the offline golden's
+  `(blockUnixTime, txHash)`. sold/diamond/seller now parity-clean. The only residual is
+  `pre_eb10/20_netpos_frac` (~1 mint/5%): netpos is a `buy_v > sell_v` comparison and single-spot
+  USD structurally can't reproduce offline per-trade-USD on near-tie wallets. **Lab A1: this stays
+  a permanent xfail** — eb-netpos is low-gain, rare, picks stable (r=0.998, ~96% overlap); no
+  netpos redefinition / retrain.
+- **Serving bundle — adopted from the lab verbatim** (built by `analysis/graduated/build_serving_bundle.py`
+  on the final unified-sort golden; **no retrain** — frozen boosters soaked on the new golden, lab A2):
+  `models/trilly_pregrad_v3_2/reference_dist.json` (per-label 1001-pt score→percentile grid + blend
+  recipe + rank_cut) and `golden_scores.parquet` (mint→{ctrl,oracle,liq}_pred/_pct/blend, full corpus).
+  `ReferenceDistribution.from_file` reads the grid (back-compat with the legacy format); the live
+  `BlendScorer` reproduces the per-label `_pred` **bit-for-bit** (0.0 delta over the fixture), `_pct`/blend
+  follow via the grid (≤6.7e-4 vs the exact-population oracle). Fixture `expected_features` re-baked from
+  the final `pregrad_enrich.csv`.
+- **Deployer features** (`pre_deployer_*`) — live serves 0 (lookup unwired). **DoD-acceptable (lab A3:**
+  3 lowest-gain feats, 1.61% total; ablation blend Pearson 0.994, ~6% pick churn). **Wire before capital**
+  via the US-78 `tokens` export (deployer = creator wallet). Excluded from the asserted set.
+
+**Files:** `core/pregrad_features.py` (sort), `core/normalized_swap.py` + `core/firehose/spine.py`
+(single-spot vol), `core/management/commands/run_firehose.py` (`sol_usd_spot=sol_usd`),
+`core/scorer.py` (`from_file` grid branch), `core/tests/test_golden_parity_us76_ac5.py` +
+`core/tests/test_scoring_correctness_us76.py` (lab-bundle schema), fixture + bundle artifacts.
+**DoD remaining:** the live firehose validation window (detect→score→gate→paper) on the granted activation.
