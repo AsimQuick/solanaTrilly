@@ -54,11 +54,15 @@ models/
 !models/trilly_pregrad_v3_2/reference_dist.json
 !models/trilly_pregrad_v3_2/meta.json
 !models/trilly_pregrad_v3_2/golden_scores.parquet
-# v4-deploy: committed model artifacts (boosters are host-only, not committed)
+# v4-deploy: committed model artifacts (boosters + wallet bank are host-only, not committed)
 !models/trilly_pregrad_v4/
 !models/trilly_pregrad_v4/reference_dist.json
 !models/trilly_pregrad_v4/meta.json
 !models/trilly_pregrad_v4/golden_scores.parquet
+# v4 wallet bank: host-only (27 MB, operator scp to VPS; NOT in Git)
+# Mounted into containers at /app/models/trilly_pregrad_v4/v4_wallet_bank.parquet via models/:ro
+models/trilly_pregrad_v4/v4_wallet_bank.parquet
+models/trilly_pregrad_v4/boosters/
 
 # lake/ data files (large binaries — host-only, not committed to Git)
 lake/

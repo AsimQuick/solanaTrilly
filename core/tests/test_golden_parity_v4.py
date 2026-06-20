@@ -2,9 +2,9 @@
 # module: core.tests.test_golden_parity_v4
 # sprint: hotfix
 # story: v4-deploy
-# status: implemented
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-20
+# last-updated: 2026-06-21
 # dependencies: pytest, numpy, pandas, json, pathlib, types,
 #               core.v4_rep_builder, core.scorer
 # ---
@@ -76,7 +76,12 @@ _GOLDEN_SCORES_PATH = _MODEL_DIR / "golden_scores.parquet"
 _REF_DIST_PATH      = _MODEL_DIR / "reference_dist.json"
 
 # Host-only (bank, edges, offline CSVs, boosters)
-_BANK_PATH          = _REPO_ROOT / "lake" / "v4_wallet_bank" / "v4_wallet_bank.parquet"
+# Bank moved to models/trilly_pregrad_v4/ so it is reachable at /app/models/trilly_pregrad_v4/
+# (under the already-mounted models/:ro volume in staging).  The old lake/ path is checked
+# as a fallback so developer machines with the bank in the old location still work.
+_BANK_PATH_PRIMARY  = _MODEL_DIR / "v4_wallet_bank.parquet"
+_BANK_PATH_FALLBACK = _REPO_ROOT / "lake" / "v4_wallet_bank" / "v4_wallet_bank.parquet"
+_BANK_PATH          = _BANK_PATH_PRIMARY if _BANK_PATH_PRIMARY.is_file() else _BANK_PATH_FALLBACK
 _EDGES_TIME_PATH    = _LAB_ROOT / "analysis" / "whale_graph" / "out" / "whale_edges.parquet"
 _EDGES_SIZE_PATH    = _LAB_ROOT / "analysis" / "whale_graph" / "out" / "whale_edges_bysize.parquet"
 _OFFLINE_REP_PATH   = _LAB_ROOT / "analysis" / "whale_graph" / "out" / "whale_outcome_features.csv"

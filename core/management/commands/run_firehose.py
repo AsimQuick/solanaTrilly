@@ -2,14 +2,15 @@
 # module: core.management.commands.run_firehose
 # sprint: sprint-14
 # story: live-firehose-spine
-# status: implemented
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-19
+# last-updated: 2026-06-21
 # dependencies: django, asyncio, logging, signal, asgiref,
 #               core.tape.birdeye_graduation_source, core.tape.birdeye_swap_source,
 #               core.tape.birdeye_swap_mapper, core.tape.helius_birth_tape_source,
 #               core.management.commands.run_listener, core.detection.consumer,
-#               core.firehose.spine, core.clock, core.resolver, core.models
+#               core.firehose.spine, core.clock, core.resolver, core.models,
+#               core.v4_rep_builder
 # ---
 """run_firehose — the gated live daemon that ties the pipeline spine together.
 
@@ -191,6 +192,173 @@ def _threshold_from_model(model_entry, *, per_day: int = _DEFAULT_PER_DAY) -> fl
 
 
 # ---------------------------------------------------------------------------
+# v4 REP+recurrence feature assembly — wired at _score_tick call site
+# ---------------------------------------------------------------------------
+
+# v4 wallet bank lives under the models/ mount so it is accessible inside the
+# container at /app/models/trilly_pregrad_v4/v4_wallet_bank.parquet.
+# The "models" sub-path is resolved at runtime via the active model's artifact_dir
+# so we never hardcode the absolute container path here.
+_V4_BANK_FILENAME = "v4_wallet_bank.parquet"
+
+# Number of enrich features produced by the v3.2 shared builder
+_ENRICH_FEATURE_COUNT = 20
+
+# Cache sentinel: WalletBankLookup is expensive to build (~44s, ~27 MB).
+# It is loaded ONCE per FirehoseDaemon instance in __init__, stored as
+# self._wallet_bank.  _try_load_wallet_bank() is the safe loader called there.
+_wallet_bank_module_cache: "dict[str, object]" = {}  # {bank_path_str: WalletBankLookup}
+
+
+def _try_load_wallet_bank(bank_path: Path) -> "object | None":
+    """Load WalletBankLookup from bank_path, using a module-level cache.
+
+    Returns the WalletBankLookup instance, or None if the file is absent or
+    the load fails.  Uses a module-level dict so multiple FirehoseDaemon
+    instances in the same process (tests) share the same bank in memory.
+    """
+    key = str(bank_path)
+    if key in _wallet_bank_module_cache:
+        return _wallet_bank_module_cache[key]
+    if not bank_path.is_file():
+        logger.warning(
+            "%s v4 wallet bank NOT found at %s — REP+recurrence features will be "
+            "zero-filled until the bank is placed there.  The operator must scp "
+            "v4_wallet_bank.parquet to VPS host models/trilly_pregrad_v4/ before "
+            "the 33 features can be non-zero.",
+            LOG_PREFIX,
+            bank_path,
+        )
+        return None
+    try:
+        from core.v4_rep_builder import WalletBankLookup
+
+        bank = WalletBankLookup(bank_path)
+        _wallet_bank_module_cache[key] = bank
+        logger.info(
+            "%s v4 WalletBankLookup loaded from %s and cached.", LOG_PREFIX, bank_path
+        )
+        return bank
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "%s v4 WalletBankLookup FAILED to load from %s: %s — "
+            "REP+recurrence will be zero-filled.",
+            LOG_PREFIX,
+            bank_path,
+            exc,
+        )
+        return None
+
+
+def assemble_v4_features(
+    swaps: list[dict],
+    graduated_block_time: int,
+    *,
+    wallet_bank: "object | None",
+    deployer: "str | None" = None,
+    min_pregrad_swaps: int = 20,
+    base_decimals: int = 6,
+    sol_usd_spot: "float | None" = None,
+) -> "dict | None":
+    """Assemble the full 53-feature vector for trilly_pregrad_v4.
+
+    Calls assemble_pregrad_features (shared v3.2 builder, UNMODIFIED) for
+    enrich20, then calls compute_rep_features + compute_recurrence_features
+    for the 33 REP+recurrence features from the wallet bank, and assembles
+    all 53 in meta.json feature order.
+
+    This function ONLY lives in run_firehose.py (the _score_tick call site).
+    It does NOT mutate spine.assemble_pregrad_features — the v3.2 path is
+    fully unchanged.
+
+    Parameters
+    ----------
+    swaps:
+        Pre-grad swap dicts for this mint (same as assemble_pregrad_features).
+    graduated_block_time:
+        Graduation epoch (seconds); used to anchor rel and as T for bank
+        leak-safe lag.
+    wallet_bank:
+        WalletBankLookup singleton (self._wallet_bank), or None if the bank
+        is not available.  When None, the 33 REP+recurrence features are
+        zero-filled — the booster still runs on the 20 enrich features, same
+        as before the wire-in.
+    deployer:
+        Optional deployer wallet address (for enrich20 pre_deployer_* features
+        and for excluding from buyer pool extraction).
+    min_pregrad_swaps, base_decimals, sol_usd_spot:
+        Passed through to assemble_pregrad_features (see its docstring).
+
+    Returns
+    -------
+    dict of 53 features (enrich20 + REP24 + recurrence9), or None if
+    assemble_pregrad_features returns None (secondary gate / no tape).
+    """
+    # Step 1: enrich20 via the shared builder (v3.2 spine, UNMODIFIED)
+    enrich_feats = assemble_pregrad_features(
+        swaps,
+        graduated_block_time,
+        deployer=deployer,
+        min_pregrad_swaps=min_pregrad_swaps,
+        base_decimals=base_decimals,
+        sol_usd_spot=sol_usd_spot,
+    )
+    if enrich_feats is None:
+        return None  # secondary gate rejected; propagate
+
+    # Step 2: extract time/size buyers from the pre-grad tape for REP/recurrence
+    from core.v4_rep_builder import (
+        RECURRENCE_FEATURE_NAMES,
+        REP_FEATURE_NAMES,
+        compute_recurrence_features,
+        compute_rep_features,
+        extract_buyers_from_swaps,
+    )
+
+    try:
+        time_buyers, size_buyers = extract_buyers_from_swaps(
+            swaps, deployer=deployer
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s v4: extract_buyers_from_swaps failed (%s) — REP+recurrence zero-filled.",
+            LOG_PREFIX,
+            exc,
+        )
+        time_buyers, size_buyers = [], []
+
+    # Step 3: REP24 + recurrence9 from wallet bank (or zero-fill if bank absent)
+    grad_unix_T = float(graduated_block_time)
+    if wallet_bank is not None:
+        try:
+            rep_feats = compute_rep_features(
+                time_buyers, size_buyers, grad_unix_T, wallet_bank
+            )
+            rec_feats = compute_recurrence_features(
+                time_buyers, size_buyers, grad_unix_T, wallet_bank
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "%s v4: REP/recurrence compute failed (%s) — zero-filling.",
+                LOG_PREFIX,
+                exc,
+            )
+            rep_feats = {f: 0.0 for f in REP_FEATURE_NAMES}
+            rec_feats = {f: 0.0 for f in RECURRENCE_FEATURE_NAMES}
+    else:
+        # Bank absent: zero-fill REP+recurrence (model still runs on enrich20)
+        rep_feats = {f: 0.0 for f in REP_FEATURE_NAMES}
+        rec_feats = {f: 0.0 for f in RECURRENCE_FEATURE_NAMES}
+
+    # Step 4: assemble 53 features in meta.json order
+    feats = {}
+    feats.update(enrich_feats)
+    feats.update(rep_feats)
+    feats.update(rec_feats)
+    return feats
+
+
+# ---------------------------------------------------------------------------
 # Tape store — collects swaps keyed by mint (shared across tasks)
 # ---------------------------------------------------------------------------
 
@@ -266,6 +434,7 @@ class FirehoseDaemon:
         postgrad_factory=None,
         clock=None,
         tape_sink=None,
+        wallet_bank=None,
     ) -> None:
         self._poll_interval_s = poll_interval_s
         self._max_runtime_s = max_runtime_s
@@ -298,6 +467,63 @@ class FirehoseDaemon:
         self._postgrad_tasks: dict[str, asyncio.Task] = {}
         self._postgrad_seen: set[str] = set()
         self._postgrad_sources: dict[str, object] = {}
+        # v4 REP+recurrence: WalletBankLookup singleton (~44s build, ~27 MB).
+        # Loaded ONCE here, NEVER per-tick.  Injectable via wallet_bank= for tests.
+        # When the active model is v3.2 (20 features), this is unused.
+        # When the bank file is absent on VPS (operator must scp it), _wallet_bank
+        # is None and the 33 REP+recurrence features are zero-filled — the scorer
+        # still runs on enrich20 only (degraded, but safe).
+        if wallet_bank is not None:
+            # Caller-injected (test path or explicit override)
+            self._wallet_bank = wallet_bank
+        else:
+            self._wallet_bank = self._load_wallet_bank_singleton()
+
+    # ------------------------------------------------------------------
+    # v4 wallet bank startup load
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_wallet_bank_singleton() -> "object | None":
+        """Load the v4 WalletBankLookup ONCE at daemon startup.
+
+        Resolves the bank path via the active model's artifact_dir so the
+        daemon is config-driven: when v4 is active the bank lives alongside
+        the boosters under models/trilly_pregrad_v4/.  Falls back gracefully
+        when no model is active or the bank file is absent.
+
+        The result is cached in the module-level dict by _try_load_wallet_bank
+        so repeated daemon instantiations in the same process (tests) share one
+        loaded instance.
+        """
+        try:
+            from core.resolver import get_active_model
+
+            model_entry = get_active_model()
+            if model_entry is None:
+                # No active model yet — try the conventional path so a pre-promote
+                # VPS with the bank already in place can still warm the cache.
+                bank_path = (
+                    Path(__file__).resolve().parents[4]
+                    / "models"
+                    / "trilly_pregrad_v4"
+                    / _V4_BANK_FILENAME
+                )
+            else:
+                artifact_dir = Path(model_entry.artifact_dir) if model_entry.artifact_dir else None
+                if artifact_dir is not None:
+                    bank_path = artifact_dir / _V4_BANK_FILENAME
+                else:
+                    return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "%s _load_wallet_bank_singleton: failed to resolve bank path (%s) — "
+                "REP features will be zero-filled.",
+                LOG_PREFIX,
+                exc,
+            )
+            return None
+        return _try_load_wallet_bank(bank_path)
 
     # ------------------------------------------------------------------
     # PipelineState reads (sync ORM -> async via sync_to_async)
@@ -830,15 +1056,35 @@ class FirehoseDaemon:
             logger.warning("%s score: cannot build scoring context (%s).", LOG_PREFIX, exc)
             return
 
+        # v4 path: detect by feature count on the active scorer.
+        # len(scorer.feature_list) == 53 → v4 REP+recurrence path
+        # len(scorer.feature_list) == 20 → v3.2 enrich-only path (unchanged)
+        # getattr fallback: test stubs without feature_list default to the v3.2 path.
+        _scorer_feature_list = getattr(scorer, "feature_list", [])
+        _is_v4_model = len(_scorer_feature_list) == 53
+
         for mint, graduated_block_time in due:
             swaps = self._tape.get(mint)
             # US-76 BREAK-1: serve in USD via ONE SOL/USD spot (the shared cached
             # spot resolved in the scoring context).  vol = vol_sol × spot inside
             # the normalisation layer; reproduces the offline trained feature space
             # and makes pre_insider_sell_ratio parity-true (directives §8/§9).
-            features = assemble_pregrad_features(
-                swaps, graduated_block_time, sol_usd_spot=sol_usd
-            )
+            if _is_v4_model:
+                # v4: assemble all 53 features (enrich20 + REP24 + recurrence9).
+                # Uses self._wallet_bank (singleton loaded at daemon startup).
+                # If bank is absent, REP+recurrence are zero-filled — scorer still
+                # runs on enrich20 only (degraded but non-crashing).
+                features = assemble_v4_features(
+                    swaps,
+                    graduated_block_time,
+                    wallet_bank=self._wallet_bank,
+                    sol_usd_spot=sol_usd,
+                )
+            else:
+                # v3.2 (or any other 20-feature model): unchanged path.
+                features = assemble_pregrad_features(
+                    swaps, graduated_block_time, sol_usd_spot=sol_usd
+                )
             if features is None:
                 logger.info(
                     "%s score: mint=%s no pre-grad tape yet (%d swaps) — deferring.",
