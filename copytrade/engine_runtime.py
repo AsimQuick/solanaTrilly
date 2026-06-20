@@ -45,6 +45,7 @@ from typing import Any, Callable, Optional
 
 from copytrade.buy_trigger import should_copy_buy_v2
 from copytrade.exits import (
+    EXIT_TIMER,
     evaluate_mirror_exit,
     evaluate_trailing_exit,
 )
@@ -544,12 +545,40 @@ def manage_positions(
             # Fallback for a pending mirror exit: a fresh pre-grad mint is often
             # not yet on the external price feed, but the source wallet's SELL
             # carried a curve price — book the mirror close at that (unit-
-            # consistent with the curve-price entry).  Other cases skip the tick.
+            # consistent with the curve-price entry).
             sell_price = state.sold_signals.get(mint, 0.0)
             if sell_price and sell_price > 0:
                 current_price = sell_price
             else:
-                continue  # skip tick — price unavailable
+                # No usable price AND no mirror-sell signal.  Previously this
+                # skipped EVERY tick, so a token whose price feed returns None
+                # (dead / illiquid / rugged) was held forever and never hit its
+                # max-hold timer (the 15h-stuck bug).  Enforce the max-hold here:
+                # past max_hold_seconds, force-close at the entry price (flat — we
+                # never fabricate a gain without a price) with a TIMER reason.
+                cfg = state.exit_by_strategy.get(position.strategy_id or "")
+                max_hold = getattr(cfg, "max_hold_seconds", None) if cfg is not None else None
+                if (
+                    max_hold
+                    and position.entry_ts is not None
+                    and (now - position.entry_ts).total_seconds() >= max_hold
+                ):
+                    fill = float(position.entry_price or 0.0)
+                    closed_position = close_position(position, EXIT_TIMER, fill, now)
+                    closed.append(closed_position)
+                    logger.info(
+                        "[copytrade] stale-timer close: mint=%.8s held>=%ds with no "
+                        "price -> TIMER @ entry (flat); likely a dead/illiquid token.",
+                        mint,
+                        int(max_hold),
+                    )
+                    del state.open_positions[mint]
+                    state.multiplicity.open_mints.discard(mint)
+                    state.multiplicity.open_positions_count = max(
+                        0, state.multiplicity.open_positions_count - 1
+                    )
+                    state.sold_signals.pop(mint, None)
+                continue  # priced-out: just force-closed, or still within hold
 
         # 2. Ratchet high_water_price
         prior_hw = float(position.high_water_price or position.entry_price or current_price)

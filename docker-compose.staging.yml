@@ -138,6 +138,11 @@ services:
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36,localhost,127.0.0.1}
       REDIS_URL: redis://redis:6379/0
       HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+      # REQUIRED for exit evaluation: copytrade.price_source.fetch_mint_price_usd
+      # calls Birdeye /defi/price; without this key it returns None for EVERY mint,
+      # so the manager loop skips every position and NOTHING settles (the 15h-stuck
+      # bug). Was missing here while listener/inference_engine had it.
+      BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
       # Live-trading wallet + RPC (US-80). Read ONLY when the operator sets
       # trading_enabled=True; inert in observe/paper. Secret lives in the VPS .env.
       TRADING_WALLET_KEY: ${TRADING_WALLET_KEY:-}
