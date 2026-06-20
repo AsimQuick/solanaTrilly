@@ -3,13 +3,14 @@
 // stack: react+vite
 // purpose: Root React component for the solanaTrilly research-first dashboard (PRD §13).
 //   Renders a persistent top nav bar plus the selected view based on the ?view=
-//   query param.  The cohort wall loads when view=cohort; the token-detail view
-//   loads when view=token with ?mint=.  The config/model control operator skin
-//   loads when view=control (US-56 AC-56.3).  The Feature Builder UI loads when
-//   view=features (US-57 AC-57.1).  The Copy Trade tab loads when view=copytrade
-//   (US-63 AC-63.2).  The Live Positions board loads when view=positions (US-69
-//   AC-69.2) and is the DEFAULT landing view.  The Calibration & PnL analytics view
-//   loads when view=calibration (US-72 AC-72.2).  The Replay viewer loads when
+//   query param.  The inference engine control page loads when view=inference and
+//   is the DEFAULT landing view.  The cohort wall loads when view=cohort; the
+//   token-detail view loads when view=token with ?mint=.  The config/model control
+//   operator skin loads when view=control (US-56 AC-56.3).  The Feature Builder UI
+//   loads when view=features (US-57 AC-57.1).  The Copy Trade tab loads when
+//   view=copytrade (US-63 AC-63.2).  The Live Positions board loads when
+//   view=positions (US-69 AC-69.2).  The Calibration & PnL analytics view loads
+//   when view=calibration (US-72 AC-72.2).  The Replay viewer loads when
 //   view=replay (US-73 AC-73.2).
 // created-by: dev-team
 // sprint: sprint-14
@@ -22,6 +23,7 @@ import CohortWall from './CohortWall.jsx'
 import ConfigControl from './ConfigControl.jsx'
 import CopyTradeTab from './CopyTradeTab.jsx'
 import FeatureBuilder from './FeatureBuilder.jsx'
+import InferencePage from './InferencePage.jsx'
 import LivePositions from './LivePositions.jsx'
 import ReplayViewer from './ReplayViewer.jsx'
 import TokenDetail from './TokenDetail.jsx'
@@ -35,6 +37,7 @@ function getQueryParam(name, fallback) {
 
 // Top-level views reachable from the nav bar (in display order).
 const NAV_ITEMS = [
+  { view: 'inference', label: 'Inference' },
   { view: 'positions', label: 'Live Positions' },
   { view: 'copytrade', label: 'Copy Trade' },
   { view: 'cohort', label: 'Cohort Wall' },
@@ -84,9 +87,9 @@ function NavBar({ activeView }) {
 
 function App() {
   const mint = getQueryParam('mint', null)
-  // Default landing view = Live Positions (a useful live board), unless a ?mint=
+  // Default landing view = Inference engine control page, unless a ?mint=
   // is present (then show that token's detail view).
-  const view = getQueryParam('view', null) || (mint ? 'token' : 'positions')
+  const view = getQueryParam('view', null) || (mint ? 'token' : 'inference')
   const intervalS = parseInt(getQueryParam('interval_s', '15'), 10)
   const groupBy = getQueryParam('group_by', null)
   const sortBy = getQueryParam('sort_by', null)
@@ -98,7 +101,9 @@ function App() {
         solanaTrilly Dashboard
       </h1>
       <NavBar activeView={view} />
-      {view === 'cohort' ? (
+      {view === 'inference' ? (
+        <InferencePage />
+      ) : view === 'cohort' ? (
         <CohortWall intervalS={intervalS} groupBy={groupBy} sortBy={sortBy} />
       ) : view === 'control' ? (
         <ConfigControl />

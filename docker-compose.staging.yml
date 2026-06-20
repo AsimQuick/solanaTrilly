@@ -33,6 +33,11 @@ networks:
 
 volumes:
   solanatrilly_pgdata:
+  # Shared durable swap-tape lake (AC-3): the inference_engine WRITES the live
+  # firehose tape here and the celery-worker (data-contract export) + web
+  # (dashboard candle/cohort APIs) READ it. Mounted at /app/lake/tapes only, so
+  # the image-baked lake/golden fixtures are untouched.
+  solanatrilly_lake:
 
 services:
   web:
@@ -44,6 +49,7 @@ services:
     # by the operator cutover (scp). solanaBilly untouched (scoped path).
     volumes:
       - /root/solanatrilly/models:/app/models:ro
+      - solanatrilly_lake:/app/lake/tapes
     ports:
       - "8002:8000"
     environment:
@@ -141,11 +147,40 @@ services:
       - solanatrilly_net
     restart: unless-stopped
 
+  # Persistent, GATED inference engine (US-79). Runs run_firehose unbounded; while
+  # PipelineState.firehose_active is False it idles (no Birdeye/Helius subscriptions,
+  # no spend). The dashboard's Inference Start/Stop flips that flag — no shell, no
+  # container spawning. Writes the live tape to the shared durable lake (AC-3).
+  inference_engine:
+    image: ghcr.io/asimquick/solanatrilly:latest
+    command: python manage.py run_firehose -v 2
+    volumes:
+      - /root/solanatrilly/models:/app/models:ro
+      - solanatrilly_lake:/app/lake/tapes
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: 0
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36,localhost,127.0.0.1}
+      REDIS_URL: redis://redis:6379/0
+      BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
+      HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - solanatrilly_net
+    restart: unless-stopped
+
   celery-worker:
     image: ghcr.io/asimquick/solanatrilly:latest
     command: celery -A config worker -l info
     volumes:
       - /root/solanatrilly/models:/app/models:ro
+      - solanatrilly_lake:/app/lake/tapes
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly

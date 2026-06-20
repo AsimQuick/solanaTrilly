@@ -104,6 +104,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_SCORE_TICK_S = 5.0
 DEFAULT_POSTGRAD_TICK_S = 5.0
+#: AC-3: how often the durable tape sink is flushed to the lake off the hot path.
+DEFAULT_TAPE_FLUSH_INTERVAL_S = 10.0
 DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
 
 
@@ -202,11 +204,16 @@ class TapeStore:
     It is the live analogue of the lake the offline FeatureExtractor reads.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, on_add=None) -> None:
         self._by_mint: dict[str, list[dict]] = {}
+        # Optional durable sink hook (AC-3): called for every swap added.  Must
+        # never raise on the hot path (the sink swallows its own errors).
+        self._on_add = on_add
 
     def add(self, mint: str, swap: dict) -> None:
         self._by_mint.setdefault(mint, []).append(swap)
+        if self._on_add is not None:
+            self._on_add(mint, swap)
 
     def get(self, mint: str) -> list[dict]:
         return list(self._by_mint.get(mint, []))
@@ -258,6 +265,7 @@ class FirehoseDaemon:
         graduation_factory=None,
         postgrad_factory=None,
         clock=None,
+        tape_sink=None,
     ) -> None:
         self._poll_interval_s = poll_interval_s
         self._max_runtime_s = max_runtime_s
@@ -267,8 +275,18 @@ class FirehoseDaemon:
         self._graduation_factory = graduation_factory or self._build_graduation
         self._postgrad_factory = postgrad_factory or self._build_postgrad_source
         self._clock = clock or WallClock()
-        self._tape = TapeStore()
-        self._postgrad_tape = TapeStore()
+        # AC-3 durable tape sink: every collected swap is appended to the
+        # daily-partitioned lake (lake/tapes) so a soak banks a replayable tape and
+        # the US-78 swaps surface populates.  Injectable for tests; default writes
+        # to the shared lake volume.  The hooks tag phase so the export derives the
+        # venue (pre->pump_dot_fun, post->pump_amm).
+        if tape_sink is None:
+            from core.firehose.tape_sink import LakeTapeSink
+
+            tape_sink = LakeTapeSink()
+        self._tape_sink = tape_sink
+        self._tape = TapeStore(on_add=lambda _m, s: self._tape_sink.record(s, "pre"))
+        self._postgrad_tape = TapeStore(on_add=lambda _m, s: self._tape_sink.record(s, "post"))
         self._scored_mints: set[str] = set()
         # Mints known to have graduated (Token row exists).  Refreshed by the
         # scoring task and read by the collection buffer's two-tier idle-kill so
@@ -364,19 +382,36 @@ class FirehoseDaemon:
         graduation_task = asyncio.create_task(self._graduation_loop(), name="firehose-graduation")
         scoring_task = asyncio.create_task(self._scoring_loop(), name="firehose-scoring")
         postgrad_task = asyncio.create_task(self._postgrad_loop(), name="firehose-postgrad")
+        flush_task = asyncio.create_task(self._tape_flush_loop(deadline), name="firehose-tape-flush")
         watcher_task = asyncio.create_task(self._flip_watcher(deadline), name="firehose-watcher")
 
-        tasks = [collection_task, graduation_task, scoring_task, postgrad_task, watcher_task]
+        tasks = [collection_task, graduation_task, scoring_task, postgrad_task, flush_task, watcher_task]
         try:
             # The watcher returns when firehose flips False / stop / deadline.
             await watcher_task
         finally:
-            for t in (collection_task, graduation_task, scoring_task, postgrad_task):
+            for t in (collection_task, graduation_task, scoring_task, postgrad_task, flush_task):
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await self._cancel_postgrad_subscriptions()
             await self._disconnect_all_sources()
+            # AC-3: final flush so the in-flight tail (< flush_every) is persisted.
+            await sync_to_async(self._tape_sink.flush, thread_sensitive=True)()
             logger.info("%s active run stopped — all tasks cancelled, sources disconnected.", LOG_PREFIX)
+
+    async def _tape_flush_loop(self, deadline) -> None:
+        """AC-3: periodically flush the durable tape sink off the event loop.
+
+        Inline flushes in the sink handle bulk persistence (every flush_every rows);
+        this guarantees the tail is written within a bounded interval even when the
+        swap rate is low, and keeps the gzip I/O off the collection hot path.
+        """
+        while not self._stop.is_set():
+            await self._sleep_or_stop(DEFAULT_TAPE_FLUSH_INTERVAL_S, deadline)
+            try:
+                await sync_to_async(self._tape_sink.flush, thread_sensitive=True)()
+            except Exception as exc:  # noqa: BLE001 — never let persistence kill the run
+                logger.warning("%s tape flush failed (%s) — continuing.", LOG_PREFIX, exc)
 
     async def _flip_watcher(self, deadline) -> None:
         """Watch for firehose_active->False / stop / deadline; then return."""
