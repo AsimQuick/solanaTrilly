@@ -57,10 +57,10 @@ from asgiref.sync import sync_to_async
 from django.conf import settings as django_settings
 from django.core.management.base import BaseCommand
 
+from copytrade.curve_price import HELIUS_RPC_BASE, read_curve_state
 from copytrade.engine_runtime import EngineState, handle_event, manage_positions
 from copytrade.helius_wallet_source import HeliusWalletTxSource, decode_wallet_tx
 from copytrade.models import CopytradeCohort, CopytradePosition, CopyTradeSettings, CopytradeWallet
-from copytrade.price_source import fetch_mint_price_usd
 from copytrade.schemas import MirrorWalletSellExit, OurTrailingExit
 from copytrade.validators import validate_cohort_any
 from copytrade.wallet_consumer import WalletSubscriptionConsumer
@@ -230,6 +230,14 @@ class Command(BaseCommand):
         helius_source = HeliusWalletTxSource(helius_api_key, wallet_addresses)
         mapped_source = MappedSwapSource(helius_source, decode_wallet_tx)
         clock = WallClock()
+
+        # --- Curve price feed (PR B2): ONE basis — read the bonding-curve reserves
+        # over Helius RPC for honest-fill sim (entry/exit/trailing). Self-contained
+        # in copytrade (§5 clean); no Birdeye, no firehose.
+        rpc_url = f"{HELIUS_RPC_BASE}/?api-key={helius_api_key}"
+
+        def curve_state_fn(mint: str):
+            return read_curve_state(mint, rpc_url=rpc_url)
         consumer = WalletSubscriptionConsumer(
             source=mapped_source,
             clock=clock,
@@ -250,10 +258,10 @@ class Command(BaseCommand):
 
         # --- Two concurrent tasks ---
         consumer_task = asyncio.create_task(
-            self._consumer_loop(consumer, state, settings_row, cohort, clock, stop)
+            self._consumer_loop(consumer, state, settings_row, cohort, clock, curve_state_fn, stop)
         )
         manager_task = asyncio.create_task(
-            self._manager_loop(state, clock, stop)
+            self._manager_loop(state, clock, curve_state_fn, stop)
         )
 
         try:
@@ -271,6 +279,7 @@ class Command(BaseCommand):
         settings_row: CopyTradeSettings,
         cohort,
         clock: WallClock,
+        curve_state_fn,
         stop: asyncio.Future,
     ) -> None:
         """Stream WalletTxEvents and call handle_event for each.
@@ -290,8 +299,9 @@ class Command(BaseCommand):
                     state=state,
                     cohort=cohort,
                     sol_usd=sol_usd,
-                    price_fn=fetch_mint_price_usd,
+                    curve_state_fn=curve_state_fn,
                     clock=clock,
+                    honest_fills_enabled=bool(getattr(settings_row, "honest_fills_enabled", False)),
                 )
         except Exception as exc:  # noqa: BLE001
             logger.exception("[copytrade] consumer_loop error: %s", exc)
@@ -303,6 +313,7 @@ class Command(BaseCommand):
         self,
         state: EngineState,
         clock: WallClock,
+        curve_state_fn,
         stop: asyncio.Future,
     ) -> None:
         """Periodically call manage_positions to evaluate and close open positions.
@@ -322,7 +333,7 @@ class Command(BaseCommand):
                 try:
                     closed = await sync_to_async(manage_positions)(
                         state=state,
-                        price_fn=fetch_mint_price_usd,
+                        curve_state_fn=curve_state_fn,
                         clock=clock,
                         now=now,
                     )

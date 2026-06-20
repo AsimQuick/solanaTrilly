@@ -171,6 +171,7 @@ def open_observe_position_v2(
     usd_size: float,
     sol_usd: float,
     strategy_id: str,
+    entry_tokens: float | None = None,
 ) -> CopytradePosition:
     """Open a cohort-2.0 paper position in OBSERVE mode (USD-sized, strategy-tagged).
 
@@ -225,6 +226,7 @@ def open_observe_position_v2(
         mode=CopytradePosition.MODE_OBSERVE,
         entry_ts=record.entry_ts,
         entry_price=entry_price,
+        entry_tokens=entry_tokens,
         sol_in=sol_in,
         size_usd=usd_size,
         strategy_id=strategy_id,
