@@ -1,7 +1,7 @@
 # ---
 # module: trading.schemas
-# sprint: sprint-13, hotfix
-# story: US-64 AC-64.1, US-66 AC-66.1, fix/model-exit-timer-1200
+# sprint: sprint-13, hotfix, feat/copy-live-exec-curve-ix
+# story: US-64 AC-64.1, US-66 AC-66.1, fix/model-exit-timer-1200, copy-live-exec
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
@@ -47,6 +47,18 @@ class TradingConfig(BaseModel):
     # --- Position sizing ---
     position_size_sol: float = Field(default=0.1, gt=0)
     max_open_positions: int = Field(default=3, gt=0)
+
+    # --- Live budget kill-switch (copy-live-exec) ---
+    # max_daily_spend_sol:     Hard cap on SOL spent on LIVE buys per calendar day
+    #                          (UTC date). ExecutionCore.execute_buy refuses if the
+    #                          sum of sol_in for today's live positions would exceed
+    #                          this. Default 0.04 SOL — conservative first-send cap.
+    # max_open_live_positions: Hard cap on simultaneously open LIVE positions.
+    #                          ExecutionCore.execute_buy refuses if there are already
+    #                          this many open live CopytradePositions.
+    #                          These are the BUDGET KILL-SWITCH guards — never bypassed.
+    max_daily_spend_sol: float = Field(default=0.04, gt=0)
+    max_open_live_positions: int = Field(default=2, gt=0)
 
     # --- Slippage tiers (PRD §10.1): TIGHT / NORMAL / LOSS / PANIC ---
     slippage_tight_bps: int = Field(default=800, ge=0)

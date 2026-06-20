@@ -1,10 +1,10 @@
 # ---
 # module: trading.sender
-# sprint: sprint-13
-# story: US-65 AC-65.3
-# status: implemented
+# sprint: sprint-13, feat/copy-live-exec-curve-ix
+# story: US-65 AC-65.3, copy-live-exec
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-21
 # dependencies: stdlib (collections, dataclasses, time)
 # ---
 """Live RPC/Sender boundary — Cutover-gated (AC-65.3).
@@ -536,8 +536,19 @@ class Sender:
         except Exception:
             return None
 
-    def _get_ata_balance(self, mint_address: str) -> int | None:
-        """Query ATA token balance for the trading wallet.  Returns None on error."""
+    def _get_ata_balance(self, mint_address: str, wallet_pubkey: str = "") -> int | None:
+        """Query ATA token balance for the trading wallet.  Returns None on error.
+
+        Args:
+            mint_address:   Token mint to query.
+            wallet_pubkey:  Base58 pubkey of the wallet owner.  Injected on the
+                            live path via trading.tx_signer.wallet_pubkey_str(keypair)
+                            so ghost-buy verification queries the real owner's ATA
+                            (not the placeholder empty string that was here before).
+                            Empty string is still accepted for backwards compatibility
+                            with existing test mocks — but the live Sender call site
+                            MUST supply the real pubkey.
+        """
         import requests  # deferred import — live path only
 
         url = self._cfg.rpc_url
@@ -546,7 +557,7 @@ class Sender:
             "id": 1,
             "method": "getTokenAccountsByOwner",
             "params": [
-                "",  # wallet pubkey — injected at Cutover from env
+                wallet_pubkey,  # real wallet pubkey (injected from tx_signer at Cutover)
                 {"mint": mint_address},
                 {"encoding": "jsonParsed"},
             ],
