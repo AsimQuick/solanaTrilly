@@ -140,6 +140,27 @@ class Command(BaseCommand):
 
         cohort_id: str = settings_row.active_cohort_id
 
+        # --- Reconcile: void orphaned OPEN positions from non-active cohorts ---
+        # The seed query below only loads OPEN rows for THIS cohort, so any rows
+        # left OPEN under a previous cohort would linger forever as deceiving
+        # 'open' rows (the "30 copies sat open" the lab flagged).  Void them now
+        # (NULL PnL, exit_reason=VOID) so the canonical table reflects reality.
+        # Idempotent + guarded on a non-empty cohort_id (see copytrade.reconcile).
+        from datetime import datetime, timezone
+
+        from copytrade.reconcile import void_orphan_positions
+
+        voided = await sync_to_async(void_orphan_positions)(
+            cohort_id, datetime.now(timezone.utc)
+        )
+        if voided:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Reconcile: voided {len(voided)} orphaned open position(s) from "
+                    f"non-active cohorts on startup."
+                )
+            )
+
         # --- Load cohort trade_config and validate ---
         cohort_row: CopytradeCohort = await sync_to_async(
             lambda: CopytradeCohort.objects.get(cohort_id=cohort_id)
