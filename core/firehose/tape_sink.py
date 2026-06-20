@@ -47,11 +47,15 @@ class LakeTapeSink:
     """Append-only durable sink for live firehose swaps (AC-3).
 
     Args:
-        base_dir:    Lake root (default ``lake/tapes`` — the shared volume on the VPS).
+        base_dir:    Lake root.  Defaults to ``lake/firehose`` — a DEDICATED firehose
+                     tape lake, SEPARATE from the dashboard's ``lake/tapes`` (which the
+                     candle/cohort/token-detail APIs scan in full on every request).
+                     Keeping the high-volume live torrent out of ``lake/tapes`` keeps
+                     those dashboard APIs fast; the US-78 swaps export reads here.
         flush_every: Flush to disk once this many rows are buffered (default 250).
     """
 
-    def __init__(self, base_dir: str | Path = "lake/tapes", *, flush_every: int = 250) -> None:
+    def __init__(self, base_dir: str | Path = "lake/firehose", *, flush_every: int = 250) -> None:
         self._base_dir = Path(base_dir)
         self._flush_every = max(1, int(flush_every))
         self._buf: list[dict] = []

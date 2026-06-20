@@ -33,10 +33,11 @@ networks:
 
 volumes:
   solanatrilly_pgdata:
-  # Shared durable swap-tape lake (AC-3): the inference_engine WRITES the live
-  # firehose tape here and the celery-worker (data-contract export) + web
-  # (dashboard candle/cohort APIs) READ it. Mounted at /app/lake/tapes only, so
-  # the image-baked lake/golden fixtures are untouched.
+  # Dedicated durable firehose-tape lake (AC-3): inference_engine WRITES the live
+  # tape here and celery-worker (US-78 swaps export) READS it. Mounted at
+  # /app/lake/firehose — SEPARATE from the dashboard's /app/lake/tapes so the
+  # candle/cohort/token-detail APIs (which scan their whole lake per request) are
+  # NOT slowed by the high-volume live torrent. web does NOT mount this.
   solanatrilly_lake:
 
 services:
@@ -49,7 +50,6 @@ services:
     # by the operator cutover (scp). solanaBilly untouched (scoped path).
     volumes:
       - /root/solanatrilly/models:/app/models:ro
-      - solanatrilly_lake:/app/lake/tapes
     ports:
       - "8002:8000"
     environment:
@@ -165,7 +165,7 @@ services:
     command: python manage.py run_firehose -v 2
     volumes:
       - /root/solanatrilly/models:/app/models:ro
-      - solanatrilly_lake:/app/lake/tapes
+      - solanatrilly_lake:/app/lake/firehose
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
@@ -193,7 +193,7 @@ services:
     command: celery -A config worker -l info
     volumes:
       - /root/solanatrilly/models:/app/models:ro
-      - solanatrilly_lake:/app/lake/tapes
+      - solanatrilly_lake:/app/lake/firehose
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly

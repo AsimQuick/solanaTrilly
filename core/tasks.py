@@ -367,7 +367,10 @@ def export_data_contract(
     if out_dir is None:
         out_dir = "/tmp/data_contract"
     if lake_base_dir is None:
-        lake_base_dir = "lake/tapes"
+        # The firehose tape sink (AC-3) writes the live tape to lake/firehose — a
+        # DEDICATED lake kept out of the dashboard's lake/tapes (which is scanned in
+        # full by the candle/cohort APIs). The swaps surface reads the firehose lake.
+        lake_base_dir = "lake/firehose"
     if surfaces is None:
         surfaces = ("swaps", "tokens", "predictions_positions")
     surfaces = tuple(surfaces)
