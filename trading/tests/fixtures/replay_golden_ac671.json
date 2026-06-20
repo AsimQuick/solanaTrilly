@@ -5,65 +5,67 @@
     "size_sol": 0.1,
     "sol_usd": 140.0,
     "score_threshold": 0.5,
-    "predictor": "constant_one"
+    "predictor": "constant_one",
+    "policy": "tp12tr15_t1200",
+    "note": "Golden regenerated 2026-06-21 after applying tp12tr15_t1200 policy (migration 0006). Old policy was tp100sl20dc40rp50_t300. New policy: take_profit_pct=12, rug_pull_drop_pct=15 (tr15 trailing), auto_sell_timer_s=1200, stop_loss_pct=8, disaster_cap_pct=12."
   },
   "config": {
-    "take_profit_pct": 100.0,
-    "stop_loss_pct": 20.0,
-    "disaster_cap_pct": 40.0,
-    "rug_pull_drop_pct": 50.0,
-    "auto_sell_timer_s": 300
+    "take_profit_pct": 12.0,
+    "stop_loss_pct": 8.0,
+    "disaster_cap_pct": 12.0,
+    "rug_pull_drop_pct": 15.0,
+    "auto_sell_timer_s": 1200
   },
   "results": [
     {
+      "enterable": true,
+      "flow": 32987.551549,
+      "held": 10.0,
       "mint": "9xskoaY5Mcnv1bZYTULENseEnFdDKdfxT2EfUJX3pump",
+      "peak": 18.868778280543008,
+      "pnl": 30.306271496171423,
       "score": 1.0,
-      "enterable": true,
-      "pnl": -17.0798247108105,
-      "trigger": "RUG_PULL",
-      "held": 131.0,
-      "peak": 86.39407651172355,
-      "flow": 32987.551549
+      "trigger": "TAKE_PROFIT_PCT"
     },
     {
+      "enterable": true,
+      "flow": 48588.289992,
+      "held": 3.0,
       "mint": "A9wttooU42wTiEtChjcrpKW7RGZwu44B3Dfh53UTpump",
+      "peak": 0.616057785803581,
+      "pnl": 16.500909617363526,
       "score": 1.0,
-      "enterable": true,
-      "pnl": -17.683135967524866,
-      "trigger": "STOP_LOSS",
-      "held": 12.0,
-      "peak": 19.42908737324629,
-      "flow": 48588.289992
+      "trigger": "STOP_LOSS"
     },
     {
+      "enterable": true,
+      "flow": 45666.198832,
+      "held": 4.0,
       "mint": "APErok2eCRnSa9iSx8oW5ybjCASsTczVxm4fTX42pump",
+      "peak": 1.203906316448733,
+      "pnl": -4.897259819146127,
       "score": 1.0,
-      "enterable": true,
-      "pnl": -34.46300140713671,
-      "trigger": "STOP_LOSS",
-      "held": 38.0,
-      "peak": 24.5621631652607,
-      "flow": 45666.198832
+      "trigger": "STOP_LOSS"
     },
     {
+      "enterable": true,
+      "flow": 54330.108179,
+      "held": 9.0,
       "mint": "FqD1CYzTjZeeBfpsXANUuoWqNBjujGVm1PtuGXm5pump",
+      "peak": 22.054447627544093,
+      "pnl": 21.25304748691377,
       "score": 1.0,
-      "enterable": true,
-      "pnl": -27.73374076460704,
-      "trigger": "RUG_PULL",
-      "held": 124.0,
-      "peak": 67.1324951376152,
-      "flow": 54330.108179
+      "trigger": "TAKE_PROFIT_PCT"
     },
     {
-      "mint": "svMU7z5uvq5QZJpgNoVFjCJdGJwykP3DWjsmvaRpump",
-      "score": 1.0,
       "enterable": true,
-      "pnl": -17.401720576708936,
-      "trigger": "STOP_LOSS",
-      "held": 23.0,
-      "peak": 12.562406566440076,
-      "flow": 42187.6483
+      "flow": 42187.6483,
+      "held": 16.0,
+      "mint": "svMU7z5uvq5QZJpgNoVFjCJdGJwykP3DWjsmvaRpump",
+      "peak": 12.386821989676488,
+      "pnl": 9.708731958757566,
+      "score": 1.0,
+      "trigger": "TAKE_PROFIT_PCT"
     }
   ]
 }
