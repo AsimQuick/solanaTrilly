@@ -295,7 +295,12 @@ def open_live_position(
         )
 
     # --- Gated boundary: trading_enabled=False → sent=False, no real order ---
-    exec_result = execution_core.execute_buy(serialized_tx_b64)
+    # Pass sol_amount so ExecutionCore's daily-spend cap (0.04 SOL) actually fires
+    # on this live path — without it the cap check (guarded by sol_amount>0) is
+    # silently bypassed.
+    exec_result = execution_core.execute_buy(
+        serialized_tx_b64, sol_amount=float(config.sol_size_per_trade)
+    )
 
     # --- Write shared trading.Position row (capital-OFF: STATUS_PAPER until Cutover) ---
     shared_pos = SharedPosition(

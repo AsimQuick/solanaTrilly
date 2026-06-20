@@ -43,14 +43,33 @@ import pytest
 from copytrade.blockhash_fetcher import get_latest_blockhash
 from copytrade.curve_ix import (
     BUY_DISCRIMINATOR,
+    PUMP_FUN_EVENT_AUTHORITY,
+    PUMP_FUN_FEE_PROGRAM,
     PUMP_FUN_FEE_RECIPIENT_LEGACY,
     PUMP_FUN_FEE_RECIPIENT_MAYHEM,
+    PUMP_FUN_GLOBAL,
     PUMP_FUN_PROGRAM_ID,
     SELL_DISCRIMINATOR,
     build_curve_buy_instructions,
     build_curve_sell_instructions,
 )
 from trading.pumpswap_ix import b58encode
+
+
+# ---------------------------------------------------------------------------
+# [curve_ix] Pinned program constants — verified vs solanaBilly trading_tasks.py
+# (117/128/129). Wrong values => every on-chain tx fails + burns fees. This test
+# is the regression guard for the 2026-06-21 capital-review NO-GO findings.
+# ---------------------------------------------------------------------------
+def test_pump_fun_constants_match_billy_ground_truth():
+    assert PUMP_FUN_PROGRAM_ID == "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+    assert PUMP_FUN_GLOBAL == "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf"
+    assert PUMP_FUN_EVENT_AUTHORITY == "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1"
+    assert PUMP_FUN_FEE_PROGRAM == "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"
+    # The fee program must be DISTINCT from the bonding-curve program.
+    assert PUMP_FUN_FEE_PROGRAM != PUMP_FUN_PROGRAM_ID
+    assert PUMP_FUN_FEE_RECIPIENT_LEGACY == "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM"
+    assert PUMP_FUN_FEE_RECIPIENT_MAYHEM == "GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS"
 
 # ---------------------------------------------------------------------------
 # Test fixtures

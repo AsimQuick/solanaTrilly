@@ -63,12 +63,16 @@ SPL_TOKEN_PROGRAM: str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 SPL_TOKEN_2022_PROGRAM: str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 SPL_ATA_PROGRAM: str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 SYSTEM_PROGRAM_ID: str = "11111111111111111111111111111111"
-PUMP_FUN_GLOBAL: str = "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5zP9QkA8MjAYg1J"
-PUMP_FUN_EVENT_AUTHORITY: str = "Ce6tjXq4Q2zQoXynREGd96VLCGaFTqhLHYhBVX9Cfgmv"
-PUMP_FUN_FEE_PROGRAM: str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
-
-# After-upgrade fee_program is the same as the bonding-curve program
-# (re-entrant on-chain; the fee_config PDA lives under the same program).
+# Ground-truth pump.fun bonding-curve constants — verified against solanaBilly
+# app/tasks/trading_tasks.py:117/128/129 (the proven live reference). Getting any
+# of these wrong makes EVERY buy/sell tx fail on-chain (Anchor constraint) and
+# burns fees. Pinned + asserted in test_curve_ix.py so they cannot regress.
+PUMP_FUN_GLOBAL: str = "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf"
+PUMP_FUN_EVENT_AUTHORITY: str = "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1"
+#: The fee program is a DISTINCT program (pfee...), NOT the bonding-curve program.
+#: The fee_config PDA is derived UNDER this program (see _derive_fee_config).
+PUMP_FUN_FEE_PROGRAM: str = "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"
+PUMP_FUN_FEE_PROGRAM_BYTES: bytes = b58decode(PUMP_FUN_FEE_PROGRAM)
 
 #: Anchor discriminators (sha256("global:<fn>")[:8]) — pinned ground truth.
 BUY_DISCRIMINATOR: bytes = bytes([102, 6, 61, 18, 1, 218, 235, 234])
@@ -164,12 +168,16 @@ def _derive_user_volume_accumulator(user_bytes: bytes) -> bytes:
 
 
 def _derive_fee_config() -> bytes:
-    """Derive [b'fee_config', program_id] PDA under the fee program.
+    """Derive the fee_config PDA: seeds [b'fee_config', bonding-curve-program],
+    AUTHORITY = the DISTINCT fee program (pfee...).
 
-    The fee program IS the bonding-curve program (same as PUMP_FUN_PROGRAM_BYTES).
+    Matches solanaBilly _derive_fee_config (trading_tasks.py:1502-1507):
+    find_program_address([b"fee_config", bytes(PUMP_FUN_PROGRAM_ID)], PUMP_FUN_FEE_PROGRAM).
+    The seed is the bonding-curve program id; the derivation authority is the fee
+    program. Using the bonding-curve program as the authority yields a wrong,
+    nonexistent PDA -> account-not-found on every tx.
     """
-    fee_program_bytes = PUMP_FUN_PROGRAM_BYTES
-    pda, _ = find_program_address([b"fee_config", PUMP_FUN_PROGRAM_BYTES], fee_program_bytes)
+    pda, _ = find_program_address([b"fee_config", PUMP_FUN_PROGRAM_BYTES], PUMP_FUN_FEE_PROGRAM_BYTES)
     return pda
 
 
@@ -238,7 +246,7 @@ def build_curve_buy_instructions(
     # Static pubkeys
     global_bytes = b58decode(PUMP_FUN_GLOBAL)
     event_auth_bytes = b58decode(PUMP_FUN_EVENT_AUTHORITY)
-    fee_program_bytes = PUMP_FUN_PROGRAM_BYTES  # bonding-curve program IS the fee program
+    fee_program_bytes = PUMP_FUN_FEE_PROGRAM_BYTES  # account #16 = the DISTINCT pfee program
 
     # Fee recipient: is_mayhem_mode selects MAYHEM; None/False -> LEGACY.
     if is_mayhem_mode:
@@ -396,7 +404,7 @@ def build_curve_sell_instructions(
     # Static pubkeys
     global_bytes = b58decode(PUMP_FUN_GLOBAL)
     event_auth_bytes = b58decode(PUMP_FUN_EVENT_AUTHORITY)
-    fee_program_bytes = PUMP_FUN_PROGRAM_BYTES
+    fee_program_bytes = PUMP_FUN_FEE_PROGRAM_BYTES  # the DISTINCT pfee program (sell account)
 
     # Fee recipient
     if is_mayhem_mode:
