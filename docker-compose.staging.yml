@@ -193,11 +193,20 @@ services:
 
   frontend:
     image: ghcr.io/asimquick/solanatrilly-frontend:latest
+    # Operator-facing dashboard origin. nginx serves the built SPA and reverse-
+    # proxies /api + /ws to the web container, so the operator only needs 8003.
+    # (8001 = solanaBilly, 8002 = this stack's web/API — both stay untouched.)
+    ports:
+      - "8003:80"
+    depends_on:
+      - web
     networks:
       - solanatrilly_net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:80/ > /dev/null 2>&1 || exit 1"]
+      # 127.0.0.1 (not localhost): nginx listens IPv4+IPv6, but pinning to IPv4
+      # avoids a ::1-resolution false-negative on hosts where localhost->::1.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ > /dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
