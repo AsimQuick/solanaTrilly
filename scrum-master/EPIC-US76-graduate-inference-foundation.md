@@ -3,7 +3,7 @@
 <!--
 module: scrum-master/EPIC-US76-graduate-inference-foundation.md
 type: epic (engineering design + backlog)
-status: AC-1 implemented — detection fix shipped on feature/US-76-AC-1.
+status: AC-5 in-progress — golden-parity harness + Tier-1 replay on feature/US-76-AC-5.
 created: 2026-06-20
 last-updated: 2026-06-20
 last-updated-by: dev-team
@@ -198,7 +198,7 @@ artifact; AC-1 fixtures committed; gap-heal source named + normalized.
 
 ## Dev Team Status
 
-**Dev Team Status:** in-progress (AC-2 single-normalisation-layer complete on feature/US-76-AC-2; earlier slices: P1.1/P1.2/P2.4/P2.5 on PR #329, AC-1 on #331)
+**Dev Team Status:** in-progress (AC-5 golden-parity harness on feature/US-76-AC-5; AC-2 on PR #332; earlier slices: P1.1/P1.2/P2.4/P2.5 on PR #329, AC-1 on PR #331)
 
 **Dev Team Notes:**
 - PR #329: `feature/US-76-scoring-correctness` — all four binding Tester revisions implemented
@@ -226,8 +226,33 @@ artifact; AC-1 fixtures committed; gap-heal source named + normalized.
     (#287) with known-good sol_amount/token_amount/side/owner values; decoded deterministically
     by `test_borsh_offset_fixture_decode` (no network)
   - SOL-space confirmed: vol = vol_sol (Helius SOL leg), no USD introduced for v3.2
-- Test count: 48 new (AC-2) + 2939 full suite pass; 4 skip (local solanatrills path); 1 pre-existing
-  failure (`test_sprint14_guard_passes` sprint14.json phase stale, pre-exists on main)
-- Remaining work (separate slices): P3 gap-heal source naming (AC-3), AC-4 cross-sectional
-  scoring, AC-5 golden-parity Tier-1 replay corpus
+- AC-5 (golden-parity harness + Tier-1 replay): `feature/US-76-AC-5` — implemented with FINDINGS
+  - Fixture: `core/tests/fixtures/trilly_pregrad_v3_2/parity_corpus_v76ac5.json.gz` — 20 mints
+    (2 with curve_life > 3600s incl. one at 67125s), all >=20 pre-grad trades; 1.2MB gzipped
+  - Score oracle: `models/trilly_pregrad_v3_2/golden_scores.parquet` — 20 rows, live-path
+    blend/label scores generated from assemble_pregrad_features + BlendScorer + reference_dist
+  - Test file: `core/tests/test_golden_parity_us76_ac5.py` (16 tests)
+  - Tier-1 replay: crashed=0 over all 20 fixture mints (gate passes)
+  - Harness self-validation: first mint validates determinism + no-inf before full run
+  - 3600s cap exercised: real >60min token (67125s curve life) in fixture, cap confirmed
+  - Score oracle: run-twice-identical confirmed locally with boosters (PASS); in CI (no boosters)
+    this test skips with explicit message rather than silently passing
+  - **PARITY FINDINGS** (2 documented breaks, not fixes for this PR):
+    - BREAK-1 pre_insider_sell_ratio: offline uses USD vol (uiAmount_SOL * quotePrice + 1.0),
+      live uses SOL vol (uiAmount_SOL + 1.0). The +1 Laplace smoother is NOT scale-invariant —
+      differs by ~87x (SOL/USD). For thin-SOL-volume tokens: delta up to 100x. Documented as
+      xfail; 18/20 mints break tolerance. Root fix: retrain with SOL-space volumes in offline lab.
+    - BREAK-2 same-block tie-breaking: offline sorts by blockUnixTime only (Python stable sort,
+      preserves Birdeye page insertion order). Live sorts by (block_time, slot=0, signature)
+      alphabetically on txHash. When multiple swaps land in same block: (a) cohort membership
+      changes affecting all EB10/EB20 features; (b) sell-before-buy reorder flips "sold" flag,
+      affecting pre_diamond_frac and pre_seller_of_buyers_frac. Max delta: 0.1 (EB features),
+      2.54e-3 (diamond/seller). Documented as xfail. Root fix: unify sort keys in both paths.
+    - Deployer features (pre_deployer_*): offline has deployer data; live passes deployer=None
+      (deployer lookup not yet wired). Expected behaviour, not a parity bug.
+  - 10 scale-invariant features (counts, HHI, breadth, top5_share, repeat_buyer) pass 1e-3 tol
+  - Max delta on scale-invariant features: 8.34e-5 (pre_buy_hhi) — comfortably within tolerance
+  - Test counts: 16 new (AC-5): 13 pass, 1 skip (score oracle in CI), 2 xfail (documented breaks)
+  - Full suite: 2952 pass, 1 fail (pre-existing sprint14 stale phase), 5 skip, 2 xfail — clean
+- Remaining work: P3 gap-heal source naming (AC-3), AC-4 cross-sectional scoring wire-up
 - blocker-type: none
