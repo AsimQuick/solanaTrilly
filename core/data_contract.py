@@ -460,6 +460,268 @@ def build_tokens_dataset(
 
 
 # ---------------------------------------------------------------------------
+# Surface (3) — predictions_positions
+# ---------------------------------------------------------------------------
+
+#: Per-label projection order.  The scorer's labels are carried in the Prediction
+#: JSON; the contract names the three v3.2 labels explicitly.
+PRED_LABELS: tuple[str, str, str] = ("ctrl", "oracle", "liq")
+
+PREDICTIONS_POSITIONS_COLUMNS: list[str] = [
+    "mint",
+    "score_time_s",
+    "ctrl_pred",
+    "oracle_pred",
+    "liq_pred",
+    "blend",
+    "percentile",
+    "picked",
+    "per_day_target",
+    "entry_time_s",
+    "entry_price",
+    "entry_sol_usd",
+    "size_usd",
+    "fill_status",
+    "slippage_bps",
+    "exit_time_s",
+    "exit_price",
+    "exit_reason",
+    "realized_pnl_usd",
+    "watched_wallet",
+    "trigger_buy_usd",
+    "copy_latency_s",
+]
+
+PREDICTIONS_POSITIONS_SCHEMA = pa.schema(
+    [
+        ("mint", pa.string()),
+        ("score_time_s", pa.int64()),
+        ("ctrl_pred", pa.float64()),
+        ("oracle_pred", pa.float64()),
+        ("liq_pred", pa.float64()),
+        ("blend", pa.float64()),
+        ("percentile", pa.float64()),
+        ("picked", pa.bool_()),
+        ("per_day_target", pa.int32()),
+        ("entry_time_s", pa.int64()),
+        ("entry_price", pa.float64()),
+        ("entry_sol_usd", pa.float64()),
+        ("size_usd", pa.float64()),
+        ("fill_status", pa.string()),
+        ("slippage_bps", pa.float64()),
+        ("exit_time_s", pa.int64()),
+        ("exit_price", pa.float64()),
+        ("exit_reason", pa.string()),
+        ("realized_pnl_usd", pa.float64()),
+        ("watched_wallet", pa.string()),
+        ("trigger_buy_usd", pa.float64()),
+        ("copy_latency_s", pa.float64()),
+    ]
+)
+
+
+def _to_epoch_s(v: Any) -> int | None:
+    """Convert a datetime (or already-int unix seconds) to int unix seconds."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    try:
+        return int(v.timestamp())  # datetime
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _f_or_none(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _project_model_prediction_row(pred: dict, position: dict | None) -> dict:
+    """One predictions_positions row from a Prediction left-joined to its Position."""
+    label_scores = pred.get("label_scores") or {}
+    sol_usd = _f_or_none(pred.get("sol_usd_spot"))
+    score_time = int(pred["score_time"])
+
+    entry_time = entry_price = size_usd = None
+    exit_time = exit_price = exit_reason = realized_pnl_usd = None
+    fill_status = "PICKED_NO_POSITION" if pred.get("picked") else "NOT_PICKED"
+    if position is not None:
+        entry_time = _to_epoch_s(position.get("entry_ts"))
+        entry_price = _f_or_none(position.get("entry_price"))
+        size_sol = _f_or_none(position.get("size_sol"))
+        if size_sol is not None and sol_usd is not None:
+            size_usd = size_sol * sol_usd
+        exit_time = _to_epoch_s(position.get("exit_ts"))
+        exit_price = _f_or_none(position.get("exit_price"))
+        exit_reason = position.get("exit_trigger")
+        pnl_sol = _f_or_none(position.get("realized_pnl_sol"))
+        if pnl_sol is not None and sol_usd is not None:
+            realized_pnl_usd = pnl_sol * sol_usd
+        fill_status = position.get("status") or "FILLED"
+
+    return {
+        "mint": str(pred["mint"]),
+        "score_time_s": score_time,
+        "ctrl_pred": _f_or_none(label_scores.get("ctrl")),
+        "oracle_pred": _f_or_none(label_scores.get("oracle")),
+        "liq_pred": _f_or_none(label_scores.get("liq")),
+        "blend": _f_or_none(pred.get("blend")),
+        "percentile": _f_or_none(pred.get("blend")),  # blend IS the percentile-space score
+        "picked": bool(pred.get("picked")),
+        "per_day_target": (
+            int(pred["per_day_target"]) if pred.get("per_day_target") is not None else None
+        ),
+        "entry_time_s": entry_time,
+        "entry_price": entry_price,
+        "entry_sol_usd": sol_usd,
+        "size_usd": size_usd,
+        "fill_status": fill_status,
+        "slippage_bps": None,  # not modelled on the paper leg
+        "exit_time_s": exit_time,
+        "exit_price": exit_price,
+        "exit_reason": exit_reason,
+        "realized_pnl_usd": realized_pnl_usd,
+        "watched_wallet": None,
+        "trigger_buy_usd": None,
+        "copy_latency_s": None,
+        "_dt": utc_date_str(score_time),
+    }
+
+
+def _project_copy_position_row(cp: dict) -> dict | None:
+    """One predictions_positions row for a copy-trade position (no model score)."""
+    entry_time = _to_epoch_s(cp.get("entry_ts"))
+    # Copy positions have no model score_time; anchor the row at entry (or exit).
+    anchor = entry_time or _to_epoch_s(cp.get("exit_ts"))
+    if anchor is None:
+        return None
+    pnl_sol = _f_or_none(cp.get("realized_pnl_sol"))
+    cap_pct = _f_or_none(cp.get("cap_pct"))
+
+    return {
+        "mint": str(cp.get("mint")),
+        "score_time_s": int(anchor),
+        "ctrl_pred": None,
+        "oracle_pred": None,
+        "liq_pred": None,
+        "blend": None,
+        "percentile": None,
+        "picked": True,  # a copy position exists => the wallet trade was mirrored
+        "per_day_target": None,
+        "entry_time_s": entry_time,
+        "entry_price": _f_or_none(cp.get("entry_price")),
+        "entry_sol_usd": None,  # copy positions do not carry the serving spot
+        "size_usd": _f_or_none(cp.get("size_usd")),
+        "fill_status": (cp.get("status") or "").upper() or None,
+        "slippage_bps": (cap_pct * 10000.0 if cap_pct is not None else None),
+        "exit_time_s": _to_epoch_s(cp.get("exit_ts")),
+        "exit_price": _f_or_none(cp.get("exit_price")),
+        "exit_reason": cp.get("exit_reason"),
+        "realized_pnl_usd": pnl_sol,  # SOL-space; USD basis not carried on copy rows
+        "watched_wallet": cp.get("trigger_wallet"),
+        "trigger_buy_usd": None,  # the watched wallet's buy size is not persisted
+        "copy_latency_s": _f_or_none(cp.get("copy_latency_s")),
+        "_dt": utc_date_str(int(anchor)),
+    }
+
+
+def build_predictions_positions_dataset(
+    predictions: Iterable[dict],
+    model_positions: Iterable[dict],
+    copy_positions: Iterable[dict] | None = None,
+    *,
+    out_dir: str | Path,
+    dataset_id: str = "data_contract_predictions_positions",
+) -> dict[str, Any]:
+    """Build the ``predictions_positions`` surface (US-78, §10).
+
+    Joins each model ``Prediction`` (score breakdown) to its model ``Position``
+    (entry/exit) by mint — the nearest position whose entry is at/after the
+    score_time — and appends copy-trade positions (score columns null, copy-variant
+    columns populated).
+
+    Args:
+        predictions: Prediction rows (model-scored tokens).
+        model_positions: trading.Position rows with source='model'.
+        copy_positions: copytrade.CopytradePosition rows (optional).
+        out_dir / dataset_id: as for the other surfaces.
+    """
+    surface_dir = Path(out_dir) / "predictions_positions"
+
+    # Index model positions by mint (sorted by entry) for the nearest-after join.
+    pos_by_mint: dict[str, list[dict]] = {}
+    for p in model_positions:
+        pos_by_mint.setdefault(p.get("mint"), []).append(p)
+    for plist in pos_by_mint.values():
+        plist.sort(key=lambda p: _to_epoch_s(p.get("entry_ts")) or 0)
+
+    records: list[dict] = []
+    skipped = 0
+    for pred in predictions:
+        if pred.get("mint") is None or pred.get("score_time") is None:
+            skipped += 1
+            continue
+        score_time = int(pred["score_time"])
+        # Nearest position entered at/after score_time; else the latest before it.
+        candidates = pos_by_mint.get(pred.get("mint"), [])
+        chosen = None
+        for p in candidates:
+            et = _to_epoch_s(p.get("entry_ts"))
+            if et is not None and et >= score_time:
+                chosen = p
+                break
+        if chosen is None and candidates:
+            chosen = candidates[-1]
+        records.append(_project_model_prediction_row(pred, chosen))
+
+    for cp in copy_positions or []:
+        row = _project_copy_position_row(cp)
+        if row is None:
+            skipped += 1
+            continue
+        records.append(row)
+
+    records.sort(key=lambda r: (r["score_time_s"], r["mint"] or ""))
+
+    row_count, per_partition = _write_partitioned(
+        records=records,
+        schema=PREDICTIONS_POSITIONS_SCHEMA,
+        partition_key="_dt",
+        surface_dir=surface_dir,
+    )
+
+    return _finalise_surface(
+        surface="predictions_positions",
+        surface_dir=surface_dir,
+        records=records,
+        columns=PREDICTIONS_POSITIONS_COLUMNS,
+        mint_field="mint",
+        dataset_id=dataset_id,
+        source="db://core.Prediction+trading.Position+copytrade.CopytradePosition",
+        row_count=row_count,
+        per_partition=per_partition,
+        skipped=skipped,
+        notes=[
+            "Model rows: Prediction (score breakdown) left-joined to its model "
+            "Position by mint (nearest entry at/after score_time).",
+            "percentile = blend (the blend IS the cross-sectional percentile-space score).",
+            "ctrl/oracle/liq_pred are the raw per-label seed-averaged booster preds "
+            "(Prediction.label_scores); null if the model used different label keys.",
+            "size_usd = position.size_sol * entry_sol_usd; realized_pnl_usd = "
+            "realized_pnl_sol * entry_sol_usd (entry_sol_usd = the serving SOL/USD spot).",
+            "slippage_bps null on the model paper leg (not modelled).",
+            "Copy rows: score columns null; realized_pnl_usd carries SOL-space pnl "
+            "(no USD basis on copy rows); trigger_buy_usd not persisted.",
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Manifest finalisation (shared)
 # ---------------------------------------------------------------------------
 

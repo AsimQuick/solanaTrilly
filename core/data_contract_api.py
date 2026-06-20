@@ -20,9 +20,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-#: Surfaces this endpoint can build today.  predictions_positions is delivered in a
-#: follow-up increment (it requires score-breakdown persistence at score-time).
-_AVAILABLE_SURFACES = ("swaps", "tokens")
+#: Surfaces this endpoint can build (all three §10 surfaces).
+_AVAILABLE_SURFACES = ("swaps", "tokens", "predictions_positions")
 
 
 @api_view(["POST"])
@@ -31,8 +30,8 @@ def data_contract_export_trigger_view(request):
     """Dispatch the US-78 data-contract Parquet export to the Celery worker.
 
     Request body (JSON, optional):
-        surfaces: list[str]  subset of {"swaps", "tokens"} to build.  Defaults to
-                  both.  Unknown surface names are rejected (HTTP 400).
+        surfaces: list[str]  subset of {"swaps", "tokens", "predictions_positions"}
+                  to build.  Defaults to all.  Unknown names are rejected (HTTP 400).
         out_dir:  export root override (defaults to the task's /tmp/data_contract).
 
     Returns (JSON):

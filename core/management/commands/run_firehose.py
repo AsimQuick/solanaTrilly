@@ -822,6 +822,20 @@ class FirehoseDaemon:
                 LOG_PREFIX, mint, blend, "pass" if passed else "fail",
             )
 
+            # US-78: persist the durable score-time breakdown (predictions_positions
+            # surface source).  Recorded for EVERY scored token regardless of gate.
+            # Failure-isolated: a persistence error must NEVER block scoring/trading.
+            score_time = int(graduated_block_time + scoring["score_at_elapsed_s"])
+            try:
+                await sync_to_async(self._persist_prediction_sync, thread_sensitive=True)(
+                    mint, score_time, result, blend, passed, scoring, sol_usd,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s prediction-persist failed for mint=%s (%s) — continuing.",
+                    LOG_PREFIX, mint, exc,
+                )
+
             if not passed:
                 self._scored_mints.add(mint)
                 continue
@@ -966,7 +980,40 @@ class FirehoseDaemon:
         # (the lab's rank_cut is offline-population-derived — calibrate it live).
         per_day = int(getattr(config.scoring, "per_day_target", _DEFAULT_PER_DAY)) if config else _DEFAULT_PER_DAY
         threshold = _threshold_from_model(model_entry, per_day=per_day)
+        # US-78: surface the calibration + model identity so _score_tick can persist
+        # a durable Prediction record (the predictions_positions surface source).
+        scoring["per_day_target"] = per_day
+        scoring["rank_cut"] = float(threshold)
+        scoring["model_id"] = str(getattr(model_entry, "model_version", "") or "")
         return scorer, ref_dist, scoring, trading_cfg, size_sol, sol_usd, threshold
+
+    def _persist_prediction_sync(
+        self, mint, score_time, result, blend, passed, scoring, sol_usd,
+    ) -> None:
+        """Upsert the durable score-time Prediction record (US-78).
+
+        Idempotent on (mint, score_time, model_id) so a re-score at the same anchor
+        updates rather than duplicates.  Pure persistence — never touches
+        scoring_enabled / trading_enabled.
+        """
+        from core.models import Prediction
+
+        Prediction.objects.update_or_create(
+            mint=mint,
+            score_time=int(score_time),
+            model_id=str(scoring.get("model_id", "")),
+            defaults={
+                "label_scores": result.get("label_scores", {}),
+                "label_ranks": result.get("label_ranks", {}),
+                "blend": float(blend),
+                "per_day_target": int(scoring.get("per_day_target", _DEFAULT_PER_DAY)),
+                "rank_cut": (
+                    float(scoring["rank_cut"]) if scoring.get("rank_cut") is not None else None
+                ),
+                "picked": bool(passed),
+                "sol_usd_spot": (float(sol_usd) if sol_usd is not None else None),
+            },
+        )
 
     def _paper_trade_sync(
         self, mint, score, trades, entry_ts_epoch, trading_cfg, size_sol, sol_usd, trading_enabled,
