@@ -190,3 +190,29 @@ docker compose run --rm web python manage.py firehose_state off
   `graduation_subscribe_data` / `event_source`). Raw frames are debug-logged
   (`[FIREHOSE] graduation raw-frame: …`) so the live shape can be confirmed and the
   config adjusted **without a code change**.
+
+---
+
+## 2026-06-20 — US-79 paper soak (24h target, operator-directed)
+
+**Activation:** Birdeye `SUBSCRIBE_MEME` (graduation) + Helius birth-tape (collection),
+driven by the new persistent **`inference_engine`** service (gated on
+`PipelineState.firehose_active`). Started from the dashboard Inference Start button
+(`POST /api/control/inference/ {on:true}`) — no shell. Copy engine on (observe, cohort
+`copy_2026-06-20_jun_deploy`, 20 wallets) concurrently.
+
+**Purpose:** the operator-directed 24-hour PAPER soak of BOTH engines (pregrad inference
++ copy-trade), `trading_enabled=False` throughout. AC-3 durable tape banks the full
+collection tape to `lake/tapes` so the soak yields a replayable corpus + populates the
+US-78 swaps surface.
+
+**Pre-soak verification (this session):** flip-on → engine ACTIVE, Helius collection
+streaming (buffer 1→2,362 swaps in ~90s), graduation source subscribed, AC-3 banking
+(`dt=2026-06-20/part-0.jsonl.gz`). flip-off → idled cleanly, no spend. Swaps export over
+the banked tape: **5,185 rows** (was 0 — AC-3 → swaps surface proven live).
+
+**Teardown (per HARD RULE):** stop via dashboard Inference Stop (or
+`POST /api/control/inference/ {on:false}`) + copy engine off after ~24h. The persistent
+service then idles (no spend) — no container to `docker rm`. **Do NOT deploy during the
+soak unless necessary** (a deploy recreates `inference_engine`; it self-resumes since
+`firehose_active` persists, but causes a ~30s gap).
