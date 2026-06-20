@@ -40,7 +40,7 @@ score against the frozen reference grid → gate. All 5 scored **below** the off
 30/day rank_cut, so **no token passed → the paper-buy→paper-sell leg did not fire**.
 Per runbook §8/§11 this is a **FINDING (no live edge this window), not a failure**.
 
-## Follow-ups identified (fixed in `feature/US-76-paper-leg-fixes`)
+## Follow-ups identified (fixed in PR #335 `feature/US-76-paper-leg-fixes`)
 1. **Post-grad subscription saturation** — `_postgrad_plan_sync` subscribed all graduated
    rows oldest-first (cap 5), so stale dead tokens held every slot and fresh graduations
    were starved of post-grad price data (a latent paper-leg blocker even for a gate-passer).
@@ -48,3 +48,34 @@ Per runbook §8/§11 this is a **FINDING (no live edge this window), not a failu
 2. **rank_cut needs live calibration** — `per_day_target` is now a config knob; the 5 live
    scores (mean ~0.40) sit below the 30/day cut. Re-run at a calibrated per_day to exercise
    the paper leg on a real gate-passer.
+
+---
+
+# Window-2 — PAPER LEG OBSERVED ✅ (the full DoD)
+
+**After PR #335** (post-grad newest-first/recency + `per_day_target`), re-run calibrated to
+**50/day** (rank_cut **0.6976** — a published depth_menu operating point, lab-sanctioned live
+calibration). `trading_enabled=False`, copy `mode=observe` throughout. First settled paper
+position arrived **~12 min in**; monitor auto-stopped on success.
+
+## The full chain, observed end-to-end on live data
+```
+score:     mint=5NgDxD1en3YXvS9amAtgb15nc4oRfuGxomcAfu4wpump score=0.7179 gate=pass
+paper-buy: mint=5NgDx… size=$25.00 entry_price=0.0000399664 score=0.7179
+paper-sell:mint=5NgDx… pnl=-2.25% trigger=AUTO_SELL_TIMER held=2s peak=0.00%
+```
+Settled `trading_positions` row: `source=model, mode=observe, status=CLOSED, score=0.7179,
+entry=0.0000399664, exit=0.0000390679, realized_pnl_pct=-2.25, exit_trigger=AUTO_SELL_TIMER`.
+
+**This satisfies the US-76 Definition of Done:** a real graduation scored live (N>0 swaps) →
+gate → paper-buy → paper-sell observed, curve-life instant-skip logged, single-spot-USD +
+unified-sort parity serving, observe/paper, `trading_enabled=False`, §5 isolation, solanaBilly
+untouched.
+
+## Quality note (not a blocker)
+`held=2s / peak=0.00%` ⇒ the post-grad subscription had only just opened when the token scored
+at grad+`score_at_elapsed_s` (120 s), so the post-grad tape was thin at entry and the settler
+hit the timer almost immediately. The settle is valid (enterable, booked, closed), but for a
+richer/representative paper trade the post-grad subscription wants more lead time before
+scoring — a tuning refinement (e.g. open the post-grad sub at graduation and/or delay entry a
+few more seconds), not a correctness bug.

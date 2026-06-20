@@ -294,4 +294,27 @@ unrelated red (`test_sprint14_guard_passes` — sprint14.json phase staleness, u
 (single-spot vol), `core/management/commands/run_firehose.py` (`sol_usd_spot=sol_usd`),
 `core/scorer.py` (`from_file` grid branch), `core/tests/test_golden_parity_us76_ac5.py` +
 `core/tests/test_scoring_correctness_us76.py` (lab-bundle schema), fixture + bundle artifacts.
-**DoD remaining:** the live firehose validation window (detect→score→gate→paper) on the granted activation.
+
+### ✅ DoD MET — live firehose validation (2026-06-20, observe/paper)
+
+Two firehose windows on the VPS staging stack (`-p solanatrilly`), observe/paper,
+`trading_enabled=False` throughout. Evidence: `ops/firehose_window_evidence_2026-06-20_us76_dod.md`,
+ledger: `ops/firehose_activation_log.md`.
+
+- **Window-1 (90 min, 30/day):** chain proven THROUGH THE GATE — collection healthy (~1.2k mints /
+  81k swaps, #323 absent), 5 real graduations scored with N>0 pre-grad tape (parity-correct
+  single-spot-USD serving + unified sort), curve-life instant-skip fired. All 5 gate-failed below
+  the 0.7916 cut → no paper trade (a no-edge FINDING, §8). Surfaced 2 paper-leg blockers → PR #335.
+- **PR #335 (paper-leg fixes):** post-grad subscription was oldest-first over ALL graduated rows →
+  fresh graduations starved of the bounded post-grad slots (latent paper-leg blocker); fixed to
+  recent-only/newest-first. `per_day_target` made a config knob (lab A2/A4 live calibration).
+- **Window-2 (50/day = rank_cut 0.6976, a published depth_menu operating point):** ✅ **FULL chain
+  observed** — mint `5NgDx…wpump` score=**0.7179 gate=PASS** → paper-buy ($25 observe) → paper-sell
+  (settled, pnl −2.25%, AUTO_SELL_TIMER) → `trading_positions` CLOSED/observe. First settle ~12 min in.
+
+**Status: the US-76 graduate-inference DoD is MET.** v3.2 serves live, parity-true, detect→score→
+gate→paper-buy→paper-sell observed. Safety floor held; solanaBilly untouched.
+
+**Refinement noted (not a blocker):** the proven paper trade had `held=2s/peak=0.00%` — the post-grad
+sub had just opened, so the tape was thin at entry. For representative paper trades, give the
+post-grad subscription more lead time before scoring (open at graduation / delay entry a few s).
