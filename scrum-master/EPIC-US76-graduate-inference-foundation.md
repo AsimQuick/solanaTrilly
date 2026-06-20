@@ -198,7 +198,7 @@ artifact; AC-1 fixtures committed; gap-heal source named + normalized.
 
 ## Dev Team Status
 
-**Dev Team Status:** in-progress (SCORING-CORRECTNESS slice P1.1/P1.2/P2.4/P2.5 complete; P3/P6 AC-1/AC-3 remaining)
+**Dev Team Status:** in-progress (AC-2 single-normalisation-layer complete on feature/US-76-AC-2; earlier slices: P1.1/P1.2/P2.4/P2.5 on PR #329, AC-1 on #331)
 
 **Dev Team Notes:**
 - PR #329: `feature/US-76-scoring-correctness` — all four binding Tester revisions implemented
@@ -211,8 +211,23 @@ artifact; AC-1 fixtures committed; gap-heal source named + normalized.
   6-swap test fixtures expanded to 20 swaps (4 test files updated)
 - P2.5 (threshold): `_threshold_from_model()` reads `rank_cut` from `meta.json` `depth_menu`
   (30/day -> 0.7916); fallback 0.7916 if meta absent
-- Test count: 42 pass, 3 skip (local solanatrills path needed), full suite 2819 pass
-- Pre-existing failure `test_sprint14_guard_passes` (sprint14.json phase stale) confirmed pre-exists on main
-- Remaining work (not in this slice): P3 gap-heal source naming (AC-3), P6 AC-1 fixture with decimals,
-  P3/P6 AC-5 golden-parity Tier-1 replay corpus
+- AC-2 (single normalisation layer): `feature/US-76-AC-2` — implemented and tested
+  - `core/normalized_swap.py`: added `coerce_jsonb_none()` (#358), `is_dust_price()` (#405),
+    `normalize_raw_for_features()` — the single layer every source passes through; produces the
+    exact §7.1 dict `compute_pregrad_features` consumes; SOL-space vol (no USD for v3.2)
+  - `core/tape/mint_decimals.py`: `MintDecimalsResolver` class — per-mint decimals cache (#288),
+    seeded from graduation-event `MEME_DATA.decimals`; `fetch_mint_decimals` async stub; fallback
+    documented (6) not hardcoded; singleton `get_default_resolver()` for daemon use
+  - `core/firehose/spine.py`: `to_pregrad_swaps()` now delegates to `normalize_raw_for_features()`;
+    `assemble_pregrad_features()` threads `base_decimals` parameter; old `or 0.0` None-to-zero
+    pattern replaced with proper None→nan coercion; zero-price swaps dropped, not passed through
+  - `core/tests/test_normalized_swap_us76_ac2.py`: 48 new tests — all pass
+  - `core/tests/fixtures/helius_borsh_offset_ac287.json`: committed Borsh offset regression fixture
+    (#287) with known-good sol_amount/token_amount/side/owner values; decoded deterministically
+    by `test_borsh_offset_fixture_decode` (no network)
+  - SOL-space confirmed: vol = vol_sol (Helius SOL leg), no USD introduced for v3.2
+- Test count: 48 new (AC-2) + 2939 full suite pass; 4 skip (local solanatrills path); 1 pre-existing
+  failure (`test_sprint14_guard_passes` sprint14.json phase stale, pre-exists on main)
+- Remaining work (separate slices): P3 gap-heal source naming (AC-3), AC-4 cross-sectional
+  scoring, AC-5 golden-parity Tier-1 replay corpus
 - blocker-type: none
