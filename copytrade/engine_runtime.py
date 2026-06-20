@@ -44,6 +44,12 @@ from datetime import datetime
 from typing import Any, Callable, Optional
 
 from copytrade.buy_trigger import should_copy_buy_v2
+from copytrade.curve_price import (
+    LAMPORTS_PER_SOL,
+    CurveState,
+    simulate_buy,
+    simulate_sell,
+)
 from copytrade.exits import (
     EXIT_TIMER,
     evaluate_mirror_exit,
@@ -175,7 +181,7 @@ def handle_event(
     state: EngineState,
     cohort: Any,  # CohortV2 instance
     sol_usd: float,
-    price_fn: Callable[[str], Optional[float]],
+    curve_state_fn: Callable[[str], Optional[CurveState]],
     clock: Clock,
     honest_fills_enabled: bool = False,
 ) -> Optional[CopytradePosition]:
@@ -194,7 +200,8 @@ def handle_event(
     2. Multiplicity controls: copy_first_buy_only / dedupe / max_concurrent cap.
     3. If action == "open":
        a. Resolve strategy_id from state.wallet_to_strategy.
-       b. Fetch current price via price_fn; fall back to event.raw["price"].
+       b. Read the bonding-curve reserves via curve_state_fn and simulate OUR
+          buy (curve fill); skip if the curve is unreadable/graduated.
        c. Open a paper position via open_observe_position_v2.
        d. Register in state.open_positions; update multiplicity open count.
     4. Return the opened CopytradePosition, or None for any skip/dedupe.
@@ -219,17 +226,18 @@ def handle_event(
         Validated CohortV2 instance for the active cohort.
     sol_usd:
         Current SOL/USD spot (injected — no internal fetch).
-    price_fn:
-        Callable ``(mint: str) -> float | None`` for the current token price.
-        Returns None when price is unavailable; fall back to raw event price.
+    curve_state_fn:
+        Callable ``(mint: str) -> CurveState | None`` reading the bonding-curve
+        reserves over RPC.  None on a read miss / graduated curve -> skip the open.
+        Our entry fill is simulated against these reserves (curve basis, one basis
+        end-to-end), NOT the wallet's quoted price.
     clock:
         Injected Clock — used to stamp entry_ts on the new position.
     honest_fills_enabled:
-        US-75 AC-1 feature flag.  When True, apply the honest copy-fill slippage
-        cap (check_copy_entry): quote = event.raw["price"] (the wallet's fill
-        price), our fill = price_fn result, cap = DEFAULT_ENTRY_SLIP_CAP (15%).
-        If fill > quote·(1+cap) → ENTRY_REJECTED (position written with
-        exit_reason=ENTRY_REJECTED, PnL NULL, excluded from win-rate).
+        US-75 feature flag.  Slippage telemetry (quote vs our curve fill) is ALWAYS
+        recorded; when this is True the 15% Anchor-6002 cap also REJECTS the entry
+        (ENTRY_REJECTED, PnL NULL, excluded from win-rate).  quote = event.raw["price"]
+        (the wallet's curve buy price), our fill = simulate_buy result.
         Default False — the running soak is unaffected until deliberately flipped.
 
     Returns
@@ -294,101 +302,113 @@ def handle_event(
     # 3a. Resolve strategy_id
     strategy_id: str = state.wallet_to_strategy.get(event.wallet, "")
 
-    # 3b. Entry price (our fill) — try price_fn; fall back to event.raw["price"]
-    entry_price: Optional[float] = None
+    usd_size = float(getattr(settings, "usd_size_per_trade", 25.0))
+    entry_ts = clock.now()
+
+    # 3b. CURVE honest fill (PR B2) — price ONE basis: the bonding curve.
+    #   quote = the watched wallet's curve buy price (vsol/vtok from its TradeEvent).
+    #   fill  = OUR realized buy, simulated against the CURRENT curve reserves (read
+    #           over RPC = the "next tick" after our detection) — constant-product +
+    #           1% fee + our size impact INHERENT. This is the honest fill the live
+    #           bot would receive; we NEVER book the wallet's price (a phantom fill).
+    curve_state: Optional[CurveState] = None
     try:
-        entry_price = price_fn(event.mint)
-    except Exception:  # noqa: BLE001
-        entry_price = None
+        curve_state = curve_state_fn(event.mint)
+    except Exception:  # noqa: BLE001 — a read miss must never break the engine
+        curve_state = None
 
-    if entry_price is None or entry_price <= 0:
-        raw_price = event.raw.get("price")
-        if raw_price is not None:
-            try:
-                entry_price = float(raw_price)
-            except (TypeError, ValueError):
-                entry_price = None
-
-    if not entry_price or entry_price <= 0:
+    if curve_state is None or curve_state.complete:
+        # Pre-grad bonding curve unavailable (not found / already graduated — the
+        # post-grad AMM path is Phase 2). Can't price our fill on one basis -> skip.
         logger.warning(
-            "[copytrade] price-unavailable: wallet=%.8s mint=%.8s — skipping open",
+            "[copytrade] curve-unavailable: wallet=%.8s mint=%.8s — skipping open "
+            "(graduated or unreadable curve)",
             event.wallet,
             event.mint,
         )
-        # Undo multiplicity state since we cannot actually open
         state.multiplicity.open_positions_count -= 1
         state.multiplicity.open_mints.discard(event.mint)
         return None
 
-    # 3c. US-75 AC-1: honest-fill slippage check (behind feature flag §6.7)
-    #
-    # quote_price = the watched wallet's confirmed fill price from the TradeEvent
-    #   (event.raw["price"] — the curve price at the wallet's block_time).
-    # fill_price  = our entry price (price_fn result above — the detection-time
-    #   Birdeye spot, which captures copy-latency drift).
-    # If fill > quote·(1+cap): ENTRY_REJECTED (write position row, PnL NULL, return None).
-    usd_size = float(getattr(settings, "usd_size_per_trade", 25.0))
-    entry_ts = clock.now()
+    sol_in = usd_size / sol_usd if sol_usd > 0 else 0.0
+    size_lamports = int(sol_in * LAMPORTS_PER_SOL)
+    fill = simulate_buy(curve_state, size_lamports)
+    if fill is None or fill.tokens <= 0:
+        logger.warning(
+            "[copytrade] curve-fill-failed: wallet=%.8s mint=%.8s size_lamports=%d "
+            "— skipping open",
+            event.wallet,
+            event.mint,
+            size_lamports,
+        )
+        state.multiplicity.open_positions_count -= 1
+        state.multiplicity.open_mints.discard(event.mint)
+        return None
+
+    entry_price = fill.price
+    entry_tokens = fill.tokens
+
+    # 3c. Honest-fill slippage telemetry (US-75). quote = wallet's curve buy price;
+    #   fill = our simulated curve fill. Telemetry is ALWAYS recorded so we can
+    #   measure copy-latency + execution slippage live; the 15% Anchor-6002
+    #   REJECTION is gated by honest_fills_enabled (the running soak is unaffected
+    #   until deliberately flipped).
+    quote_price: Optional[float] = None
+    raw_quote = event.raw.get("price")
+    if raw_quote is not None:
+        try:
+            quote_price = float(raw_quote)
+        except (TypeError, ValueError):
+            quote_price = None
 
     fill_telemetry: dict = {}
-    if honest_fills_enabled:
-        # quote = the wallet's own on-chain fill price (from the decoded TradeEvent)
-        raw_quote = event.raw.get("price")
-        quote_price: Optional[float] = None
-        if raw_quote is not None:
-            try:
-                quote_price = float(raw_quote)
-            except (TypeError, ValueError):
-                quote_price = None
+    if quote_price is not None and quote_price > 0:
+        fill_check = check_copy_entry(
+            quote_price=quote_price,
+            fill_price=entry_price,
+            clock_arrival_ts=entry_ts,
+            block_time=event.block_time,
+        )
+        fill_telemetry = {
+            "quote_price": fill_check.quote_price,
+            "fill_price": fill_check.fill_price,
+            "cap_pct": fill_check.cap_pct,
+            "copy_latency_s": fill_check.copy_latency_s,
+        }
 
-        if quote_price is not None and quote_price > 0:
-            fill_check = check_copy_entry(
-                quote_price=quote_price,
-                fill_price=entry_price,
-                clock_arrival_ts=entry_ts,
-                block_time=event.block_time,
+        if honest_fills_enabled and not fill_check.enterable:
+            # Write an ENTRY_REJECTED row (PnL NULL — excluded from win-rate;
+            # no live position tracked; multiplicity undone).
+            record = OpenedPositionRecordV2(
+                cohort_id=cohort_id,
+                mint=event.mint,
+                trigger_wallet=event.wallet,
+                entry_ts=entry_ts,
             )
-            fill_telemetry = {
-                "quote_price": fill_check.quote_price,
-                "fill_price": fill_check.fill_price,
-                "cap_pct": fill_check.cap_pct,
-                "copy_latency_s": fill_check.copy_latency_s,
-            }
+            _write_rejected_entry(
+                record,
+                fill_telemetry=fill_telemetry,
+                reason=fill_check.reason,
+                usd_size=usd_size,
+                sol_usd=sol_usd,
+                strategy_id=strategy_id,
+            )
+            logger.info(
+                "[copytrade] ENTRY_REJECTED: head=%s wallet=%.8s mint=%.8s "
+                "quote=%.8g fill=%.8g slip=%.4f reason=%s",
+                strategy_id,
+                event.wallet,
+                event.mint,
+                quote_price,
+                entry_price,
+                fill_check.realized_slip_pct if fill_check.realized_slip_pct is not None else float("nan"),
+                fill_check.reason,
+            )
+            state.multiplicity.open_positions_count -= 1
+            state.multiplicity.open_mints.discard(event.mint)
+            return None  # no live position
 
-            if not fill_check.enterable:
-                # Write an ENTRY_REJECTED position row (PnL stays NULL — excluded
-                # from win-rate; no live position tracked; multiplicity undone).
-                record = OpenedPositionRecordV2(
-                    cohort_id=cohort_id,
-                    mint=event.mint,
-                    trigger_wallet=event.wallet,
-                    entry_ts=entry_ts,
-                )
-                _write_rejected_entry(
-                    record,
-                    fill_telemetry=fill_telemetry,
-                    reason=fill_check.reason,
-                    usd_size=usd_size,
-                    sol_usd=sol_usd,
-                    strategy_id=strategy_id,
-                )
-                logger.info(
-                    "[copytrade] ENTRY_REJECTED: head=%s wallet=%.8s mint=%.8s "
-                    "quote=%.8g fill=%.8g slip=%.4f reason=%s",
-                    strategy_id,
-                    event.wallet,
-                    event.mint,
-                    quote_price,
-                    entry_price,
-                    fill_check.realized_slip_pct if fill_check.realized_slip_pct is not None else float("nan"),
-                    fill_check.reason,
-                )
-                # Undo multiplicity — no open position was taken
-                state.multiplicity.open_positions_count -= 1
-                state.multiplicity.open_mints.discard(event.mint)
-                return None  # no live position
-
-    # 3d. Open the paper position (honest-fill accepted, or flag off)
+    # 3d. Open the paper position at OUR curve fill (curve basis end-to-end).
     record = OpenedPositionRecordV2(
         cohort_id=cohort_id,
         mint=event.mint,
@@ -402,25 +422,33 @@ def handle_event(
         usd_size=usd_size,
         sol_usd=sol_usd,
         strategy_id=strategy_id,
+        entry_tokens=entry_tokens,
     )
 
-    # Persist honest-fill telemetry onto the position row (if flag on and we got a quote)
+    # Persist honest-fill telemetry onto the position row (whenever we had a quote).
     if fill_telemetry:
         CopytradePosition.objects.filter(pk=position.pk).update(**fill_telemetry)
-        # Reflect on in-memory object for any downstream callers
         for k, v in fill_telemetry.items():
             setattr(position, k, v)
 
     # 3e. Register in state
     state.open_positions[event.mint] = position
 
+    slip_str = (
+        f"{(entry_price / quote_price - 1.0):.4f}"
+        if (quote_price is not None and quote_price > 0)
+        else "n/a"
+    )
     logger.info(
-        "[copytrade] copy-buy: head=%s wallet=%.8s mint=%.8s usd=%.2f entry=%.8g",
+        "[copytrade] copy-buy: head=%s wallet=%.8s mint=%.8s usd=%.2f entry=%.8g "
+        "tokens=%d slip=%s",
         strategy_id,
         event.wallet,
         event.mint,
         usd_size,
         entry_price,
+        entry_tokens,
+        slip_str,
     )
     return position
 
@@ -495,31 +523,34 @@ def _write_rejected_entry(
 def manage_positions(
     *,
     state: EngineState,
-    price_fn: Callable[[str], Optional[float]],
+    curve_state_fn: Callable[[str], Optional[CurveState]],
     clock: Clock,
     now: datetime,
 ) -> list:
     """Evaluate exit conditions for all open positions and close fired ones.
 
-    Called periodically (every ~15 s) by the command's manager task.
+    Called periodically (every ~15 s) by the command's manager task.  Prices on
+    ONE basis — the bonding curve (``curve_state_fn`` reads the reserves over RPC):
 
-    For each open position:
-      1. Fetch current price via price_fn.  If None, skip this tick (price
-         unavailable — we do NOT close on a price miss).
-      2. Ratchet the high_water_price and persist it on the position.
-      3. Look up the exit config for this position's strategy_id.
-         - OurTrailingExit -> evaluate_trailing_exit
-         - MirrorWalletSellExit -> evaluate_mirror_exit (source_wallet_sold =
-           event.mint in state.sold_signals)
-      4. If decision.should_close: call close_position, remove from open_positions,
-         decrement multiplicity open count, clear sold_signal for this mint.
+      1. Read the curve state.  If unreadable/graduated (None or ``complete``):
+         - a pending MIRROR fires at the source wallet's curve SELL price
+           (``state.sold_signals`` — same curve basis); else
+         - past ``max_hold_seconds``, a stale-timer force-closes at entry (flat) so
+           a dead/graduated token is not held forever.
+      2. ``current_price = state.spot_price()`` (vsol/vtok). Ratchet high_water.
+      3. Evaluate the head's exit (OurTrailingExit / MirrorWalletSellExit).
+      4. On close, simulate OUR size-impacted curve SELL of ``entry_tokens``
+         (``simulate_sell``) for the realized exit price — the honest round-trip.
+         Falls back to the spot/mirror price when the curve is gone or the
+         position predates ``entry_tokens``.
 
     Parameters
     ----------
     state:
         Current EngineState (mutated in-place for closes).
-    price_fn:
-        Callable ``(mint: str) -> float | None``.
+    curve_state_fn:
+        Callable ``(mint: str) -> CurveState | None`` reading the bonding-curve
+        reserves (None on miss / graduated curve).
     clock:
         Injected Clock — NOT used for ``now`` (caller passes ``now`` explicitly
         so both the consumer loop and the test harness control the timestamp).
@@ -535,27 +566,28 @@ def manage_positions(
     for mint in list(state.open_positions.keys()):
         position = state.open_positions[mint]
 
-        # 1. Fetch current price
+        # 1. Read the current bonding-curve state (one-basis pricing).
+        curve_state: Optional[CurveState] = None
         try:
-            current_price: Optional[float] = price_fn(mint)
-        except Exception:  # noqa: BLE001
-            current_price = None
+            curve_state = curve_state_fn(mint)
+        except Exception:  # noqa: BLE001 — a read miss must never break the engine
+            curve_state = None
+
+        current_price: Optional[float] = (
+            curve_state.spot_price()
+            if (curve_state is not None and not curve_state.complete)
+            else None
+        )
 
         if current_price is None or current_price <= 0:
-            # Fallback for a pending mirror exit: a fresh pre-grad mint is often
-            # not yet on the external price feed, but the source wallet's SELL
-            # carried a curve price — book the mirror close at that (unit-
-            # consistent with the curve-price entry).
+            # Curve unreadable/graduated. A pending MIRROR can still book at the
+            # source wallet's curve SELL price (same basis); otherwise enforce the
+            # max-hold so a dead/graduated token is not held forever (the 15h-stuck
+            # bug — and how the pre-fix stale opens get cleared).
             sell_price = state.sold_signals.get(mint, 0.0)
             if sell_price and sell_price > 0:
                 current_price = sell_price
             else:
-                # No usable price AND no mirror-sell signal.  Previously this
-                # skipped EVERY tick, so a token whose price feed returns None
-                # (dead / illiquid / rugged) was held forever and never hit its
-                # max-hold timer (the 15h-stuck bug).  Enforce the max-hold here:
-                # past max_hold_seconds, force-close at the entry price (flat — we
-                # never fabricate a gain without a price) with a TIMER reason.
                 cfg = state.exit_by_strategy.get(position.strategy_id or "")
                 max_hold = getattr(cfg, "max_hold_seconds", None) if cfg is not None else None
                 if (
@@ -567,8 +599,8 @@ def manage_positions(
                     closed_position = close_position(position, EXIT_TIMER, fill, now)
                     closed.append(closed_position)
                     logger.info(
-                        "[copytrade] stale-timer close: mint=%.8s held>=%ds with no "
-                        "price -> TIMER @ entry (flat); likely a dead/illiquid token.",
+                        "[copytrade] stale-timer close: mint=%.8s held>=%ds, curve "
+                        "unreadable/graduated -> TIMER @ entry (flat).",
                         mint,
                         int(max_hold),
                     )
@@ -637,10 +669,24 @@ def manage_positions(
             )
             continue
 
-        # 4. Close if fired
+        # 4. Close if fired — book OUR size-impacted curve SELL when we can.
         if decision.should_close:
             exit_reason = decision.exit_reason
             exit_price = decision.exit_price if decision.exit_price is not None else current_price
+
+            # Simulate our realized curve SELL (size impact + 1% fee) when the curve
+            # is live and we know the tokens held; else fall back to the spot/mirror
+            # price (no size impact — pre-B2 positions without entry_tokens, or a
+            # graduated curve booked at the wallet's sell).
+            if (
+                curve_state is not None
+                and not curve_state.complete
+                and position.entry_tokens
+                and position.entry_tokens > 0
+            ):
+                sell_fill = simulate_sell(curve_state, int(position.entry_tokens))
+                if sell_fill is not None:
+                    exit_price = sell_fill.price
 
             closed_position = close_position(position, exit_reason, exit_price, now)
             closed.append(closed_position)

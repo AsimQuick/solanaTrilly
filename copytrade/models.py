@@ -265,6 +265,10 @@ class CopytradePosition(models.Model):
 
     entry_ts = models.DateTimeField(null=True, blank=True)
     entry_price = models.FloatField(null=True, blank=True)
+    # Curve honest-fill (PR B2): token base units OUR simulated buy received at
+    # entry. Needed to simulate the size-impacted curve SELL at exit so realized
+    # PnL reflects our real round-trip (constant-product + 1% fee both sides).
+    entry_tokens = models.FloatField(null=True, blank=True)
     sol_in = models.FloatField(null=True, blank=True)
     # Cohort-2.0 USD sizing: the USD booked at entry (sol_in stays the SOL leg).
     size_usd = models.FloatField(null=True, blank=True)
