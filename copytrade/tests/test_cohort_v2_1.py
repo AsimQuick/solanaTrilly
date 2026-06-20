@@ -151,12 +151,35 @@ def test_wallet_to_style_map():
 
 
 def test_wallet_to_exit_map():
-    """wallet_to_exit() returns exit config keyed by address."""
+    """wallet_to_exit() returns exit config keyed by STYLE (not address).
+
+    The engine looks up ``exit_by_strategy.get(position.strategy_id)`` where
+    strategy_id == the wallet's style. So this map MUST be style-keyed, else every
+    2.1 position hits ``no-exit-cfg ... holding`` and can never close.
+    """
     cohort = CohortV21.model_validate(_load(FIXTURE_V2_1))
     exit_map = cohort.wallet_to_exit()
-    assert len(exit_map) == 20
-    for addr, exit_cfg in exit_map.items():
-        assert isinstance(exit_cfg, (OurTrailingExit, MirrorWalletSellExit))
+    # Collapsed to the distinct styles present in the fixture (ride + scalp).
+    assert set(exit_map.keys()) == {"ride", "scalp"}
+    assert isinstance(exit_map["ride"], OurTrailingExit)
+    assert isinstance(exit_map["scalp"], MirrorWalletSellExit)
+
+
+def test_engine_resolves_exit_for_every_style():
+    """Integration invariant: every strategy_id the engine resolves at runtime
+    (from wallet_to_style) MUST be a key in the exit_by_strategy map built from
+    wallet_to_exit. This is what the per-tick engine lookup actually does; the
+    address-keyed bug passed the old unit test but broke this invariant, so every
+    live position held forever (no-exit-cfg). Guards that regression directly.
+    """
+    cohort = CohortV21.model_validate(_load(FIXTURE_V2_1))
+    wallet_to_strategy = cohort.wallet_to_style()   # address -> strategy_id (style)
+    exit_by_strategy = cohort.wallet_to_exit()       # strategy_id -> exit cfg
+    for addr, strategy_id in wallet_to_strategy.items():
+        assert strategy_id in exit_by_strategy, (
+            f"strategy_id {strategy_id!r} (wallet {addr[:8]}) has no exit config "
+            f"-> position would hold forever (no-exit-cfg)"
+        )
 
 
 def test_validate_cohort_any_dispatches_v2_1():
