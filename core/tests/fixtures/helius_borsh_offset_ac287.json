@@ -1,0 +1,18 @@
+{
+  "_comment": "Borsh TradeEvent offset regression fixture for US-76 AC-2 / solanaBilly #287.",
+  "_note": "Packed with: disc(8)+mint(32)+sol(8q)+tok(8q)+is_buy(1)+user(32)+ts(8q)+vsol(8Q)+vtok(8Q) = 113 bytes",
+  "_layout": "<QQ at offset 40 for sol_amount/token_amount; is_buy at offset 56; user at 57:89; <qQQ at 89 for ts/vsol/vtok",
+  "program_data_b64": "vdt/007mYe6fPHpL4hjVbKF7PpL0YNsnjFQa6XO2LfgOScw1ehaI8YAXtCwAAAAAAHQ7pAsAAAABxJoraPMX5QypdLMukVzXQItWP+hytSz5DUjLNHsXifIAx0hoAAAAAABWxGQSAAAAAADSg5jXAgA=",
+  "expected": {
+    "sol_amount": 750000000,
+    "token_amount": 50000000000,
+    "side": "buy",
+    "owner": "EETFuvMzZW4R1DfqCovARkXT3T4vKTBhVmYU54ZGfJDw",
+    "mint": "BibK2MNtSSgjKqsbdCxWJZuUQkAvkuwiVU4VS3rVgvmE",
+    "block_time": 1749600000,
+    "virtual_sol_reserves": 79000000000,
+    "virtual_token_reserves": 800000000000000,
+    "vol_sol": 0.75,
+    "price": 9.875e-05
+  }
+}

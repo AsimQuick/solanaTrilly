@@ -5,8 +5,9 @@
 # status: fixed
 # created-by: dev-team
 # last-updated: 2026-06-20
-# dependencies: core.pregrad_features, core.scorer, trading.tape_settler,
-#               trading.position_closer, trading.schemas, trading.models (lazy)
+# dependencies: core.pregrad_features, core.normalized_swap, core.scorer,
+#               trading.tape_settler, trading.position_closer, trading.schemas,
+#               trading.models (lazy)
 # ---
 """Firehose spine -- deterministic scoring + paper-trade helpers (OBSERVE/PAPER only).
 
@@ -43,6 +44,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional, Sequence
 
+from core.normalized_swap import normalize_raw_for_features
 from core.pregrad_features import PRE_FEATURE_NAMES, compute_pregrad_features
 
 logger = logging.getLogger(__name__)
@@ -89,45 +91,63 @@ def assert_paper_only(trading_enabled: bool) -> None:
 def to_pregrad_swaps(
     swaps: Sequence[dict],
     graduated_block_time: int,
+    *,
+    base_decimals: int = 6,
 ) -> list[dict]:
-    """Normalize collected swap dicts to the §7.1 shape compute_pregrad_features expects.
+    """Normalise collected swap dicts to the §7.1 shape compute_pregrad_features expects.
+
+    US-76 AC-2: this function now delegates to ``normalize_raw_for_features``
+    — the single normalisation layer that guards against JSONB None (#358),
+    zero/dust prices (#405), and applies per-mint decimals (#288).
 
     Each input swap may be either a raw collected swap (with ``block_time``,
     ``side``, ``owner``, ``vol_sol``/``vol``, ``price``, ``slot``, ``signature``)
     or an already-§7.1 dict.  ``rel`` is computed as
     ``block_time - graduated_block_time`` when absent (pre-grad swaps => rel < 0).
 
+    Zero/dust price guard: swaps rejected by ``normalize_raw_for_features`` (zero
+    or dust price) are silently dropped.  They were previously passed through as
+    price=0.0 which would have caused silent division-by-zero errors in the
+    settler and feature math.
+
+    JSONB None guard: JSONB ``None`` values are coerced to ``float("nan")`` before
+    any arithmetic, not silently converted to 0.0 by the old ``or 0.0`` pattern.
+
     Pure function (no clock, no I/O).  Stable + deterministic.
 
     Args:
         swaps:                Collected swaps for ONE mint.
         graduated_block_time: The mint's graduation epoch (anchors rel, §7.1).
+        base_decimals:        Per-mint base-token decimals (seed from graduation
+                              event MEME_DATA ``decimals`` field).  Default 6 for
+                              pump.fun SPL tokens.  Pass via MintDecimalsResolver
+                              at the call site; never hardcode in callers.
 
     Returns:
         A list of §7.1 swap dicts with rel/side/owner/vol/block_time/slot/
-        signature/price keys.
+        signature/price keys.  Swaps with zero/dust prices are excluded.
     """
+    # Build a list of recent prices to supply the dust-median guard.
+    # We use a rolling window of the prices seen so far in this tape.
+    peer_prices: list[float] = []
     out: list[dict] = []
     for s in swaps:
-        block_time = int(s.get("block_time", 0))
-        rel = s.get("rel")
-        if rel is None:
-            rel = float(block_time - graduated_block_time)
-        vol = s.get("vol")
-        if vol is None:
-            vol = s.get("vol_sol", 0.0)
-        out.append(
-            {
-                "block_time": block_time,
-                "slot": int(s.get("slot", 0)),
-                "signature": str(s.get("signature", "")),
-                "rel": float(rel),
-                "price": float(s.get("price", 0.0) or 0.0),
-                "side": str(s.get("side", "")),
-                "vol": float(vol or 0.0),
-                "owner": s.get("owner"),
-            }
+        normalised = normalize_raw_for_features(
+            s,
+            graduated_block_time=graduated_block_time,
+            base_decimals=base_decimals,
+            peer_prices=peer_prices,
         )
+        if normalised is None:
+            # Rejected: zero/dust price, missing block_time, or invalid side.
+            # Log at DEBUG — callers get the count implicitly from len(out).
+            logger.debug(
+                "%s to_pregrad_swaps: swap rejected by normaliser (zero/dust price or invalid fields)",
+                LOG_PREFIX,
+            )
+            continue
+        peer_prices.append(normalised["price"])
+        out.append(normalised)
     return out
 
 
@@ -137,12 +157,18 @@ def assemble_pregrad_features(
     *,
     deployer: str | None = None,
     min_pregrad_swaps: int = 20,
+    base_decimals: int = 6,
 ) -> dict | None:
     """Assemble the 20 PRE_FEATURE_NAMES features from collected pre-grad swaps.
 
     Delegates to the SAME core.pregrad_features.compute_pregrad_features the
     offline lab and the shared FeatureExtractor use (Principle #2) -- selecting
     only pre-grad swaps within the 3600s window cap.
+
+    US-76 AC-2: ``base_decimals`` is now threaded through to ``to_pregrad_swaps``
+    so the single normalisation layer applies per-mint decimal conversion.  Seed
+    from the graduation-event MEME_DATA ``decimals`` field via MintDecimalsResolver;
+    the default (6) is the pump.fun SPL fallback.
 
     Window cap (US-76 P1.2 / binding-contract Q4):
         Only swaps with -3600 <= rel < 0 are used.  Offline backfill_pregrad.py
@@ -164,12 +190,14 @@ def assemble_pregrad_features(
         deployer:             Optional deployer wallet for pre_deployer_* features.
         min_pregrad_swaps:    Minimum number of pre-grad swaps required to score
                               (secondary gate, default 20).
+        base_decimals:        Per-mint base-token decimals (from MintDecimalsResolver).
+                              Default 6 for pump.fun SPL tokens.
 
     Returns:
         Dict of the 20 pre_* features, or None if there are no usable pre-grad
         swaps after the window cap or the secondary gate rejects the token.
     """
-    normalized = to_pregrad_swaps(swaps, graduated_block_time)
+    normalized = to_pregrad_swaps(swaps, graduated_block_time, base_decimals=base_decimals)
     # P1.2 -- 3600s window cap: match offline backfill_pregrad.py CAP=3600.
     # Only swaps with rel in [-3600, 0) qualify.
     windowed = [s for s in normalized if -3600 <= s["rel"] < 0]
