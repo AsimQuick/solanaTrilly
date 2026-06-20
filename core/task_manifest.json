@@ -10,6 +10,7 @@
     "core.tasks.sweep_vps_lake_partitions",
     "core.tasks.score_token",
     "core.tasks.export_annotations",
+    "core.tasks.export_data_contract",
     "copytrade.tasks.export_copytrade_positions"
   ]
 }
