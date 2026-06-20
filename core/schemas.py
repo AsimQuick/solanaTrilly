@@ -86,6 +86,12 @@ class ScoringConfig(BaseModel):
     # §5.2 invariant: capture_buffer_s >= 3 (enforced here + in cross-section validator)
     capture_buffer_s: int = Field(default=4, ge=3)
     gate: Literal["adaptive_topk"] = "adaptive_topk"
+    # US-76 live calibration (lab A2/A4): the picks/day target that selects the
+    # rank_cut row from the model's meta.json depth_menu.  The lab's rank_cut is
+    # offline-population-derived and MUST be calibrated on the live stream to hit
+    # the target picks/day — so it is config-driven here, not a code constant.
+    # Default 30/day (v3.2 depth_menu rank_cut 0.7916).
+    per_day_target: int = Field(default=30, gt=0)
     # AC-43.2: path to the frozen reference distribution JSON file used for
     # live single-token percentile ranking (resolves the cutover risk: no same-day
     # pool at graduation).  None means pool-based scoring only (no live single-token
