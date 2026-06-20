@@ -148,7 +148,10 @@ class Command(BaseCommand):
         # Idempotent + guarded on a non-empty cohort_id (see copytrade.reconcile).
         from datetime import datetime, timezone
 
-        from copytrade.reconcile import void_orphan_positions
+        from copytrade.reconcile import (
+            void_orphan_positions,
+            void_unexitable_positions,
+        )
 
         voided = await sync_to_async(void_orphan_positions)(
             cohort_id, datetime.now(timezone.utc)
@@ -183,6 +186,23 @@ class Command(BaseCommand):
             exit_by_strategy = {
                 s.id: s.exit for s in cohort.enabled_strategies()
             }
+
+        # --- Reconcile: void active-cohort opens with NO matching exit config ---
+        # A position whose strategy_id is not a key in exit_by_strategy can NEVER
+        # close (logs 'no-exit-cfg ... holding' every tick) — e.g. opens carried
+        # over from a prior cohort session with a stale strategy_id. Void them so
+        # they don't linger open + flood the log. Guarded against an empty
+        # exit_by_strategy (a failed cohort load -> NO-OP, never void everything).
+        unexitable = await sync_to_async(void_unexitable_positions)(
+            cohort_id, set(exit_by_strategy.keys()), datetime.now(timezone.utc)
+        )
+        if unexitable:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Reconcile: voided {len(unexitable)} open position(s) with no "
+                    f"matching exit config (stale strategy_id) on startup."
+                )
+            )
 
         # --- Load wallet addresses from DB (strategy-aware) ---
         wallet_addresses: list[str] = await sync_to_async(
