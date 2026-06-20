@@ -334,3 +334,13 @@ post-grad subscription more lead time before scoring (open at graduation / delay
   `raw_graduation.raw.meme_info.creator`. **Increment 2 (predictions_positions)** deferred: needs the
   per-label score breakdown (`ctrl/oracle/liq_pred`, percentile, per_day_target) persisted at
   score-time (AC-3-adjacent) — `Position` currently persists only the blend `score`.
+
+- **US-78 increment 2 (PR #340) — predictions_positions surface + durable Prediction.**
+  New `core.Prediction` model (migration 0013) persisted at score-time by
+  `run_firehose._persist_prediction_sync` (idempotent, failure-isolated) for EVERY scored
+  token — the durable scoring store (AC-3-adjacent) the lab needs to compare live vs offline.
+  `build_predictions_positions_dataset` joins Prediction ⋈ model Position (+ copy rows).
+  **Live finding:** the `swaps` surface is empty live — the firehose tape is in-memory only
+  (persists to neither `lake/tapes/` nor the `Swap` table), so **AC-3 (durable per-mint tape
+  store) is the unlock** for the swaps surface; `tokens` + `predictions_positions` are
+  DB-backed and populate now. See the firehose-window evidence doc "US-78 …" section.
