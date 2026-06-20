@@ -226,9 +226,12 @@ def test_v4_meta_feature_order() -> None:
 
 
 def test_v4_boosters_count() -> None:
-    """15 booster files exist in models/trilly_pregrad_v4/boosters/."""
-    boosters_dir = _MODEL_DIR / "boosters"
-    assert boosters_dir.is_dir(), f"boosters/ dir missing at {boosters_dir}"
+    """15 booster files exist in models/trilly_pregrad_v4/boosters/ (host-local)."""
+    # Boosters are host-only (~40 MB, uncommitted — same policy as v3.2). Skip in
+    # CI where the dir is absent (dir-aware: _skip_if_absent is file-only).
+    if not _BOOSTER_DIR.is_dir():
+        pytest.skip(f"boosters/ dir not found at {_BOOSTER_DIR} (host-local, not in CI)")
+    boosters_dir = _BOOSTER_DIR
     txt_files = list(boosters_dir.glob("*.txt"))
     assert len(txt_files) == 15, (
         f"Expected 15 booster files, found {len(txt_files)}: {[f.name for f in txt_files]}"
