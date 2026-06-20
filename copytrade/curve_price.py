@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.curve_price
-# sprint: live hotfix (copy-trade real-SOL readiness, US-75 curve honest-fill)
-# story: copytrade-curve-honest-fill
-# status: implemented
+# sprint: live hotfix (copy-trade real-SOL readiness, US-75 curve honest-fill), feat/copy-live-exec-curve-ix
+# story: copytrade-curve-honest-fill, copy-live-exec
+# status: refactored
 # created-by: operator
-# last-updated: 2026-06-20
+# last-updated: 2026-06-21
 # dependencies: base64, struct, json, urllib, dataclasses, trading.pumpswap_ix
 # ---
 """Bonding-curve price + honest-fill simulation for the copy engine (Option A).
@@ -38,6 +38,7 @@ error, malformed payload, graduated/complete curve).  Callers MUST handle None.
 Pure except for the RPC call, which takes an injectable ``fetcher`` for offline
 tests (no network in tests — same discipline as ``copytrade.price_source``).
 """
+
 from __future__ import annotations
 
 import base64
@@ -65,11 +66,28 @@ HELIUS_RPC_BASE: str = "https://mainnet.helius-rpc.com"
 
 @dataclass(frozen=True)
 class CurveState:
-    """Bonding-curve reserves at a point in time (lamports / token base units)."""
+    """Bonding-curve reserves at a point in time (lamports / token base units).
+
+    Fields added for feat/copy-live-exec-curve-ix:
+      creator         — base58 pubkey of the token creator (from bonding-curve
+                        account at offset 49, 32 bytes).  None on pre-upgrade
+                        accounts that don't carry this field.
+      is_mayhem_mode  — pump.fun fee_recipient selector (offset 81).  True ->
+                        MAYHEM fee account; False/None -> LEGACY.  Required for
+                        building valid bonding-curve buy/sell instructions.
+      is_cashback_coin — selects user_volume_accumulator inclusion in the sell ix
+                        (offset 82).  True -> append uva to sell accounts; else omit.
+                        None for pre-upgrade short accounts.
+    """
 
     virtual_sol_reserves: int
     virtual_token_reserves: int
     complete: bool
+    # Extended fields (present after the pump.fun creator-vault upgrade; None on
+    # short/pre-upgrade accounts). Gracefully None -> callers must guard.
+    creator: Optional[str] = None
+    is_mayhem_mode: Optional[bool] = None
+    is_cashback_coin: Optional[bool] = None
 
     def spot_price(self) -> Optional[float]:
         """Instantaneous curve price = vsol / vtok (lamports ratio), or None."""
@@ -82,9 +100,9 @@ class CurveState:
 class CurveFill:
     """OUR simulated honest fill against the curve (size-impact + 1% fee inherent)."""
 
-    tokens: int          # token base units received (buy) / sold (sell)
-    sol_lamports: int    # SOL spent (buy) / received (sell), net of the 1% fee
-    price: float         # effective fill price = sol_lamports / tokens (same basis as spot)
+    tokens: int  # token base units received (buy) / sold (sell)
+    sol_lamports: int  # SOL spent (buy) / received (sell), net of the 1% fee
+    price: float  # effective fill price = sol_lamports / tokens (same basis as spot)
 
 
 # ---------------------------------------------------------------------------
@@ -103,27 +121,54 @@ def derive_bonding_curve_pda(mint_b58: str) -> str:
 def deserialize_bonding_curve(account_data_b64: str) -> CurveState:
     """Deserialize a pump.fun BondingCurve account (after the 8-byte discriminator).
 
-    Layout (chainstacklabs / pump.fun IDL):
-      offset  8: virtualTokenReserves u64
-      offset 16: virtualSolReserves   u64
-      offset 24: realTokenReserves    u64
-      offset 32: realSolReserves      u64
-      offset 40: tokenTotalSupply     u64
-      offset 48: complete             bool
+    Layout (chainstacklabs / pump.fun IDL + creator-vault upgrade):
+      offset  8: virtualTokenReserves u64   (8 bytes)
+      offset 16: virtualSolReserves   u64   (8 bytes)
+      offset 24: realTokenReserves    u64   (8 bytes)
+      offset 32: realSolReserves      u64   (8 bytes)
+      offset 40: tokenTotalSupply     u64   (8 bytes)
+      offset 48: complete             bool  (1 byte)
+      offset 49: creator              Pubkey (32 bytes) — post-upgrade accounts only
+      offset 81: is_mayhem_mode       bool  (1 byte)    — post-upgrade accounts only
+      offset 82: is_cashback_coin     bool  (1 byte)    — post-upgrade accounts only
 
-    Raises ValueError if the data is too short to hold the core fields.
+    Pre-upgrade accounts (len < 8 + 41 + 32 = 81) will have creator=None,
+    is_mayhem_mode=None, is_cashback_coin=None — callers guard gracefully.
+
+    Raises ValueError if the data is too short to hold the core fields (< 49 bytes).
     """
     raw = base64.b64decode(account_data_b64)
     if len(raw) < 8 + 41:
         raise ValueError(f"bonding curve data too short: {len(raw)} bytes")
-    virtual_token, virtual_sol, _real_token, _real_sol, _supply = struct.unpack_from(
-        "<QQQQQ", raw, 8
-    )
+    virtual_token, virtual_sol, _real_token, _real_sol, _supply = struct.unpack_from("<QQQQQ", raw, 8)
     complete = bool(raw[8 + 40])
+
+    # Extended fields — present only on post-upgrade accounts (offset 49+).
+    # Guard gracefully for any short/pre-upgrade account.
+    creator: Optional[str] = None
+    is_mayhem_mode: Optional[bool] = None
+    is_cashback_coin: Optional[bool] = None
+
+    # creator: 32-byte Pubkey starting at offset 49 (8 discriminator + 41 core fields).
+    if len(raw) >= 8 + 41 + 32:  # offset 81
+        creator_bytes = raw[49:81]
+        creator = b58encode(bytes(creator_bytes))
+
+    # is_mayhem_mode: 1 byte at offset 81.
+    if len(raw) >= 8 + 41 + 32 + 1:  # offset 82
+        is_mayhem_mode = bool(raw[81])
+
+    # is_cashback_coin: 1 byte at offset 82.
+    if len(raw) >= 8 + 41 + 32 + 2:  # offset 83
+        is_cashback_coin = bool(raw[82])
+
     return CurveState(
         virtual_sol_reserves=virtual_sol,
         virtual_token_reserves=virtual_token,
         complete=complete,
+        creator=creator,
+        is_mayhem_mode=is_mayhem_mode,
+        is_cashback_coin=is_cashback_coin,
     )
 
 
@@ -139,12 +184,17 @@ def _default_rpc_fetcher(rpc_url: str, pubkey_b58: str, timeout_s: float) -> dic
             "jsonrpc": "2.0",
             "id": 1,
             "method": "getAccountInfo",
-            "params": [pubkey_b58, {"encoding": "base64"}],
+            # commitment=confirmed MUST match the Helius WS event commitment: the
+            # wallet-buy TradeEvent arrives at "confirmed", so reading the curve at
+            # the default (finalized, ~12 slots back) returns a stale PRE-buy state
+            # -> simulate_buy bills an unachievable cheap fill (systematic negative
+            # slip, inflated PnL — caught in the 2026-06-20 observe soak). Read at
+            # "confirmed" so the simulated fill reflects the post-buy curve a real
+            # bot would actually hit.
+            "params": [pubkey_b58, {"encoding": "base64", "commitment": "confirmed"}],
         }
     ).encode()
-    req = urllib.request.Request(
-        rpc_url, data=payload, headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             return json.loads(resp.read().decode())
