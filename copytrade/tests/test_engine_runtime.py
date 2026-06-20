@@ -54,7 +54,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from copytrade.engine_runtime import EngineState, handle_event, manage_positions
-from copytrade.exits import EXIT_MIRROR, EXIT_SL, EXIT_TP, EXIT_TRAIL
+from copytrade.exits import EXIT_MIRROR, EXIT_SL, EXIT_TIMER, EXIT_TP, EXIT_TRAIL
 from copytrade.models import CopytradePosition
 from copytrade.position_opener import OpenedPositionRecordV2, open_observe_position_v2
 from copytrade.price_source import fetch_mint_price_usd
@@ -585,6 +585,44 @@ def test_manage_positions_scalp_closes_on_mirror():
     assert closed[0].exit_reason == EXIT_MIRROR
     assert MINT_A not in state.open_positions
     assert MINT_A not in state.sold_signals
+
+
+@pytest.mark.django_db
+def test_manage_positions_force_closes_dead_token_past_max_hold():
+    """A token whose price feed returns None must still hit its max-hold TIMER.
+
+    Regression for the 15h-stuck bug: price_fn -> None skipped EVERY tick, so a
+    dead/illiquid token (or, in the live incident, the WHOLE feed when BIRDEYE_API_KEY
+    was missing) never reached its max_hold_seconds timer and hung open forever.
+    """
+    state = _fresh_state()
+    clock = VirtualClock(T0)
+    handle_event(
+        _make_event(wallet=WALLET_SCALP, mint=MINT_A, sol_amount=2.0),
+        settings=_make_settings(),
+        state=state,
+        cohort=MagicMock(),
+        sol_usd=SOL_USD,
+        price_fn=lambda m: ENTRY_PRICE,
+        clock=clock,
+    )
+    assert MINT_A in state.open_positions
+
+    # Feed dead (None), no mirror sell, WITHIN max_hold (24h) -> still held.
+    closed = manage_positions(
+        state=state, price_fn=lambda m: None, clock=clock, now=T0 + timedelta(hours=1)
+    )
+    assert closed == []
+    assert MINT_A in state.open_positions
+
+    # PAST max_hold with no price -> forced TIMER close at entry (flat, no fabricated gain).
+    closed = manage_positions(
+        state=state, price_fn=lambda m: None, clock=clock, now=T0 + timedelta(seconds=86401)
+    )
+    assert len(closed) == 1
+    assert closed[0].exit_reason == EXIT_TIMER
+    assert MINT_A not in state.open_positions
+    assert abs(float(closed[0].realized_pnl_pct or 0.0)) < 1e-6  # booked flat at entry
 
 
 @pytest.mark.django_db
