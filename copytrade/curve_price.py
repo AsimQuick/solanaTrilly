@@ -184,7 +184,14 @@ def _default_rpc_fetcher(rpc_url: str, pubkey_b58: str, timeout_s: float) -> dic
             "jsonrpc": "2.0",
             "id": 1,
             "method": "getAccountInfo",
-            "params": [pubkey_b58, {"encoding": "base64"}],
+            # commitment=confirmed MUST match the Helius WS event commitment: the
+            # wallet-buy TradeEvent arrives at "confirmed", so reading the curve at
+            # the default (finalized, ~12 slots back) returns a stale PRE-buy state
+            # -> simulate_buy bills an unachievable cheap fill (systematic negative
+            # slip, inflated PnL — caught in the 2026-06-20 observe soak). Read at
+            # "confirmed" so the simulated fill reflects the post-buy curve a real
+            # bot would actually hit.
+            "params": [pubkey_b58, {"encoding": "base64", "commitment": "confirmed"}],
         }
     ).encode()
     req = urllib.request.Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
