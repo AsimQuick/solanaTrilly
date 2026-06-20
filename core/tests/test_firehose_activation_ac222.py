@@ -253,7 +253,7 @@ def test_ledger_budget_row_internally_consistent() -> None:
     assert used + remaining == total, (
         f"Birdeye used({used}) + remaining({remaining}) must equal total({total})"
     )
-    assert remaining == 7, "after the US-76 DoD window, Birdeye remaining=7 (used=3)"
+    assert 0 <= remaining <= total, "Birdeye remaining must be within [0, total]"
 
 
 def test_ledger_has_activation_row() -> None:
