@@ -1,10 +1,10 @@
 # ---
 # module: trading.schemas
-# sprint: sprint-13
-# story: US-64 AC-64.1, US-66 AC-66.1
+# sprint: sprint-13, hotfix
+# story: US-64 AC-64.1, US-66 AC-66.1, fix/model-exit-timer-1200
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-21
 # dependencies: pydantic>=2.0
 # ---
 """Pydantic v2 schema for the trading.* config namespace (PRD §10/§17, AC-64.1).
@@ -57,16 +57,26 @@ class TradingConfig(BaseModel):
     )
 
     # --- Exit rule parameters (PRD §10.1 priority ladder) ---
-    take_profit_pct: float = Field(default=100.0, gt=0)
-    stop_loss_pct: float = Field(default=20.0, gt=0, le=100)
-    disaster_cap_pct: float = Field(default=40.0, gt=0, le=100)
-    rug_pull_drop_pct: float = Field(default=50.0, gt=0, le=100)
+    # Defaults implement the tp12tr15_t1200 policy (trilly_pregrad_v3_2/meta.json):
+    #   take_profit_pct=12  → pol["tp"]      = 0.12  (+12% gain; TP threshold)
+    #   rug_pull_drop_pct=15 → pol["rugcut"] = 0.15  (trailing 15% from peak; settler RUG_PULL)
+    #   auto_sell_timer_s=1200 → pol["timer"]= 1200  (max hold-time)
+    #   stop_loss_pct=8     → pol["sl"]      = 0.08  (absolute loss guard)
+    #   disaster_cap_pct=12 → pol["disaster"]= 0.12  (deep-drop guard)
+    # Ordering invariant: stop_loss(8) < disaster(12) < rug_pull(15)  ✓
+    take_profit_pct: float = Field(default=12.0, gt=0)
+    stop_loss_pct: float = Field(default=8.0, gt=0, le=100)
+    disaster_cap_pct: float = Field(default=12.0, gt=0, le=100)
+    rug_pull_drop_pct: float = Field(default=15.0, gt=0, le=100)
     next_poll_guard_s: int = Field(default=10, ge=0)
-    auto_sell_timer_s: int = Field(default=300, gt=0)
+    auto_sell_timer_s: int = Field(default=1200, gt=0)
     stale_timeout_s: int = Field(default=1800, gt=0)
 
     # --- Trailing stop parameters ---
-    trailing_pct: float = Field(default=20.0, gt=0, le=100)
+    # trailing_pct is used by the live exit_engine's TRAILING rule (not the settler).
+    # Must satisfy: trailing_pct < take_profit_pct (Pydantic invariant 3).
+    # With take_profit_pct=12.0, trailing_pct defaults to 10.0 (< 12 ✓).
+    trailing_pct: float = Field(default=10.0, gt=0, le=100)
     trailing_arm_multiple: float = Field(default=1.05, gt=1.0)
     trailing_grace_s: int = Field(default=60, ge=0)
 
