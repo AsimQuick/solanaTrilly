@@ -116,3 +116,30 @@ GET :8003/cohort  (client route) -> HTTP 200 (SPA fallback)
 ```
 Safety floor held: `-p solanatrilly` isolation, solanaBilly untouched, deploy dispatch-only
 with firehose OFF, no secrets touched.
+
+---
+
+# US-78 data-contract export — shipped (3 surfaces) + AC-3 dependency finding
+
+The §10 Parquet data contract the solanatrills lab consumes was built in two increments
+(PR #338 swaps+tokens, PR #340 predictions_positions) and deployed. UTC-date partitioned,
+by-mint + by-wallet(signer) queryable, MANIFEST per surface. Worker-only Celery task
+`core.tasks.export_data_contract`; `POST /api/export/data-contract/trigger/`.
+
+**Live validation on the VPS staging stack (2026-06-20):**
+- `tokens` surface — ✅ **populated**: real partitioned parquet at `dt=2026-06-19/20`,
+  `mint_cohort` carries the graduations, `deployer` wired from
+  `raw_graduation.raw.meme_info.creator`. (292 Token rows in DB.)
+- `predictions_positions` surface — DB-backed (core.Prediction ⋈ trading.Position +
+  copytrade rows); populates from the next firehose window onward now that the live
+  scorer persists a durable `Prediction` at score-time (gate pass OR fail).
+- `swaps` surface — ✅ code correct (proven by the populated-lake unit test) but
+  **EMPTY live**: it reads the on-disk lake at `lake/tapes`, which has **0 runtime tape
+  part-files** (only `lake/golden/` fixtures). The `Swap` DB table holds only 8 rows.
+
+**FINDING — AC-3 is the unlock for the swaps surface.** The firehose holds pre-grad tapes
+**in-memory** (consumed at score time), and persists neither to `lake/tapes/` nor to the
+`Swap` table. So the swaps surface — the highest-value one (it drives BOTH the pre-grad
+model and copy-trade) — stays empty until the **AC-3 durable per-mint tape store** lands and
+writes the runtime tape to `lake/tapes/`. The export side is ready; this is purely an
+upstream data-population dependency. Relayed to the lab + operator.
