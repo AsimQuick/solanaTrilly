@@ -54,6 +54,14 @@ models/
 !models/trilly_pregrad_v3_2/reference_dist.json
 !models/trilly_pregrad_v3_2/meta.json
 !models/trilly_pregrad_v3_2/golden_scores.parquet
+# v4-deploy: committed model artifacts (boosters are host-only, not committed)
+!models/trilly_pregrad_v4/
+!models/trilly_pregrad_v4/reference_dist.json
+!models/trilly_pregrad_v4/meta.json
+!models/trilly_pregrad_v4/golden_scores.parquet
+
+# lake/ data files (large binaries — host-only, not committed to Git)
+lake/
 
 # DevRAG
 devrag-config.json
