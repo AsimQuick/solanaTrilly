@@ -31,6 +31,9 @@ numpy>=1.24,<3                   # vendored tape_microstructure feature math (US
 pyyaml>=6.0,<7                   # YAML parsing (used in topology tests)
 django-simple-history>=3.7,<4    # audit trail for PipelineConfig (US-9 AC-9.2)
 
+# Live execution (Phase 2 — capital path; gated behind trading_enabled=False)
+solders>=0.21,<0.27             # Solana keypair + VersionedTransaction signing for the live PumpSwap path (US-80). Offline (no network); RPC send is the separate trading.sender. Used ONLY when the operator enables trading_enabled.
+
 # Scorer / ML (in-container — Docker Rules; NEVER installed on host)
 lightgbm>=4.0,<5                 # 15-booster blend scorer (US-42 AC-42.2); runs inside the solanatrilly container only
 pandas>=2.0,<3                   # golden score vector fixture I/O (AC-44.1), scorer parity gate (AC-44.2)

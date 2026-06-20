@@ -138,6 +138,10 @@ services:
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36,localhost,127.0.0.1}
       REDIS_URL: redis://redis:6379/0
       HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+      # Live-trading wallet + RPC (US-80). Read ONLY when the operator sets
+      # trading_enabled=True; inert in observe/paper. Secret lives in the VPS .env.
+      TRADING_WALLET_KEY: ${TRADING_WALLET_KEY:-}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
     depends_on:
       db:
         condition: service_healthy
@@ -166,6 +170,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
       HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+      # Live-trading wallet + RPC (US-80). Read ONLY when trading_enabled=True;
+      # inert in observe/paper. Secret lives in the VPS .env (gitignored).
+      TRADING_WALLET_KEY: ${TRADING_WALLET_KEY:-}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
     depends_on:
       db:
         condition: service_healthy
