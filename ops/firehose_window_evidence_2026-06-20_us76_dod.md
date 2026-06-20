@@ -79,3 +79,40 @@ hit the timer almost immediately. The settle is valid (enterable, booked, closed
 richer/representative paper trade the post-grad subscription wants more lead time before
 scoring — a tuning refinement (e.g. open the post-grad sub at graduation and/or delay entry a
 few more seconds), not a correctness bug.
+
+---
+
+# Operator dashboard — RESTORED ✅ (folded into the DoD per operator request)
+
+The operator reported the dashboard rendered blank in the browser. Root-caused to the
+production frontend never being fully wired for external access (three faults, PR #337):
+
+1. **No host port** on the nginx `frontend` container → unreachable from the host. The
+   operator was hitting `:8002` (the Django web/API), whose `/dashboard/` route is only a
+   bare smoke-test shell (`<div id='root'></div>`, **no `<script>`** → blank page).
+2. **No API proxy** in `frontend/nginx.conf` — only an SPA fallback. The SPA calls relative
+   `/api/` + `/ws/`, which without a proxy fall through to `index.html`.
+3. **Healthcheck false-negative** — probed `localhost`→`::1`, but the custom `default.conf`
+   made the nginx entrypoint skip adding `listen [::]:80` → connection-refused (195 failing
+   streaks though nginx served fine).
+
+**Fix (matches the documented production design — nginx serves the built SPA, web handles
+API+WS):** `nginx.conf` reverse-proxies `/api/`, `/ws/` (with WS upgrade headers), `/health/`
+to `web:8000`, preserving the browser `Host` (in `ALLOWED_HOSTS`). Docker DNS `resolver` +
+`$web` variable so `proxy_pass` resolves **per-request** — survives web's IP change on each
+deploy without a reload. `docker-compose.staging.yml` maps the frontend to host **8003**
+(8001=solanaBilly, 8002=web — both untouched), `depends_on: web`, healthcheck via `127.0.0.1`.
+
+**Operator dashboard URL: `http://140.82.43.36:8003/`** (single origin: SPA + proxied API/WS).
+
+**Verified live post-deploy (2026-06-20):**
+```
+frontend container : Up (healthy)  0.0.0.0:8003->80/tcp   (failingStreak=0)
+GET :8003/                       -> SPA index WITH <script src="/assets/index-*.js">
+GET :8003/assets/index-*.js      -> HTTP 200  application/javascript  369,002 bytes
+GET :8003/api/copytrade/summary/ -> JSON (proxied to web, not the SPA fallback)
+GET :8003/health/                -> {"status": "ok"}
+GET :8003/cohort  (client route) -> HTTP 200 (SPA fallback)
+```
+Safety floor held: `-p solanatrilly` isolation, solanaBilly untouched, deploy dispatch-only
+with firehose OFF, no secrets touched.

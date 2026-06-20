@@ -318,3 +318,19 @@ gate→paper-buy→paper-sell observed. Safety floor held; solanaBilly untouched
 **Refinement noted (not a blocker):** the proven paper trade had `held=2s/peak=0.00%` — the post-grad
 sub had just opened, so the tape was thin at entry. For representative paper trades, give the
 post-grad subscription more lead time before scoring (open at graduation / delay entry a few s).
+
+### Post-DoD operability + US-78 (2026-06-20)
+
+- **Operator dashboard RESTORED (PR #337)** — folded into the DoD per operator request. The
+  production frontend was never fully wired for external access (no host port; nginx had no
+  `/api`+`/ws` proxy; healthcheck `localhost`→`::1` false-negative). Fixed: nginx serves the SPA
+  and reverse-proxies `/api`+`/ws`+`/health` to `web` (Docker DNS resolver + `$web` var, per-request
+  resolution); frontend exposed on host **8003**. **Operator URL: `http://140.82.43.36:8003/`**
+  (8002 = Django API only — its `/dashboard/` is a bare smoke shell). Verified live: SPA + bundle
+  200, API/WS proxied, frontend healthy. Evidence in the firehose-window evidence doc.
+- **US-78 data-contract export — increment 1 (PR #338):** `swaps` + `tokens` Parquet surfaces (§10),
+  UTC-date partitioned, by-mint/by-wallet(signer) queryable, MANIFEST per surface. Worker-only task
+  `core.tasks.export_data_contract` + `POST /api/export/data-contract/trigger/`. `deployer` wired from
+  `raw_graduation.raw.meme_info.creator`. **Increment 2 (predictions_positions)** deferred: needs the
+  per-label score breakdown (`ctrl/oracle/liq_pred`, percentile, per_day_target) persisted at
+  score-time (AC-3-adjacent) — `Position` currently persists only the blend `score`.
