@@ -57,15 +57,23 @@ def _db_row_to_micro(swap) -> dict:
 
 
 def _lake_row_to_micro(row: dict) -> dict:
-    """Normalize a decoded jsonl.gz lake row to the §7.1 microstructure input dict."""
+    """Normalize a decoded jsonl.gz lake row to the §7.1 microstructure input dict.
+
+    ``rel`` (block_time - graduated_block_time) is absent on AC-3 pre-grad firehose
+    tape rows (the live buffer omits it — the graduation anchor is applied
+    retroactively), so it is read defensively and defaults to 0.0.  Golden /
+    post-grad lakes always carry ``rel``, so this preserves offline feature parity
+    (``.get`` returns the real value when present) while letting the dashboard
+    candle/cohort APIs read the mixed live lake without crashing.
+    """
     return {
         "block_time": int(row["block_time"]),
-        "slot": int(row["slot"]),
-        "signature": str(row["signature"]),
-        "rel": float(row["rel"]),
-        "price": float(row["price"]),
-        "side": str(row["side"]),
-        "vol": float(row["vol_sol"]),
+        "slot": int(row.get("slot", 0) or 0),
+        "signature": str(row.get("signature", "")),
+        "rel": float(row.get("rel", 0.0) or 0.0),
+        "price": float(row.get("price", 0.0) or 0.0),
+        "side": str(row.get("side", "")),
+        "vol": float(row.get("vol_sol", row.get("vol", 0.0)) or 0.0),
         "owner": row.get("owner"),
     }
 
