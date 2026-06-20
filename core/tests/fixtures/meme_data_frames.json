@@ -1,0 +1,332 @@
+{
+  "_comment": "Fixture for US-76 AC-1 tests. Frames 0-5 are the 6 real captured SUBSCRIBE_MEME frames (non-graduated). Frames 6-9 are synthetic variants built by editing a real frame. See core/tests/test_birdeye_graduation_source_us76_ac1.py.",
+  "non_graduated": [
+    {
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "yrCuTDLERKviDJUqbj6iZ1WaBzoMLruCaf7bu7Zpump",
+        "name": "Pengwin",
+        "symbol": "Pengwin",
+        "decimals": 6,
+        "extensions": {
+          "twitter": "https://x.com/PengwinOnSOL/status/2066771157244653933?s=20",
+          "website": "https://www.pengwinonsol.fun",
+          "description": ""
+        },
+        "logo_uri": "https://ipfs.io/ipfs/bafkreiab5fevv2iv4xo7ytv2t6f3j7zvogkdhoshf3dbuopcdmspieafxm",
+        "price": 2.0030763096230748e-06,
+        "liquidity": 46.08222738078584,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "platform_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+          "created_at": {
+            "tx_hash": "5ByaiXzh6WxuafE8BXvaetSY2XfHr3piZ2qgMqw4bF31hEhx8QZWc3vLnLUdS8AZgyqE5uuVGrHhWJbXP6GbDfYG",
+            "slot": 426798604,
+            "block_time": 1781591674
+          },
+          "creation_time": 1781591674,
+          "creator": "FSCDCSqQ4tDme2VMKFjSdD7Jywpk1Yx92u7i49LHL395",
+          "graduated": false,
+          "graduated_time": null,
+          "pool": {
+            "address": "2H3BdeCaFyHj3TwA8SsXUWBRwJSc5tBKUwgzh8ZVcBVW",
+            "realSolReserves": "663896000",
+            "realTokenReserves": "769868759828662",
+            "tokenTotalSupply": "1000000000000000",
+            "virtualTokenReserves": "1049768759828662"
+          },
+          "progress_percent": 2.33499,
+          "address": "yrCuTDLERKviDJUqbj6iZ1WaBzoMLruCaf7bu7Zpump"
+        }
+      }
+    },
+    {
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "H1Qs5PWnZTgHbk57a1uJw5AMHe8mhKqfwGrccHq8pump",
+        "name": "MEME KING",
+        "symbol": "MK",
+        "decimals": 6,
+        "extensions": null,
+        "price": 2.489332556833337e-06,
+        "liquidity": 43.03822885057979,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "platform_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+          "created_at": {
+            "tx_hash": "MLzuCYgQiieuq78hFNVCK8JYfhpWdKH3jd3uMn5zD7h1xHJhaCpt2wESVooMGPgyPFy4mY64N4PkBeomgCaoKaY",
+            "slot": 427600602,
+            "block_time": 1781909697
+          },
+          "creation_time": 1781909697,
+          "creator": "8sBKeqGbo3h18QtFkECywDUJAxGm7tEYyt8EVjE75hfA",
+          "graduated": false,
+          "graduated_time": null,
+          "pool": {
+            "address": "B63Pf2s4E5zkxPhuZgbJoBQuZAikSnCcCf5derwTbheV",
+            "realSolReserves": "928172500",
+            "realTokenReserves": "763665545293204",
+            "virtualTokenReserves": "1043565545293204",
+            "tokenTotalSupply": "1000000000000000"
+          },
+          "progress_percent": 3.71132,
+          "address": "H1Qs5PWnZTgHbk57a1uJw5AMHe8mhKqfwGrccHq8pump"
+        }
+      }
+    },
+    {
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "HCv1PNbH8byzcSCLyKCU47pnyBNfW6ye1YD4u59pump",
+        "name": "Big Brain",
+        "symbol": "BBT",
+        "decimals": 6,
+        "extensions": {
+          "description": "BBT"
+        },
+        "price": 2.323441049070713e-06,
+        "liquidity": 43.57531499541551,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "platform_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+          "created_at": {
+            "tx_hash": "5sfAk9C2w9Xm83BJj2qc2SieKrjAxv6DNFNiJrE6CtiQHuY3B9GGdiz792Rs45m42JvxVqo5gtKYtT8WWaNt1PuN",
+            "slot": 427600588,
+            "block_time": 1781909692
+          },
+          "creation_time": 1781909692,
+          "creator": "BZD4LDjoAvzRHMBZgw6Q29EtD99t5dG6xJBFDs2vJCCc",
+          "graduated": false,
+          "graduated_time": null,
+          "pool": {
+            "address": "9FCBcEGoj3mSvhqruwKLfbdULuF6ehDz1hB2zQReRWqS",
+            "realSolReserves": "240362211",
+            "realTokenReserves": "777911434315205",
+            "virtualTokenReserves": "1057811434315205",
+            "tokenTotalSupply": "1000000000000000"
+          },
+          "progress_percent": 1.91509,
+          "address": "HCv1PNbH8byzcSCLyKCU47pnyBNfW6ye1YD4u59pump"
+        }
+      }
+    },
+    {
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "F7vPbQPvF5DAxJff5cLBjFgdER8Z4VRuQ9PZdsQRpump",
+        "name": "Buisness",
+        "symbol": "67",
+        "decimals": 6,
+        "extensions": {
+          "description": ""
+        },
+        "price": 4.730577836741226e-06,
+        "liquidity": 6.05113497637346,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "platform_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+          "created_at": {
+            "tx_hash": "56Cx2PMyxPzaM48G9rx8TWf3fnGjj266RwXzH38chaNXPECpE5nCkByhT967B8yW4FkXiApePSSnjWyuMYENoDgh",
+            "slot": 427597456,
+            "block_time": 1781908426
+          },
+          "creation_time": 1781908426,
+          "creator": "5dhq6pm5PYbnjMuHUWmSLA7qHsYT1DJMXBLKGMqFaysK",
+          "graduated": false,
+          "graduated_time": null,
+          "pool": {
+            "address": "DUrYuZPHpqTRbkoZX23ggz7RAhtM7TeBdBwZVBcHBLkD",
+            "realSolReserves": "1650552175",
+            "realTokenReserves": "726589410413231",
+            "virtualTokenReserves": "1006489410413231",
+            "tokenTotalSupply": "1000000000000000"
+          },
+          "progress_percent": 8.38615,
+          "address": "F7vPbQPvF5DAxJff5cLBjFgdER8Z4VRuQ9PZdsQRpump"
+        }
+      }
+    },
+    {
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "9v9G3B8YzPFE8xrDaSEhwLAkiVBwP2BBkchdPMtZpump",
+        "name": "Charlie Brown",
+        "symbol": "Charlie",
+        "decimals": 6,
+        "extensions": {
+          "twitter": "https://x.com/KTLA/status/2068104632015151426"
+        },
+        "price": 3.9542976530270714e-06,
+        "liquidity": 1044.0559835844253,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "platform_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+          "created_at": {
+            "tx_hash": "2SErMvsDToPMUZSM8mgKK6McdCLqLSTuaQxLDz7iVttudRZYBpzKLySTQnyReVoE4VSreukvdJtyBa1bQmF58XFK",
+            "slot": 427600492,
+            "block_time": 1781909655
+          },
+          "creation_time": 1781909655,
+          "creator": "43ew7CZmSSqdvzFgLmxbjSWwyW5vVZoHdsvAJtRBcuRb",
+          "graduated": false,
+          "graduated_time": null,
+          "pool": {
+            "address": "ACSpECdfmzTPWm9FuLirWgKKep8FwC1gwB4jn8JhStMR",
+            "realSolReserves": "22670872094",
+            "realTokenReserves": "331253732129367",
+            "virtualTokenReserves": "611153732129367",
+            "tokenTotalSupply": "1000000000000000"
+          },
+          "progress_percent": 58.23304,
+          "address": "9v9G3B8YzPFE8xrDaSEhwLAkiVBwP2BBkchdPMtZpump"
+        }
+      }
+    },
+    {
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "5s9z8fUJnCZGbfgZGpF1Py1ujc9MrgB88z2dgxM7pump",
+        "name": "Ansem The Real Black Whale",
+        "symbol": "BLCKNOIZ",
+        "decimals": 6,
+        "extensions": {
+          "twitter": "https://x.com/blaaackguy/status/2068102898546868419?s=46",
+          "description": "it’s all makes sense, Ansem is literally the BlackWhale"
+        },
+        "price": 1.4921574471626653e-05,
+        "liquidity": 2693.285907153635,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "platform_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+          "created_at": {
+            "tx_hash": "3cfVetRfJFKh1aY5Z3S12LztXYd7rhoh2rU54jxw12qBPe5J9zCcqYxtmosB7w7Xwy8f66ZhhcNLvBuPua2HrG2n",
+            "slot": 427600182,
+            "block_time": 1781909530
+          },
+          "creation_time": 1781909530,
+          "creator": "CXnxRV24ywNw3NyTmfgu7upN7VNAfRqjkdmAwNv6c1Pv",
+          "graduated": false,
+          "graduated_time": null,
+          "pool": {
+            "address": "9fKno8qx8jL6VxtM1eZvhA5Rs662JtVc7gXVSw9k1ocp",
+            "realSolReserves": "45285328878",
+            "realTokenReserves": "147673347930299",
+            "virtualTokenReserves": "427573347930299",
+            "tokenTotalSupply": "1000000000000000"
+          },
+          "progress_percent": 81.38024,
+          "address": "5s9z8fUJnCZGbfgZGpF1Py1ujc9MrgB88z2dgxM7pump"
+        }
+      }
+    }
+  ],
+  "synthetic": {
+    "_comment": "Derived by editing the 6th real frame (BLCKNOIZ / 5s9z...) to produce specific test scenarios.",
+    "graduated_pump_fun": {
+      "_comment": "GRADUATED pump.fun frame. graduated=true, graduated_time=creation_time+400 (400s curve life), progress_percent=100. Expect ONE emission with all 6 fields correct.",
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "5s9z8fUJnCZGbfgZGpF1Py1ujc9MrgB88z2dgxM7pump",
+        "name": "Ansem The Real Black Whale",
+        "symbol": "BLCKNOIZ",
+        "decimals": 6,
+        "price": 1.4921574471626653e-05,
+        "liquidity": 2693.285907153635,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "creation_time": 1781909530,
+          "creator": "CXnxRV24ywNw3NyTmfgu7upN7VNAfRqjkdmAwNv6c1Pv",
+          "graduated": true,
+          "graduated_time": 1781909930,
+          "pool": {
+            "address": "9fKno8qx8jL6VxtM1eZvhA5Rs662JtVc7gXVSw9k1ocp"
+          },
+          "progress_percent": 100.0,
+          "address": "5s9z8fUJnCZGbfgZGpF1Py1ujc9MrgB88z2dgxM7pump"
+        }
+      }
+    },
+    "instant_graduation": {
+      "_comment": "INSTANT (<60s) graduated pump.fun frame. graduated_time=creation_time+30. Expect NO emission and instant_skipped incremented.",
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "InstantMintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "name": "Instant Token",
+        "symbol": "INST",
+        "decimals": 6,
+        "price": 1.0e-06,
+        "liquidity": 10.0,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "creation_time": 1781909530,
+          "creator": "CXnxRV24ywNw3NyTmfgu7upN7VNAfRqjkdmAwNv6c1Pv",
+          "graduated": true,
+          "graduated_time": 1781909560,
+          "pool": {
+            "address": "InstantPoolAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "progress_percent": 100.0,
+          "address": "InstantMintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      }
+    },
+    "graduated_non_pump_fun": {
+      "_comment": "Graduated but source=raydium_launchlab (not pump_dot_fun). Expect NO emission (source filter).",
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "RaydiumMintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "name": "Raydium Token",
+        "symbol": "RAY",
+        "decimals": 6,
+        "price": 5.0e-06,
+        "liquidity": 500.0,
+        "meme_info": {
+          "source": "raydium_launchlab",
+          "creation_time": 1781909530,
+          "creator": "CXnxRV24ywNw3NyTmfgu7upN7VNAfRqjkdmAwNv6c1Pv",
+          "graduated": true,
+          "graduated_time": 1781909930,
+          "pool": {
+            "address": "RaydiumPoolAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "progress_percent": 100.0,
+          "address": "RaydiumMintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      }
+    },
+    "graduated_pump_fun_duplicate": {
+      "_comment": "Duplicate of graduated_pump_fun for the same mint. Expect NO emission on second call (dedupe).",
+      "type": "MEME_DATA",
+      "data": {
+        "eventType": "meme_stats",
+        "address": "5s9z8fUJnCZGbfgZGpF1Py1ujc9MrgB88z2dgxM7pump",
+        "name": "Ansem The Real Black Whale",
+        "symbol": "BLCKNOIZ",
+        "decimals": 6,
+        "price": 1.5e-05,
+        "liquidity": 2700.0,
+        "meme_info": {
+          "source": "pump_dot_fun",
+          "creation_time": 1781909530,
+          "creator": "CXnxRV24ywNw3NyTmfgu7upN7VNAfRqjkdmAwNv6c1Pv",
+          "graduated": true,
+          "graduated_time": 1781909930,
+          "pool": {
+            "address": "9fKno8qx8jL6VxtM1eZvhA5Rs662JtVc7gXVSw9k1ocp"
+          },
+          "progress_percent": 100.0,
+          "address": "5s9z8fUJnCZGbfgZGpF1Py1ujc9MrgB88z2dgxM7pump"
+        }
+      }
+    }
+  }
+}

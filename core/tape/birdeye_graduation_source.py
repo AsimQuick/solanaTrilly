@@ -1,105 +1,126 @@
 # ---
 # module: core.tape.birdeye_graduation_source
 # sprint: sprint-14
-# story: live-firehose-spine
+# story: live-firehose-spine, hotfix-graduation-pumpfun-mapping, US-76 AC-1
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-19
+# last-updated: 2026-06-20
 # dependencies: core.datasource, core.clock, datetime, json, logging, typing, websockets (lazy)
 # ---
-"""BirdeyeGraduationSource — concrete DataSource for Birdeye's new-listing stream.
+"""BirdeyeGraduationSource — concrete DataSource for Birdeye's SUBSCRIBE_MEME stream.
 
-Mirrors BirdeyeSwapSource's connect/auth/disconnect/events lifecycle but
-subscribes to Birdeye's newly-graduated / new-listing stream instead of the
-per-mint SUBSCRIBE_TXS swap feed.  Each yielded event is shaped EXACTLY as
-DetectionConsumer expects for a graduation:
+Subscribes to Birdeye's ``SUBSCRIBE_MEME`` stream (filtered to ``graduated:true``
++ ``source:pump_dot_fun``) and emits one MEME_DATA graduation event per mint on
+the ``graduated`` false→true transition, shaped EXACTLY as DetectionConsumer
+expects:
 
     {
-        "type":        "MEME_DATA",
-        "graduated":   True,
-        "address":     <mint>,
-        "poolAddress": None,             # Birdeye new-listing frames carry NO pool
-        "blockTime":   <epoch int>,      # parsed from liquidityAddedAt (ISO-8601, UTC)
-        "source":      "pump_dot_fun",   # config-driven; must equal detection.filter.source
-        "dex":         "pump_amm",       # the RAW DEX/AMM the token listed on (audit)
-        "raw":         <the raw Birdeye payload>,   # verbatim, preserves "source":"pump_amm"
+        "type":              "MEME_DATA",
+        "graduated":         True,
+        "address":           <mint>,                    # = data.address
+        "source":            "pump_dot_fun",            # stamped; config-driven
+        "poolAddress":       <pool> | None,             # meme_info.pool.address
+        "blockTime":         <epoch int>,               # meme_info.graduated_time
+        "graduated_block_time": <epoch int>,            # same as blockTime
+        "creation_time":     <epoch int>,               # meme_info.creation_time
+        "progress_percent":  <float>,                   # meme_info.progress_percent
+        "decimals":          <int>,                     # data.decimals (top-level)
+        "raw":               <full data dict>,          # verbatim
     }
 
-DetectionConsumer (core/detection/consumer.py) matches a graduation when
-``event["type"] == "MEME_DATA"`` and ``event["graduated"] == filter.graduated``
-and ``event["source"] == filter.source``.  We therefore stamp ``source`` with
-the value the active ``detection.filter.source`` expects (default
-"pump_dot_fun") so graduated pump.fun tokens pass the existing filter WITHOUT a
-consumer change.  The original DEX ("pump_amm") is preserved verbatim under
-``raw`` and surfaced on a dedicated ``dex`` field for audit.
+REAL FRAME SHAPE (from 6 captured SUBSCRIBE_MEME frames, 2026-06-20)
+======================================================================
+    {"type": "MEME_DATA", "data": {
+        "eventType": "meme_stats",
+        "address":   <mint>,       # top-level — the mint address
+        "decimals":  6,            # top-level — token decimals (pump.fun = 6)
+        ...stats...,
+        "meme_info": {
+            "source":          "pump_dot_fun",   # platform; NOT "pump_amm"
+            "creation_time":   <unix s>,
+            "creator":         <wallet>,
+            "graduated":       false,            # or true on graduation
+            "graduated_time":  null,             # or unix s when graduated
+            "progress_percent": <0-100 float>,
+            "pool": {
+                "address": <pool_pubkey>,
+                "realSolReserves": "...",
+                ...
+            },
+            ...
+        },
+    }}
 
-REAL BIRDEYE FRAMES (the format this module is built against)
-=============================================================
-- Welcome:   {"type":"WELCOME","data":null}
-- pump.fun graduation (WANT):
-      {"type":"TOKEN_NEW_LISTING_DATA","data":{
-          "address":"6Y5P...okn","decimals":9,"name":"dream",
-          "source":"pump_amm","symbol":"dream",
-          "liquidity":18640.85,"liquidityAddedAt":"2026-06-19T07:17:33"}}
-- NON-pump.fun (DROP): same shape but "source":"pancakeswap_v3" / "meteora_damm_v2".
+NOTE: unlike the old TOKEN_NEW_LISTING_DATA frame:
+  - ``data.address`` is the MINT (not a pool).
+  - ``data.decimals`` is at the top level of ``data`` (NOT in meme_info).
+  - ``meme_info.source`` is "pump_dot_fun" for pump.fun (NOT "pump_amm").
+  - ``meme_info.pool.address`` carries the pool address.
+  - ``meme_info.graduated_time`` is a unix epoch int (or null when not yet grad).
+  - The stream is CONTINUOUS meme-stats updates; a single mint appears many times
+    with graduated=false until it graduates (graduated→true).
 
-KEY FACTS about the frame's ``data`` object:
-  - ``address``          = the token MINT.
-  - ``source``           = the DEX/AMM the token listed on.  pump.fun graduations
-                           list on PumpSwap, i.e. ``source == "pump_amm"``.
-  - ``liquidityAddedAt`` = ISO-8601 string (e.g. "2026-06-19T07:17:33"), UTC.
-  - There is NO pool/pair address field.
-  - There is NO epoch/blockTime field.
+SUBSCRIBE_MEME FILTER (source=pump_dot_fun)
+==========================================
+The subscription payload is:
+    {"type":"SUBSCRIBE_MEME","data":{"graduated":true,"source":"pump_dot_fun"}}
+Birdeye filters the stream server-side. We also check ``meme_info.source`` on
+arrival to be safe (defensive client-side validation).
 
-PUMP.FUN FILTER (config-driven, Principle #1)
-=============================================
-Only frames whose ``data.source`` is in the allow-list are emitted; everything
-else (pancakeswap_v3, meteora_damm_v2, ...) is dropped with a DEBUG log.  The
-allow-list is read from ``detection.graduation_dex_allowlist`` with a sane
-default of ``["pump_amm"]``.
+CURVE-LIFE GATE
+===============
+After mapping a graduated frame, we require:
+    graduated_time - creation_time >= CURVE_LIFE_MIN_S  (60 seconds)
+Tokens failing this gate are skipped and the ``instant_skipped`` counter on the
+source is incremented.  The counter is the live instant-rate monitor.
+
+DEDUPLICATION
+=============
+We emit at most ONE event per mint.  A ``_seen_mints`` set tracks all mints for
+which a graduation event has been emitted in this session.  Repeat frames for the
+same mint (Birdeye sends continuous meme_stats updates) are silently dropped
+after the first graduation emit.
 
 CONFIG-DRIVEN WIRING (Principle #1)
 ===================================
 Read defensively from the active config's raw ``detection`` section dict (with
-defaults baked in so the source also works standalone):
+defaults baked in):
 
-    detection.graduation_subscribe_type   (default "SUBSCRIBE_TOKEN_NEW_LISTING")
-    detection.graduation_data_type        (default "TOKEN_NEW_LISTING_DATA")
-    detection.graduation_subscribe_data   (default {} — extra fields merged into
-                                           the subscribe payload's "data" object)
-    detection.graduation_dex_allowlist    (default ["pump_amm"] — raw DEX sources
-                                           that count as a pump.fun graduation)
-    detection.event_source                (default: detection.filter.source if
-                                           present, else "pump_dot_fun" — the
-                                           stamped graduation event ``source``)
+    detection.graduation_subscribe_type   (default "SUBSCRIBE_MEME")
+    detection.graduation_data_type        (default "MEME_DATA")
+    detection.graduation_subscribe_data   (default {"graduated":true,"source":"pump_dot_fun"})
+    detection.event_source                (default "pump_dot_fun")
 
 These are NOT in the pydantic DetectionConfig schema (which is closed); they are
 read defensively from the raw detection dict so they can be tuned live without a
-migration or schema change.  ``event_source`` defaults to ``filter.source`` so
-the stamped source automatically matches whatever the active filter expects.
+migration or schema change.
 
 CLOCK INJECTION (Principle #7 / AC-2.2)
-=======================================
-The codebase forbids ``datetime.now()`` / ``time.time()`` in ``core/`` (AST
-guard).  When ``liquidityAddedAt`` is missing or unparseable, the event-arrival
-time is needed as a fallback.  We therefore inject a Clock (the same pattern
-DetectionConsumer / ScoreOrchestrator use); ``events()`` reads ``clock.now()``
-and passes a fallback epoch into the pure mapper, keeping the mapper pure and
-tests deterministic.
+========================================
+No ``datetime.now()`` / ``time.time()`` in ``core/``.  The injected Clock is used
+only for the event-arrival fallback epoch when ``meme_info.graduated_time`` is
+missing — keeps the mapper pure and tests deterministic.
 
-ARCHITECTURAL CONSTRAINTS (enforced by test_tape_recorder_ac181.py / test_clock.py)
-==================================================================================
+ARCHITECTURAL CONSTRAINTS
+==========================
 - No import of LiveSource / ReplaySource / core.live_source / core.replay_source.
 - No top-level ``import websockets`` — lazy import inside connect() only.
 - No ``datetime.now()`` / ``time.time()`` calls anywhere in this file.
 - NO network at import time.
 
+Legacy compatibility
+====================
+``map_new_listing_frame`` and ``parse_liquidity_added_at`` are preserved for
+backward-compatibility with the existing integration test
+(``test_graduation_detection_integration_hotfix.py``).  They still work against
+the old TOKEN_NEW_LISTING_DATA frame shape.
+
 Lifecycle:
     source = BirdeyeGraduationSource(api_key=..., config=<detection dict>)
-    await source.connect()           # opens WS, sends the subscribe message
+    await source.connect()
     async for event in source.events():
         ...                          # yields MEME_DATA graduation dicts
-    await source.disconnect()        # closes WS
+    await source.disconnect()
 """
 import json
 import logging
@@ -123,20 +144,23 @@ BIRDEYE_WS_SUBPROTOCOL: str = "echo-protocol"
 # Config-driven defaults (Principle #1) — overridable via the detection config.
 # ---------------------------------------------------------------------------
 
-#: Subscription type for the meme-platform / pump.fun new-listing (graduation) stream.
-DEFAULT_SUBSCRIBE_TYPE: str = "SUBSCRIBE_TOKEN_NEW_LISTING"
+#: Subscription type for the SUBSCRIBE_MEME graduation stream (US-76 AC-1).
+DEFAULT_SUBSCRIBE_TYPE: str = "SUBSCRIBE_MEME"
 
-#: Inbound frame type carrying a new-listing (graduation) payload.
-DEFAULT_DATA_TYPE: str = "TOKEN_NEW_LISTING_DATA"
+#: Inbound frame type carrying a MEME_DATA meme-stats payload.
+DEFAULT_DATA_TYPE: str = "MEME_DATA"
 
 #: Default stamped graduation event ``source`` — must equal the active config's
 #: detection.filter.source for DetectionConsumer to persist the Token row.
-#: pump.fun is the only meme platform we trade, so this is the sane default.
 DEFAULT_EVENT_SOURCE: str = "pump_dot_fun"
 
-#: Default raw-DEX allow-list — pump.fun graduations list on PumpSwap ("pump_amm").
-#: Everything else (pancakeswap_v3, meteora_damm_v2, ...) is dropped.
-DEFAULT_DEX_ALLOWLIST: tuple[str, ...] = ("pump_amm",)
+#: Default subscribe data payload for SUBSCRIBE_MEME (filter to graduated pump.fun).
+DEFAULT_SUBSCRIBE_DATA: dict[str, Any] = {"graduated": True, "source": "pump_dot_fun"}
+
+#: Minimum curve life (graduated_time - creation_time) in seconds for a token to
+#: be considered a true pump.fun graduation.  Tokens below this threshold are
+#: skipped (instant/<60s) and the instant_skipped counter is incremented.
+CURVE_LIFE_MIN_S: int = 60
 
 # Config keys read defensively from the raw detection dict (NOT in the closed
 # pydantic schema, so they can be tuned live without a migration).
@@ -144,16 +168,18 @@ _CFG_SUBSCRIBE_TYPE = "graduation_subscribe_type"
 _CFG_DATA_TYPE = "graduation_data_type"
 _CFG_SUBSCRIBE_DATA = "graduation_subscribe_data"
 _CFG_EVENT_SOURCE = "event_source"
+
+# Legacy key — kept for backward compat but not used by the new MEME_DATA mapper.
 _CFG_DEX_ALLOWLIST = "graduation_dex_allowlist"
+DEFAULT_DEX_ALLOWLIST: tuple[str, ...] = ("pump_amm",)
 
 
 def build_subscribe_message(config: dict | None) -> dict:
-    """Build the typed SUBSCRIBE message dict (config-driven, with defaults).
+    """Build the typed SUBSCRIBE_MEME message dict (config-driven, with defaults).
 
-    The message ``type`` is read from ``config[graduation_subscribe_type]`` when
-    present, else DEFAULT_SUBSCRIBE_TYPE.  Any ``config[graduation_subscribe_data]``
-    dict is merged into the payload's ``data`` object so extra subscription
-    parameters (chains, platforms, etc.) can be added live without a code change.
+    For SUBSCRIBE_MEME the subscribe data MUST include ``{"graduated":true,
+    "source":"pump_dot_fun"}`` to filter server-side.  The defaults bake this in;
+    a ``graduation_subscribe_data`` override replaces it entirely.
 
     Pure function — no I/O, no network, no clock.
 
@@ -166,14 +192,15 @@ def build_subscribe_message(config: dict | None) -> dict:
     cfg = config or {}
     sub_type = cfg.get(_CFG_SUBSCRIBE_TYPE) or DEFAULT_SUBSCRIBE_TYPE
     extra_data = cfg.get(_CFG_SUBSCRIBE_DATA)
-    data: dict[str, Any] = {}
     if isinstance(extra_data, dict):
-        data.update(extra_data)
+        data: dict[str, Any] = dict(extra_data)
+    else:
+        data = dict(DEFAULT_SUBSCRIBE_DATA)
     return {"type": sub_type, "data": data}
 
 
 def _expected_data_type(config: dict | None) -> str:
-    """Return the inbound frame ``type`` string that carries a graduation."""
+    """Return the inbound frame ``type`` string that carries a meme-stats payload."""
     cfg = config or {}
     return cfg.get(_CFG_DATA_TYPE) or DEFAULT_DATA_TYPE
 
@@ -197,11 +224,7 @@ def _event_source(config: dict | None) -> str:
 
 
 def _dex_allowlist(config: dict | None) -> frozenset[str]:
-    """Return the set of raw DEX sources that count as a pump.fun graduation.
-
-    Read from ``detection.graduation_dex_allowlist`` (a list of strings) with a
-    default of ``["pump_amm"]``.  Pure function — no I/O.
-    """
+    """Return the set of raw DEX sources (legacy compat, used by old mapper)."""
     cfg = config or {}
     raw = cfg.get(_CFG_DEX_ALLOWLIST)
     if isinstance(raw, (list, tuple)) and raw:
@@ -211,36 +234,27 @@ def _dex_allowlist(config: dict | None) -> frozenset[str]:
 
 # ---------------------------------------------------------------------------
 # Pure timestamp parser — Birdeye liquidityAddedAt (ISO-8601, UTC) -> epoch int
+# (Kept for backward compat with old TOKEN_NEW_LISTING_DATA tests.)
 # ---------------------------------------------------------------------------
 
 
 def parse_liquidity_added_at(value: Any) -> int | None:
     """Map a Birdeye ``liquidityAddedAt`` value to integer epoch SECONDS (UTC).
 
-    Robust to the several shapes Birdeye (and any upstream tweak) may send:
-
+    Robust to several shapes:
       - ISO-8601 string WITHOUT offset  ("2026-06-19T07:17:33")  -> treated as UTC.
       - ISO-8601 string WITH trailing Z ("2026-06-19T07:17:33Z") -> UTC.
-      - ISO-8601 string WITH an explicit offset ("...+00:00", "...-05:00").
-      - A numeric epoch (int/float, or a numeric string)         -> passed through.
+      - ISO-8601 string WITH an explicit offset.
+      - A numeric epoch (int/float, or a numeric string).
 
-    Returns None when the value is missing or cannot be parsed (the caller then
-    falls back to the injected clock's event-arrival time and logs a warning —
-    it must NEVER crash the persistence chain).
+    Returns None when the value is missing or cannot be parsed.
 
     Pure function — no I/O, no network, no clock.
-
-    Args:
-        value: The raw ``liquidityAddedAt`` (or any timestamp) value.
-
-    Returns:
-        Integer epoch seconds (UTC), or None if unparseable.
     """
     if value is None:
         return None
 
-    # Numeric epoch passthrough (int/float, or numeric string).
-    if isinstance(value, bool):  # guard: bool is an int subclass — reject it.
+    if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
         return int(value)
@@ -248,19 +262,15 @@ def parse_liquidity_added_at(value: Any) -> int | None:
         s = value.strip()
         if not s:
             return None
-        # Numeric string passthrough ("1750000000" / "1750000000.0").
         try:
             return int(float(s))
         except ValueError:
             pass
-        # ISO-8601 parse.  Python's fromisoformat handles offsets; normalise a
-        # trailing 'Z' to '+00:00' (fromisoformat rejects 'Z' before 3.11).
         iso = s[:-1] + "+00:00" if s.endswith("Z") else s
         try:
             dt = datetime.fromisoformat(iso)
         except ValueError:
             return None
-        # Naive timestamps (no offset) are UTC per the Birdeye contract.
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return int(dt.timestamp())
@@ -269,7 +279,141 @@ def parse_liquidity_added_at(value: Any) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Pure frame mapper — raw Birdeye new-listing payload -> MEME_DATA graduation
+# NEW pure frame mapper — MEME_DATA (SUBSCRIBE_MEME shape) -> graduation event
+# ---------------------------------------------------------------------------
+
+
+def map_meme_data_frame(
+    parsed: dict,
+    *,
+    data_type: str,
+    event_source: str,
+    fallback_epoch: int,
+) -> dict | None:
+    """Map a raw Birdeye MEME_DATA frame to a graduation event dict, or None.
+
+    Returns None for any frame that should NOT trigger a graduation event:
+      - Wrong ``type`` (WELCOME, ack, TOKEN_NEW_LISTING_DATA, etc.)
+      - ``data`` not a dict
+      - Missing ``data.address`` (the mint)
+      - ``meme_info`` missing or not a dict
+      - ``meme_info.source != "pump_dot_fun"`` (non-pump.fun platform)
+      - ``meme_info.graduated != True`` (token still on bonding curve)
+      - ``meme_info.graduated_time`` missing / not a positive number
+
+    Does NOT check the curve-life gate or the dedupe seen-set — those are
+    applied by the caller (``BirdeyeGraduationSource.events()``) so that the
+    ``instant_skipped`` counter and the seen-set remain in the stateful object,
+    not this pure function.
+
+    Field mapping (real MEME_DATA frame → emitted event):
+      data.address                → address              (the mint)
+      data.decimals               → decimals             (top-level on data)
+      meme_info.graduated_time    → blockTime            (epoch int; compat alias)
+      meme_info.graduated_time    → graduated_block_time (canonical new field)
+      meme_info.creation_time     → creation_time        (epoch int)
+      meme_info.progress_percent  → progress_percent     (float)
+      meme_info.pool.address      → poolAddress          (pool pubkey or None)
+      <stamped>                   → source               ("pump_dot_fun")
+      <always True>               → graduated            (True)
+      data (verbatim)             → raw                  (for audit)
+
+    Args:
+        parsed:         JSON-parsed inbound frame dict.
+        data_type:      Frame ``type`` string that marks a meme-stats payload.
+        event_source:   ``source`` value to stamp on the emitted event.
+        fallback_epoch: Epoch seconds to use when graduated_time is missing.
+
+    Returns:
+        A graduation event dict, or None to skip the frame.
+    """
+    if not isinstance(parsed, dict) or parsed.get("type") != data_type:
+        return None
+
+    payload = parsed.get("data")
+    if not isinstance(payload, dict):
+        return None
+
+    mint = payload.get("address")
+    if not mint:
+        return None
+
+    meme_info = payload.get("meme_info")
+    if not isinstance(meme_info, dict):
+        return None
+
+    # Require pump_dot_fun source (client-side safety check).
+    if meme_info.get("source") != "pump_dot_fun":
+        logger.debug(
+            "[FIREHOSE] graduation drop: mint=%s meme_info.source=%r (not pump_dot_fun)",
+            mint,
+            meme_info.get("source"),
+        )
+        return None
+
+    # Only emit when the token has actually graduated.
+    if not meme_info.get("graduated"):
+        return None
+
+    # graduated_time is required for the anchor; fall back to injected clock.
+    raw_grad_time = meme_info.get("graduated_time")
+    if raw_grad_time is not None and isinstance(raw_grad_time, (int, float)) and not isinstance(raw_grad_time, bool):
+        graduated_time = int(raw_grad_time)
+    else:
+        logger.warning(
+            "[FIREHOSE] graduation: missing/invalid graduated_time for mint=%s "
+            "(raw=%r) — falling back to event-arrival time %d",
+            mint,
+            raw_grad_time,
+            fallback_epoch,
+        )
+        graduated_time = fallback_epoch
+
+    creation_time_raw = meme_info.get("creation_time")
+    if (
+        creation_time_raw is not None
+        and isinstance(creation_time_raw, (int, float))
+        and not isinstance(creation_time_raw, bool)
+    ):
+        creation_time = int(creation_time_raw)
+    else:
+        creation_time = 0
+
+    progress_percent = float(meme_info.get("progress_percent") or 0.0)
+
+    # Pool address is inside meme_info.pool.address.
+    pool_info = meme_info.get("pool")
+    pool_address: str | None = None
+    if isinstance(pool_info, dict):
+        pool_address = pool_info.get("address") or None
+
+    decimals_raw = payload.get("decimals")
+    decimals: int | None = (
+        int(decimals_raw)
+        if isinstance(decimals_raw, (int, float)) and not isinstance(decimals_raw, bool)
+        else None
+    )
+
+    event: dict[str, Any] = {
+        "type": "MEME_DATA",
+        "graduated": True,
+        "address": mint,
+        "source": event_source,
+        "poolAddress": pool_address,
+        # blockTime kept for DetectionConsumer compatibility (maps -> graduated_block_time).
+        "blockTime": graduated_time,
+        # New fields required by AC-1 and the locked contract (§8).
+        "graduated_block_time": graduated_time,
+        "creation_time": creation_time,
+        "progress_percent": progress_percent,
+        "decimals": decimals,
+        "raw": payload,
+    }
+    return event
+
+
+# ---------------------------------------------------------------------------
+# LEGACY pure frame mapper — TOKEN_NEW_LISTING_DATA shape (preserved for compat)
 # ---------------------------------------------------------------------------
 
 
@@ -281,41 +425,13 @@ def map_new_listing_frame(
     dex_allowlist: frozenset[str],
     fallback_epoch: int,
 ) -> dict | None:
-    """Map a raw Birdeye WebSocket frame to a MEME_DATA graduation event, or None.
+    """Map a raw Birdeye TOKEN_NEW_LISTING_DATA frame to a MEME_DATA graduation event.
 
-    Returns None for any frame that is not a *pump.fun* graduation new-listing
-    frame: WELCOME/ack/error frames, wrong type, missing mint, OR a non-pump.fun
-    DEX source (the latter is debug-logged as a drop).  The returned dict is
-    shaped EXACTLY as DetectionConsumer._persist_graduation_sync expects.
+    LEGACY — preserved for backward compatibility with
+    ``test_graduation_detection_integration_hotfix.py``.  New code should use
+    ``map_meme_data_frame`` against the MEME_DATA / SUBSCRIBE_MEME stream.
 
-    Field mapping (real Birdeye TOKEN_NEW_LISTING_DATA frame -> event):
-      data.address          -> address      (the mint; required)
-      (no pool field)        -> poolAddress  (always None — Birdeye sends none)
-      data.liquidityAddedAt -> blockTime     (ISO-8601 UTC -> epoch int)
-      <stamped>             -> source        (config-driven; e.g. "pump_dot_fun")
-      data.source           -> dex           (raw DEX, e.g. "pump_amm"; audit)
-      data (verbatim)        -> raw           (preserves the raw "source")
-
-    pump.fun filter: ``data.source`` must be in ``dex_allowlist`` (default
-    {"pump_amm"}); other DEXes are dropped (debug-logged).
-
-    Timestamp robustness: ``liquidityAddedAt`` (with/without Z/offset) and a
-    numeric epoch are both accepted via parse_liquidity_added_at.  When it is
-    missing/unparseable, ``blockTime`` falls back to ``fallback_epoch`` (the
-    caller's injected-clock event-arrival time) and a WARNING is logged — the
-    event is STILL emitted (never dropped, never a crash).
-
-    Pure function — no I/O, no network, no clock (``fallback_epoch`` is injected).
-
-    Args:
-        parsed:         A JSON-parsed inbound frame dict.
-        data_type:      The frame ``type`` string that marks a graduation payload.
-        event_source:   The ``source`` value to stamp on the emitted event.
-        dex_allowlist:  Raw ``data.source`` values that count as a pump.fun grad.
-        fallback_epoch: Epoch seconds to use when liquidityAddedAt is unparseable.
-
-    Returns:
-        A MEME_DATA graduation event dict, or None to skip the frame.
+    Returns None for any frame that is not a pump.fun graduation new-listing frame.
     """
     if not isinstance(parsed, dict) or parsed.get("type") != data_type:
         return None
@@ -332,7 +448,6 @@ def map_new_listing_frame(
     if not mint:
         return None
 
-    # --- BUG 1 fix: pump.fun-only filter on the RAW DEX source -------------
     raw_dex = payload.get("source")
     if raw_dex not in dex_allowlist:
         logger.debug(
@@ -341,9 +456,6 @@ def map_new_listing_frame(
         )
         return None
 
-    # --- BUG 4: Birdeye new-listing frames carry NO pool address ----------
-    # Tolerate the several legacy spellings for safety, but default to None so
-    # downstream knows there is genuinely no pool (not an empty placeholder).
     pool = (
         payload.get("poolAddress")
         or payload.get("pairAddress")
@@ -351,7 +463,6 @@ def map_new_listing_frame(
         or None
     )
 
-    # --- BUG 3 fix: map liquidityAddedAt (ISO-8601, UTC) -> epoch int ------
     raw_ts = (
         payload.get("liquidityAddedAt")
         or payload.get("blockUnixTime")
@@ -367,8 +478,6 @@ def map_new_listing_frame(
         )
         block_time = fallback_epoch
 
-    # --- BUG 2 fix: stamp the source the DetectionConsumer filter expects --
-    # while preserving the RAW dex under `dex` and verbatim under `raw`.
     event: dict[str, Any] = {
         "type": "MEME_DATA",
         "graduated": True,
@@ -383,34 +492,29 @@ def map_new_listing_frame(
 
 
 # ---------------------------------------------------------------------------
-# Concrete DataSource — Birdeye new-listing (graduation) stream
+# Concrete DataSource — Birdeye SUBSCRIBE_MEME (graduation) stream
 # ---------------------------------------------------------------------------
 
 
 class BirdeyeGraduationSource(DataSource):
-    """Live graduation-event source backed by the Birdeye new-listing WebSocket.
+    """Live graduation-event source backed by the Birdeye SUBSCRIBE_MEME WebSocket.
 
-    Subscribes to Birdeye's meme-platform / pump.fun new-listing stream and
-    yields MEME_DATA graduation events shaped for DetectionConsumer.  The
-    subscribe message type, the inbound data-frame type, the raw-DEX allow-list,
-    and the stamped event source are all config-driven (Principle #1) with sane
-    defaults.
+    Subscribes to Birdeye's SUBSCRIBE_MEME stream (filtered to graduated pump.fun
+    tokens) and yields MEME_DATA graduation events shaped for DetectionConsumer.
+    One event is emitted per mint on the graduated false→true transition only
+    (deduplicated by ``_seen_mints``).
+
+    Curve-life gate: tokens with ``graduated_time - creation_time < CURVE_LIFE_MIN_S``
+    (60 s) are silently skipped and the ``instant_skipped`` counter is incremented.
 
     Args:
         api_key: Birdeye API key (x-api-key query param).
         config:  The active config's raw ``detection`` section dict (or None).
-                 Read defensively for the graduation_* tuning keys (see module
-                 docstring).  Passing None uses the baked-in defaults.
-        clock:   Injected Clock (Principle #7 / AC-2.2).  Used ONLY to derive the
-                 event-arrival fallback epoch when a frame's timestamp is
-                 missing/unparseable — keeps the module free of datetime.now()/
-                 time.time() and keeps tests deterministic.  Defaults to
-                 WallClock() for production wiring convenience.
+        clock:   Injected Clock (Principle #7 / AC-2.2).  Defaults to WallClock().
 
-    Note:
-        ``websockets``/``ssl``/``certifi`` are imported lazily inside connect()
-        to keep import-time free of side effects (US-2 static-analysis guard /
-        no network at import).
+    Attributes:
+        instant_skipped: Count of graduation frames skipped because
+                         graduated_time - creation_time < CURVE_LIFE_MIN_S.
     """
 
     def __init__(
@@ -426,18 +530,16 @@ class BirdeyeGraduationSource(DataSource):
         self._data_type: str = _expected_data_type(self._config)
         self._event_source: str = _event_source(self._config)
         self._dex_allowlist: frozenset[str] = _dex_allowlist(self._config)
+        # Dedupe: tracks mints for which a graduation event has been emitted this session.
+        self._seen_mints: set[str] = set()
+        # Live instant-rate monitor (the AC-1 curve-life gate counter).
+        self.instant_skipped: int = 0
 
     async def connect(self) -> None:
-        """Open the Birdeye WebSocket and send the new-listing subscribe message.
+        """Open the Birdeye WebSocket and send the SUBSCRIBE_MEME message."""
+        import ssl
 
-        Uses the proven Birdeye handshake (matching BirdeyeSwapSource): the API
-        key is a query param, the Origin header + 'echo-protocol' subprotocol are
-        required, and TLS uses certifi.  The subscribe payload type is
-        config-driven (defaults to SUBSCRIBE_TOKEN_NEW_LISTING).
-        """
-        import ssl  # lazy — keeps import-time free of side effects
-
-        import websockets  # lazy import — keeps import-time free of network side effects
+        import websockets
 
         try:
             import certifi
@@ -458,13 +560,13 @@ class BirdeyeGraduationSource(DataSource):
         )
         subscribe_msg = json.dumps(build_subscribe_message(self._config))
         await self._ws.send(subscribe_msg)
+        sub = build_subscribe_message(self._config)
         logger.info(
-            "[FIREHOSE] graduation-source subscribed type=%s expecting_frame=%s "
-            "source=%s dex_allowlist=%s",
-            build_subscribe_message(self._config)["type"],
+            "[FIREHOSE] graduation-source subscribed type=%s data=%s expecting_frame=%s source=%s",
+            sub["type"],
+            sub["data"],
             self._data_type,
             self._event_source,
-            sorted(self._dex_allowlist),
         )
 
     async def disconnect(self) -> None:
@@ -474,15 +576,14 @@ class BirdeyeGraduationSource(DataSource):
             self._ws = None
 
     async def events(self) -> AsyncGenerator[dict[str, Any], None]:
-        """Yield MEME_DATA graduation event dicts from the Birdeye new-listing stream.
+        """Yield MEME_DATA graduation event dicts from the Birdeye SUBSCRIBE_MEME stream.
 
-        Each raw WebSocket message is JSON-parsed and logged at DEBUG level (so
-        the exact live frame format stays confirmable), then mapped via
-        map_new_listing_frame.  Non-pump.fun frames (WELCOME/ack/error, wrong
-        type, missing mint, non-allowlisted DEX) yield nothing.
-
-        The event-arrival fallback epoch is read from the injected clock here
-        (NOT inside the pure mapper) so the mapper stays pure/deterministic.
+        For each inbound frame:
+          1. JSON-parse and debug-log.
+          2. Map via ``map_meme_data_frame``; skip non-graduation frames.
+          3. Skip already-seen mints (dedupe).
+          4. Apply curve-life gate: skip + count if graduated_time - creation_time < 60s.
+          5. Mark mint as seen and yield the event.
 
         Yields nothing if the connection was never opened (``self._ws is None``).
         """
@@ -490,7 +591,6 @@ class BirdeyeGraduationSource(DataSource):
             return
 
         async for raw_message in self._ws:
-            # Debug-log the RAW frame so the live format is confirmable.
             logger.debug("[FIREHOSE] graduation raw-frame: %s", raw_message)
             try:
                 parsed = json.loads(raw_message)
@@ -498,12 +598,35 @@ class BirdeyeGraduationSource(DataSource):
                 continue
 
             fallback_epoch = int(self._clock.now().timestamp())
-            event = map_new_listing_frame(
+            event = map_meme_data_frame(
                 parsed,
                 data_type=self._data_type,
                 event_source=self._event_source,
-                dex_allowlist=self._dex_allowlist,
                 fallback_epoch=fallback_epoch,
             )
-            if event is not None:
-                yield event
+            if event is None:
+                continue
+
+            mint = event["address"]
+
+            # Dedupe: emit at most once per mint per session.
+            if mint in self._seen_mints:
+                logger.debug("[FIREHOSE] graduation dedupe: mint=%s already emitted", mint)
+                continue
+
+            # Curve-life gate: skip instant (<60s) graduations.
+            curve_life = event["graduated_block_time"] - event["creation_time"]
+            if curve_life < CURVE_LIFE_MIN_S:
+                self.instant_skipped += 1
+                logger.info(
+                    "[FIREHOSE] graduation instant-skip: mint=%s curve_life=%ds "
+                    "(<%ds) instant_skipped=%d",
+                    mint,
+                    curve_life,
+                    CURVE_LIFE_MIN_S,
+                    self.instant_skipped,
+                )
+                continue
+
+            self._seen_mints.add(mint)
+            yield event

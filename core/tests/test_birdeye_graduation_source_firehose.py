@@ -4,15 +4,19 @@
 # story: live-firehose-spine, hotfix-graduation-pumpfun-mapping
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-19
+# last-updated: 2026-06-20
 # dependencies: pytest, asyncio, ast, datetime, pathlib,
 #               core.tape.birdeye_graduation_source, core.replay_source,
 #               core.detection.consumer, core.clock
 # ---
-"""Offline tests for BirdeyeGraduationSource (no network, deterministic).
+"""Offline tests for BirdeyeGraduationSource legacy TOKEN_NEW_LISTING_DATA mapper.
 
-Built against the REAL observed Birdeye frames (see the module docstring of
-core/tape/birdeye_graduation_source.py).  Verifies the hotfix:
+Tests the LEGACY ``map_new_listing_frame`` function (TOKEN_NEW_LISTING_DATA shape)
+which is preserved for backward compatibility.  New graduation detection uses
+``map_meme_data_frame`` (SUBSCRIBE_MEME / MEME_DATA) — see
+``test_birdeye_graduation_source_us76_ac1.py``.
+
+The frame shape and hotfixes tested here:
 
   BUG 1  pump.fun-only filter: only data.source in the allow-list (default
          ["pump_amm"]) is emitted; pancakeswap_v3 / meteora_damm_v2 / WELCOME
@@ -27,6 +31,11 @@ core/tape/birdeye_graduation_source.py).  Verifies the hotfix:
          DetectionConsumer persists a Token row with an empty pool, no crash.
 
 Plus the standing architectural guards (lazy imports, no wall-clock calls).
+
+US-76 AC-1 note: DEFAULT_SUBSCRIBE_TYPE is now "SUBSCRIBE_MEME" and DEFAULT_DATA_TYPE
+is now "MEME_DATA" (the live subscription was switched to SUBSCRIBE_MEME).  This file's
+legacy tests use the literal "TOKEN_NEW_LISTING_DATA" data_type when calling
+map_new_listing_frame, since that function is for the old frame shape.
 """
 import ast
 import asyncio
@@ -36,10 +45,8 @@ from pathlib import Path
 
 from core.clock import VirtualClock
 from core.tape.birdeye_graduation_source import (
-    DEFAULT_DATA_TYPE,
     DEFAULT_DEX_ALLOWLIST,
     DEFAULT_EVENT_SOURCE,
-    DEFAULT_SUBSCRIBE_TYPE,
     BirdeyeGraduationSource,
     build_subscribe_message,
     map_new_listing_frame,
@@ -52,14 +59,18 @@ MODULE_PATH = (
 )
 
 # ---------------------------------------------------------------------------
-# REAL observed Birdeye frames (verbatim shapes from the live window).
+# REAL observed Birdeye TOKEN_NEW_LISTING_DATA frames (legacy shape).
+# map_new_listing_frame only accepts type=="TOKEN_NEW_LISTING_DATA".
 # ---------------------------------------------------------------------------
 
 _WELCOME_FRAME = {"type": "WELCOME", "data": None}
 
+# The legacy data type string for map_new_listing_frame.
+_LEGACY_DATA_TYPE = "TOKEN_NEW_LISTING_DATA"
+
 # pump.fun graduation (WANT) — source == "pump_amm" (PumpSwap).
 _PUMP_FRAME = {
-    "type": "TOKEN_NEW_LISTING_DATA",
+    "type": _LEGACY_DATA_TYPE,
     "data": {
         "address": "6Y5PBgk9rVC9ycsVTxYi6nFtSytEBrYTPy3mL39Nwokn",
         "decimals": 9,
@@ -73,7 +84,7 @@ _PUMP_FRAME = {
 
 # NON-pump.fun graduations (DROP) — same shape, different DEX source.
 _PANCAKE_FRAME = {
-    "type": "TOKEN_NEW_LISTING_DATA",
+    "type": _LEGACY_DATA_TYPE,
     "data": {
         "address": "PancakeMintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "decimals": 9,
@@ -85,7 +96,7 @@ _PANCAKE_FRAME = {
     },
 }
 _METEORA_FRAME = {
-    "type": "TOKEN_NEW_LISTING_DATA",
+    "type": _LEGACY_DATA_TYPE,
     "data": {
         "address": "MeteoraMintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "decimals": 9,
@@ -110,7 +121,7 @@ _ALLOW = frozenset(DEFAULT_DEX_ALLOWLIST)
 def _map(frame, *, event_source=DEFAULT_EVENT_SOURCE, allow=_ALLOW, fallback=_FALLBACK_EPOCH):
     return map_new_listing_frame(
         frame,
-        data_type=DEFAULT_DATA_TYPE,
+        data_type=_LEGACY_DATA_TYPE,
         event_source=event_source,
         dex_allowlist=allow,
         fallback_epoch=fallback,
@@ -138,7 +149,7 @@ def test_dex_allowlist_is_config_driven():
 
 
 def test_missing_mint_dropped():
-    no_mint = {"type": DEFAULT_DATA_TYPE, "data": {"source": "pump_amm"}}
+    no_mint = {"type": _LEGACY_DATA_TYPE, "data": {"source": "pump_amm"}}
     assert _map(no_mint) is None
 
 
@@ -201,12 +212,7 @@ def test_parse_bad_value_returns_none():
 
 
 def test_bad_timestamp_falls_back_and_warns():
-    """Bad/missing timestamp -> fallback epoch + a WARNING, never a crash/drop.
-
-    The project ships its own logging config (the module logger does not
-    propagate to caplog's root handler), so we attach a local handler to the
-    module logger directly to assert the warning deterministically.
-    """
+    """Bad/missing timestamp -> fallback epoch + a WARNING, never a crash/drop."""
     import logging
 
     from core.tape import birdeye_graduation_source as mod
@@ -223,7 +229,7 @@ def test_bad_timestamp_falls_back_and_warns():
     mod.logger.setLevel(logging.WARNING)
     try:
         bad = {
-            "type": DEFAULT_DATA_TYPE,
+            "type": _LEGACY_DATA_TYPE,
             "data": {"address": "M", "source": "pump_amm", "liquidityAddedAt": "garbage"},
         }
         event = _map(bad)
@@ -251,10 +257,12 @@ def test_pool_address_is_none_when_frame_has_no_pool():
 # ---------------------------------------------------------------------------
 
 
-def test_subscribe_message_defaults():
+def test_subscribe_message_is_now_subscribe_meme():
+    """US-76 AC-1: default subscription is SUBSCRIBE_MEME (not SUBSCRIBE_TOKEN_NEW_LISTING)."""
     msg = build_subscribe_message(None)
-    assert msg["type"] == DEFAULT_SUBSCRIBE_TYPE
-    assert msg["data"] == {}
+    assert msg["type"] == "SUBSCRIBE_MEME"
+    assert msg["data"]["graduated"] is True
+    assert msg["data"]["source"] == "pump_dot_fun"
 
 
 def test_subscribe_message_config_override():
@@ -292,7 +300,8 @@ def test_default_allowlist_is_pump_amm():
 
 
 # ---------------------------------------------------------------------------
-# End-to-end (offline): events() over a fake ws yields exactly the pump frame.
+# End-to-end (offline): events() over a fake ws yields nothing for legacy frames
+# (legacy TOKEN_NEW_LISTING_DATA frames are not recognized by the MEME_DATA mapper)
 # ---------------------------------------------------------------------------
 
 
@@ -314,8 +323,13 @@ class _FakeWS:
         self._closed = True
 
 
-def test_events_yields_only_pump_amm_graduation():
-    """Feed the 3 real shapes + WELCOME; only pump_amm yields a MEME_DATA event."""
+def test_events_legacy_frames_yield_nothing_via_meme_data_mapper():
+    """TOKEN_NEW_LISTING_DATA frames are NOT recognized by the new MEME_DATA mapper.
+
+    The events() loop now uses map_meme_data_frame which expects type=="MEME_DATA".
+    Legacy frames (type=="TOKEN_NEW_LISTING_DATA") are silently dropped.
+    This confirms the old subscription is dead — only SUBSCRIBE_MEME frames fire.
+    """
     source = BirdeyeGraduationSource(api_key="k", config=None, clock=VirtualClock(_T0))
     source._ws = _FakeWS([_WELCOME_FRAME, _PUMP_FRAME, _PANCAKE_FRAME, _METEORA_FRAME])
 
@@ -323,17 +337,8 @@ def test_events_yields_only_pump_amm_graduation():
         return [e async for e in source.events()]
 
     events = asyncio.run(_collect())
-    assert len(events) == 1
-    ev = events[0]
-    assert ev["type"] == "MEME_DATA"
-    assert ev["graduated"] is True
-    assert ev["source"] == "pump_dot_fun"
-    assert ev["address"] == _PUMP_FRAME["data"]["address"]
-    assert ev["blockTime"] == _PUMP_EPOCH
-    assert isinstance(ev["blockTime"], int)
-    assert ev["dex"] == "pump_amm"
-    assert ev["raw"]["source"] == "pump_amm"
-    assert ev["poolAddress"] is None
+    # Legacy frames are dropped by the new mapper — zero events.
+    assert len(events) == 0
 
 
 def test_events_run_twice_identical():

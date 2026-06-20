@@ -3,8 +3,10 @@
 <!--
 module: scrum-master/EPIC-US76-graduate-inference-foundation.md
 type: epic (engineering design + backlog)
-status: PROPOSED — the core path to "graduate inference fires live". Owner: solanatrilly (core).
+status: AC-1 implemented — detection fix shipped on feature/US-76-AC-1.
 created: 2026-06-20
+last-updated: 2026-06-20
+last-updated-by: dev-team
 contract: solanatrills/docs/solanatrilly_buildout_directives.md §8 (PRE-GRAD MODEL SERVING CONTRACT) — binding
 pairs-with: EPIC-US75 (slippage/copy), future US-77 (v4 wallet bank), US-78 (data contract)
 -->
@@ -73,6 +75,20 @@ listing flood) — the validation window must run long enough to catch one.
 - **AC:** against banked real frames (`/tmp/meme_frames.json` + a graduated-frame fixture), the mapper emits
   exactly one event per graduated mint with the right anchor; non-graduated frames emit nothing; an
   instant (<60s) graduation is skipped + counted.
+
+**Dev Team Status:** implemented
+**Dev Team Notes:**
+- Rewrote frame-mapper as `map_meme_data_frame` in `core/tape/birdeye_graduation_source.py` for MEME_DATA shape.
+- Subscription switched to `SUBSCRIBE_MEME` with `{"graduated":true,"source":"pump_dot_fun"}` via `DEFAULT_SUBSCRIBE_DATA`.
+- New constants: `DEFAULT_SUBSCRIBE_TYPE="SUBSCRIBE_MEME"`, `DEFAULT_DATA_TYPE="MEME_DATA"`, `CURVE_LIFE_MIN_S=60`.
+- Legacy `map_new_listing_frame` preserved for backward-compat with integration test; `events()` uses new mapper only.
+- `BirdeyeGraduationSource` gains `instant_skipped: int` counter and `_seen_mints: set[str]` for deduplication.
+- Committed fixture: `core/tests/fixtures/meme_data_frames.json` — 6 real non-graduated frames + 4 synthetic variants.
+- New test file: `core/tests/test_birdeye_graduation_source_us76_ac1.py` (41 tests); updated legacy test (23 tests); updated integration test.
+- Instant-skip gate verified by: `test_events_skips_instant_graduation_and_increments_counter` (30s curve life, instant_skipped==1); `test_events_instant_skipped_counts_multiple` (two instants, counter==2); `test_events_mixed_frames_emit_only_valid_graduation` (mix of 6 real + instant + non-pump + graduated yields exactly 1 event, instant_skipped==1).
+- Discrepancy vs epic prose: the real frames show `meme_info.pool` as a rich object (`{"address":...,"realSolReserves":...,...}`), not just `{"address":<pool>}` as in the epic's prose summary. The mapper reads only `pool["address"]` — handles both shapes.
+- 64/64 unit tests + 2/2 integration tests pass; `ruff check .` clean.
+- blocker-type: none
 
 ### AC-2 — Single `NormalizedSwap` layer (SOL-space, per-mint decimals, guarded)
 - One module every source passes through (Helius live, Birdeye offline-style, any future) → byte-identical
