@@ -77,19 +77,30 @@ def test_reference_dist_json_committed() -> None:
 
 
 def test_reference_dist_json_loads() -> None:
-    """reference_dist.json is valid JSON with the expected label keys."""
+    """reference_dist.json is the lab serving-bundle format with per-label score grids.
+
+    The canonical reference is the lab's serving bundle (built by
+    analysis/graduated/build_serving_bundle.py on the unified-sort golden,
+    directives §8/§9): a per-label score→percentile GRID under
+    ``score_grid_by_label`` plus the blend recipe + ``rank_cut_by_per_day``.
+    """
     assert _REF_DIST_PATH.is_file(), "reference_dist.json missing (see P1.1)"
     with _REF_DIST_PATH.open(encoding="utf-8") as fh:
         data = json.load(fh)
-    label_keys = [k for k in data if not k.startswith("_")]
-    assert set(label_keys) == {"ctrl", "oracle", "liq"}, (
-        f"reference_dist.json has unexpected label keys: {label_keys}"
+    grid = data.get("score_grid_by_label")
+    assert isinstance(grid, dict) and set(grid.keys()) == {"ctrl", "oracle", "liq"}, (
+        f"reference_dist.json score_grid_by_label has unexpected labels: "
+        f"{list(grid.keys()) if isinstance(grid, dict) else grid}"
     )
-    for label in label_keys:
-        assert isinstance(data[label], list), f"data[{label!r}] must be a list of floats"
-        assert len(data[label]) > 1000, (
-            f"data[{label!r}] has only {len(data[label])} entries — expected full corpus"
+    for label in grid:
+        assert isinstance(grid[label], list), f"score_grid_by_label[{label!r}] must be a list"
+        assert len(grid[label]) > 1000, (
+            f"score_grid_by_label[{label!r}] has only {len(grid[label])} points — "
+            "expected the 1001-point percentile grid"
         )
+    assert "30" in data.get("rank_cut_by_per_day", {}), (
+        "reference_dist.json must carry rank_cut_by_per_day with the 30/day cut"
+    )
 
 
 def test_reference_dist_loads_via_scorer() -> None:

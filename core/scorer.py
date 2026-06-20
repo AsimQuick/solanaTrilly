@@ -161,12 +161,29 @@ class ReferenceDistribution:
     def from_file(cls, path: "str | Path") -> "ReferenceDistribution":
         """Load from a JSON file at ScoringConfig.reference_dist_path.
 
-        The file must contain a JSON object mapping label names to lists of
-        floats (the banked per-label label-score distribution from training).
-        Keys starting with '_' are treated as metadata and skipped.
+        Supports TWO formats:
+
+        1. Lab serving-bundle format (canonical, US-76 / directives §8/§9, built by
+           analysis/graduated/build_serving_bundle.py): a JSON object with a
+           ``score_grid_by_label`` key mapping each label to a per-label
+           score→percentile GRID (``np.quantile(preds, linspace(0,1,1001))``, sorted
+           ascending).  The count-based ``percentile_rank`` over this 1001-point grid
+           reproduces the population percentile to grid resolution (~1e-3), which is
+           exactly the cross-sectional ranking the live single-token path needs.
+
+        2. Legacy format: a JSON object mapping label names directly to the full
+           sorted per-label score list (``_``-prefixed keys are metadata, skipped).
+
+        The lab format is detected by the presence of ``score_grid_by_label``.
         """
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
+        grid = data.get("score_grid_by_label")
+        if isinstance(grid, dict) and grid:
+            # Lab serving-bundle format — the per-label quantile grid IS the
+            # reference distribution for count-based percentile ranking.
+            label_data = {k: v for k, v in grid.items() if isinstance(v, list)}
+            return cls.from_dict(label_data)
         label_data = {k: v for k, v in data.items() if not k.startswith("_") and isinstance(v, list)}
         return cls.from_dict(label_data)
 

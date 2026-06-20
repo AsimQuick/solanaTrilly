@@ -93,6 +93,7 @@ def to_pregrad_swaps(
     graduated_block_time: int,
     *,
     base_decimals: int = 6,
+    sol_usd_spot: Optional[float] = None,
 ) -> list[dict]:
     """Normalise collected swap dicts to the §7.1 shape compute_pregrad_features expects.
 
@@ -122,6 +123,9 @@ def to_pregrad_swaps(
                               event MEME_DATA ``decimals`` field).  Default 6 for
                               pump.fun SPL tokens.  Pass via MintDecimalsResolver
                               at the call site; never hardcode in callers.
+        sol_usd_spot:         Single graduation-time SOL/USD spot.  When given, the
+                              feature ``vol`` is USD (vol_sol × spot) — the US-76
+                              BREAK-1 serving fix.  None → SOL-space ``vol``.
 
     Returns:
         A list of §7.1 swap dicts with rel/side/owner/vol/block_time/slot/
@@ -137,6 +141,7 @@ def to_pregrad_swaps(
             graduated_block_time=graduated_block_time,
             base_decimals=base_decimals,
             peer_prices=peer_prices,
+            sol_usd_spot=sol_usd_spot,
         )
         if normalised is None:
             # Rejected: zero/dust price, missing block_time, or invalid side.
@@ -158,6 +163,7 @@ def assemble_pregrad_features(
     deployer: str | None = None,
     min_pregrad_swaps: int = 20,
     base_decimals: int = 6,
+    sol_usd_spot: Optional[float] = None,
 ) -> dict | None:
     """Assemble the 20 PRE_FEATURE_NAMES features from collected pre-grad swaps.
 
@@ -192,12 +198,19 @@ def assemble_pregrad_features(
                               (secondary gate, default 20).
         base_decimals:        Per-mint base-token decimals (from MintDecimalsResolver).
                               Default 6 for pump.fun SPL tokens.
+        sol_usd_spot:         Single graduation-time SOL/USD spot.  When given, the
+                              feature ``vol`` is computed in USD (vol_sol × spot) —
+                              the US-76 BREAK-1 fix that reproduces the offline
+                              trained feature space and makes pre_insider_sell_ratio
+                              parity-true.  None → SOL-space (back-compat default).
 
     Returns:
         Dict of the 20 pre_* features, or None if there are no usable pre-grad
         swaps after the window cap or the secondary gate rejects the token.
     """
-    normalized = to_pregrad_swaps(swaps, graduated_block_time, base_decimals=base_decimals)
+    normalized = to_pregrad_swaps(
+        swaps, graduated_block_time, base_decimals=base_decimals, sol_usd_spot=sol_usd_spot
+    )
     # P1.2 -- 3600s window cap: match offline backfill_pregrad.py CAP=3600.
     # Only swaps with rel in [-3600, 0) qualify.
     windowed = [s for s in normalized if -3600 <= s["rel"] < 0]

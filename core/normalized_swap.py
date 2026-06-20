@@ -274,6 +274,7 @@ def normalize_raw_for_features(
     graduated_block_time: int,
     base_decimals: int = DEFAULT_BASE_DECIMALS,
     peer_prices: Optional[list[float]] = None,
+    sol_usd_spot: Optional[float] = None,
 ) -> Optional[dict]:
     """Normalise one raw swap dict into the §7.1 shape compute_pregrad_features expects.
 
@@ -296,11 +297,15 @@ def normalize_raw_for_features(
        from the Helius SOL leg and does NOT need decimal scaling — it is already
        in SOL-space (lamports / 1e9).
 
-    4. SOL-space volume (directives §8 Q2): volume is the SOL notional from the
-       ``vol_sol`` field (the Helius SOL leg, already in SOL).  No per-trade USD
-       conversion is done here — v3.2 features are ratios that cancel SOL/USD.
-       ``vol_usd`` / ``sol_usd`` pass through as-is for storage (may be 0.0 /
-       nan for Helius-live where no USD oracle is available).
+    4. Volume basis (directives §8/§9, US-76 BREAK-1): the feature-math ``vol``
+       key is SOL-space by default (``vol_sol``, the Helius SOL leg) — scale-
+       invariant for the 19 ratio features.  When ``sol_usd_spot`` is supplied,
+       ``vol`` becomes USD (``vol_sol × spot``) using ONE graduation-time spot,
+       reproducing the offline trained feature space and fixing the only non-
+       scale-invariant feature, ``pre_insider_sell_ratio`` (its +1.0 smoother is
+       negligible at USD scale).  ``vol_sol`` always stays the raw SOL leg.
+       ``vol_usd`` / ``sol_usd`` pass through as-is for storage (may be 0.0 / nan
+       for Helius-live where no per-trade USD oracle is available).
 
     5. Output shape: the returned dict has EXACTLY the keys that §7.1 requires
        for compute_pregrad_features:
@@ -316,6 +321,9 @@ def normalize_raw_for_features(
         peer_prices:          Other recent prices for the dust-median guard.  Pass
                               the prices of swaps already processed in this tape
                               window.  May be None (treated as empty).
+        sol_usd_spot:         Single graduation-time SOL/USD spot.  When given,
+                              the feature ``vol`` is computed in USD (vol_sol ×
+                              spot) — the BREAK-1 fix.  None → SOL-space ``vol``.
 
     Returns:
         A §7.1 dict ready for compute_pregrad_features, or None if the swap is
@@ -364,9 +372,23 @@ def normalize_raw_for_features(
         except (TypeError, ValueError, OverflowError):
             pass  # token_ui conversion failure is non-fatal for v3.2
 
-    # vol is always SOL-space (directives §8 Q2 — scale-invariant for v3.2)
+    # vol_sol is the raw SOL leg (always SOL-space, preserved for downstream).
     if math.isnan(vol_sol) or vol_sol < 0.0:
         vol_sol = 0.0  # degenerate volume → treat as 0 (swap included, no division by vol needed)
+
+    # The feature-math ``vol`` key (directives §8/§9, US-76 BREAK-1 resolution):
+    #   - sol_usd_spot is None  → SOL-space ``vol`` (backward-compatible default;
+    #     scale-invariant for the 19 ratio features, used by existing unit tests).
+    #   - sol_usd_spot given     → USD ``vol`` = vol_sol × spot.  Reproduces the
+    #     OFFLINE trained feature space (offline vol = uiAmount_SOL × quotePrice).
+    #     A SINGLE graduation-time spot (not per-trade) is sufficient: it cancels
+    #     out of the 19 ratios and only makes pre_insider_sell_ratio's +1.0 Laplace
+    #     smoother negligible at USD scale (the BREAK-1 fix).  Per-trade USD is NOT
+    #     needed because SOL/USD is ~constant over the ~6.5-min curve window.
+    if sol_usd_spot is not None and sol_usd_spot > 0.0:
+        vol_feat = float(vol_sol) * float(sol_usd_spot)
+    else:
+        vol_feat = float(vol_sol)
 
     # ------------------------------------------------------------------
     # 4. Build the §7.1 output dict
@@ -379,8 +401,8 @@ def normalize_raw_for_features(
         "signature": str(raw.get("signature") or ""),
         "price": float(price),
         "side": side,
-        "vol": float(vol_sol),        # the key the feature math uses
-        "vol_sol": float(vol_sol),    # alias — for downstream consumers that use vol_sol
+        "vol": float(vol_feat),       # the key the feature math uses (USD when spot given)
+        "vol_sol": float(vol_sol),    # raw SOL leg — for downstream consumers that use vol_sol
         "owner": raw.get("owner"),
         # Ancillary fields — preserved for storage / downstream consumers
         "vol_usd": float(vol_usd) if not math.isnan(vol_usd) else float("nan"),

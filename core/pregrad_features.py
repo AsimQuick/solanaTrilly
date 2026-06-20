@@ -24,7 +24,10 @@ FeatureExtractor._load_lake_swaps / _load_db_swaps):
                              pre-grad swaps have rel < 0
       "side":       str    — "buy" | "sell"
       "owner":      str|None — signer wallet
-      "vol":        float  — SOL volume (vol_sol after normalization)
+      "vol":        float  — feature volume: SOL (vol_sol) by default, or USD
+                             (vol_sol × single graduation-time SOL/USD spot) when
+                             the normalisation layer was given sol_usd_spot (US-76
+                             BREAK-1 serving fix); the math is basis-agnostic
       "block_time": int
       "slot":       int
       "signature":  str
@@ -118,8 +121,16 @@ def compute_pregrad_features(
     if not pregrad:
         return None
 
-    # Stable sort: (block_time, slot, signature) — same key as _load_lake_swaps.
-    pregrad.sort(key=lambda s: (s.get("block_time", 0), s.get("slot", 0), s.get("signature", "")))
+    # Stable sort: (block_time, signature) — the UNIFIED pre-grad serving key
+    # (directives §8/§9, US-76 BREAK-2 resolution).  The offline oracle
+    # enrich_pregrad.py sorts same-block ties by ``(blockUnixTime, txHash)`` ONLY;
+    # ``signature`` == Helius signature == Birdeye ``txHash`` (same base58 string),
+    # so both paths order identically.  We deliberately DROP ``slot`` here: block
+    # time is integer seconds (Birdeye blockUnixTime) and a finer key (slot) would
+    # re-break same-second ties the golden left to txHash.  This intentionally
+    # diverges from the recorder/lake canonical key (block_time, slot, signature,
+    # #403) — that key governs durable storage order, NOT pre-grad cohort parity.
+    pregrad.sort(key=lambda s: (s.get("block_time", 0), s.get("signature", "")))
 
     # Time-window anchors (in rel space; rel 0 = graduation).
     all_rels = [s["rel"] for s in pregrad]
