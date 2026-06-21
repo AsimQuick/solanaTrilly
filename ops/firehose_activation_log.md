@@ -19,8 +19,8 @@ last-updated: 2026-06-17
 | Source    | Total | Used | Remaining |
 |-----------|------:|-----:|----------:|
 | Birdeye   |    10 |    4 |         6 |
-| Helius    |    10 |    3 |         7 |
-| **Total** |**20** | **7**|    **13** |
+| Helius    |    10 |    4 |         6 |
+| **Total** |**20** | **8**|    **12** |
 
 Both Birdeye and Helius API keys are provisioned in `.env` (gitignored + untracked).
 They are **never committed** — not here, not in any source file, not in any workflow file.
@@ -253,3 +253,30 @@ active v4 model. Brief (~30s) scoring/collection gap only.
 **Teardown:** `firehose_state off` (or dashboard Inference Stop) when the observe read is
 banked; service then idles (no spend). `trading_enabled` stays False (model track is
 $0/observe — real capital is operator-gated, not authorized on the model track).
+
+---
+
+## 2026-06-21 — Helius activation #4: single-connection fan-out validation (Build 1, PR #371)
+
+`firehose_active=t, scoring_enabled=f, trading_enabled=f` (OBSERVE — infra-validation
+only, scoring OFF). ~14 min window.
+
+**Source counted:** Helius (the thing under test — single-connection collection+graduation
+fan-out, PR #371 / `7e73f2b`). The Birdeye SECONDARY reconciler (new-listing poll) ran as
+backstop, but with scoring OFF **no** per-token Birdeye post-grad subs or trade-history REST
+fired → negligible Birdeye spend; counted as 1 Helius activation, not a Birdeye one.
+
+**Purpose:** validate that the merged SINGLE Helius `transactionSubscribe` connection serves
+BOTH the pre-grad collection buffer AND graduation detection after deleting the flaky 2nd
+graduation connection (kills the silent-connection failure mode + adds a no-data watchdog).
+
+**Result (clean — Build 1 validated in production):**
+- `[FIREHOSE] helius: single-connection fan-out started (attempt=1, idle_ttl=1800s, watchdog=120s, event_source=pump_dot_fun)`
+- **25** graduations detected via `helius_migrate` on the single connection (~107/hr).
+- Collection healthy: **779 mints / 17,170 swaps** buffered and climbing — NOT starved by
+  sharing the socket with graduation detection.
+- No-data watchdog fired **0×** (no false-positive under normal frame load).
+- **Zero** ERROR / traceback lines.
+
+**Teardown:** `firehose_state off` → `f|f|f`. `trading_enabled` never moved. Verdict: the
+silent-graduation-connection failure mode is structurally eliminated; no more restart-babysitting.
