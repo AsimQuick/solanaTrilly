@@ -34,6 +34,7 @@ All HTTP calls require a live wallet key provisioned at Cutover (§16).
 from __future__ import annotations
 
 import collections
+import logging
 import time
 from dataclasses import dataclass, field
 
@@ -113,8 +114,8 @@ class GhostBuyResult:
     Attributes:
         received: True = tokens landed; False = ghost buy; None = inconclusive
                   (all poll attempts returned RPC errors, so we cannot confirm
-                  whether tokens arrived — the caller should book the position
-                  to avoid orphaning tokens that may have landed).
+                  whether tokens arrived — the position is NOT booked; the send
+                  signature is logged for manual reconciliation if tokens landed).
         balance:  Actual ATA balance in raw token units.
                   0  → ghost buy confirmed.
                   -1 → inconclusive (all RPC errors).
@@ -332,6 +333,17 @@ class Sender:
             window_s=self._cfg.cb_window_s,
             cooldown_s=self._cfg.cb_cooldown_s,
         )
+        # Fail-LOUD on misconfiguration: simulate() and _confirm() both POST to
+        # rpc_url. If it is empty while the Sender is otherwise live-configured,
+        # every simulate() raises -> SimulateResult(ok=None) -> execute_buy
+        # refuses every buy with reason="preflight_failed" SILENTLY (no crash,
+        # just a WARNING per tx). Surface it once at construction instead.
+        if self._cfg.sender_url and not self._cfg.rpc_url:
+            logging.getLogger("trading").error(
+                "[sender] rpc_url is EMPTY — simulate()/_confirm() will fail and "
+                "ALL live sends will be refused (preflight_failed). Set the Helius "
+                "RPC URL in SenderConfig.rpc_url before enabling trading."
+            )
 
     # ------------------------------------------------------------------
     # Public API — called ONLY from ExecutionCore when trading_enabled=True
