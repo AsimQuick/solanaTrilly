@@ -162,20 +162,19 @@ def _map_rest_item(
         blockUnixTime       -> block_time
         side                -> side         ("buy" or "sell")
         owner               -> owner
-        base.uiChangeAmount -> (cross-check on side; signed qty +buy/-sell)
         base.price          -> price        (USD per token, same as tokenPrice in WS)
-        volume_usd          -> vol_usd
+        quote.uiChangeAmount -> vol_sol      (SOL notional; quote leg is the SOL side)
+        quote.price          -> sol_usd      (SOL/USD; fallback when no spot passed)
         base.address        -> mint (cross-check)
 
-    The SOL volume (vol_sol) is derived as ``vol_usd / sol_usd_spot`` when the
-    spot is available.  When it is not, we fall back to ``abs(uiChangeAmount)``
-    expressed in SOL units is unavailable from this endpoint, so we use
-    ``vol_usd / sol_usd_spot`` as the canonical path.
+    Real seek_by_time items carry NO top-level ``volume_usd``.  The SOL notional
+    of the swap lives on the ``quote`` leg (the SOL side).  ``vol_sol`` is the
+    parity-critical field: the live Helius path stores ``sol_amount/1e9`` and the
+    feature layer derives the USD feature ``vol`` as ``vol_sol × sol_usd_spot``.
 
     sol_usd (the per-swap pricing value stored in the swap dict) is set to the
-    caller-supplied ``sol_usd_spot`` when available; otherwise falls back to
-    computing it from the item's ``volume_usd / (abs(uiChangeAmount) * price)``
-    where that is resolvable.
+    caller-supplied ``sol_usd_spot`` when available; otherwise falls back to the
+    item's own quote-leg USD price (``quote.price``).
 
     The returned dict is identical in structure to what ``map_birdeye_swap``
     produces from a WebSocket SUBSCRIBE_TXS event (§7.1 contract):
@@ -224,44 +223,33 @@ def _map_rest_item(
     if price <= 0:
         return None
 
+    # --- SOL volume (vol_sol) from the SOL quote leg ---
+    # Real seek_by_time items carry NO top-level volume_usd; the SOL notional of
+    # the swap lives on the quote leg (the SOL side: address == WSOL, with
+    # uiChangeAmount / uiAmount in SOL units and price = SOL/USD).  vol_sol is the
+    # parity-critical field: the live Helius path stores sol_amount/1e9 and the
+    # feature layer (to_pregrad_swaps) derives the USD feature `vol` as
+    # vol_sol × sol_usd_spot.  So we set vol_sol to the swap's SOL amount here.
+    quote = item.get("quote") or {}
     try:
-        vol_usd = float(item.get("volume_usd") or 0.0)
+        vol_sol = abs(float(quote.get("uiChangeAmount") or quote.get("uiAmount") or 0.0))
     except (TypeError, ValueError):
-        vol_usd = 0.0
+        vol_sol = 0.0
 
-    if vol_usd <= 0:
+    if vol_sol <= 0:
         return None
 
-    # --- SOL volume and sol_usd ---
-    # sol_usd is the spot passed in from the scorer's cached oracle (consistent
-    # with the live and lake paths — no stale or invented value).
+    # sol_usd: prefer the caller's cached spot (consistent with the live/lake
+    # paths — no stale/invented value); otherwise fall back to the item's own
+    # quote-leg USD price (quote.price = SOL/USD).
     if sol_usd_spot is not None and sol_usd_spot > 0:
         sol_usd = sol_usd_spot
-        vol_sol = vol_usd / sol_usd_spot
     else:
-        # Fallback: the REST item doesn't have an explicit quote leg price,
-        # so we derive sol_usd from vol_usd / (abs(ui_change) * price) where
-        # ui_change is the base token amount in token units.
-        # If that is not resolvable, use 0 for sol_usd (scorer won't use it
-        # for pre-grad features but it must be present in the dict shape).
         try:
-            ui_change = abs(float(base.get("uiChangeAmount") or 0.0))
+            sol_usd = float(quote.get("price") or 0.0)
         except (TypeError, ValueError):
-            ui_change = 0.0
-
-        if ui_change > 0 and price > 0:
-            # vol_usd ≈ ui_change (tokens) * price (USD/token)  — corroborated
-            # by the exchange rate: sol_usd = vol_usd / vol_sol
-            # But we don't have vol_sol directly; approximate via:
-            #   vol_sol = vol_usd / sol_usd  (circular)
-            # Fall back to 0: the feature assembler uses sol_usd only as a
-            # scalar multiplier for vol_sol → vol_usd.  Without a spot,
-            # vol_sol won't be meaningful regardless.
             sol_usd = 0.0
-            vol_sol = 0.0
-        else:
-            sol_usd = 0.0
-            vol_sol = 0.0
+    vol_usd = vol_sol * sol_usd if sol_usd > 0 else 0.0
 
     # slot: not present in seek_by_time items; use 0 as a sentinel (consistent
     # with what the feature assembler tolerates — slot is used only in sorting).
