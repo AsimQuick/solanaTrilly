@@ -130,6 +130,13 @@ services:
     command: python manage.py run_copytrade_engine
     volumes:
       - /root/solanatrilly/models:/app/models:ro
+      # EPIC-copy-paper-fill-repricing showstopper fix: mount the firehose lake
+      # so the reprice_copy_fill Celery task (dispatched from close_position) can
+      # read lake rows.  The settler runs on celery-worker (which already mounts it);
+      # copytrade_engine dispatches .delay() — the task body runs on celery-worker,
+      # NOT copytrade_engine.  Mount is defensive: if any future code path directly
+      # reads the lake from copytrade_engine, it will find the volume here.
+      - solanatrilly_lake:/app/lake/firehose
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly

@@ -14,10 +14,16 @@
 //   per-wallet toggles. Data from /api/copytrade/* endpoints (US-63 AC-63.1).
 //   Export dispatched via /api/copytrade/export/trigger/ to celery-worker (NEVER
 //   web/gunicorn, #289); result polled via existing §6.5 /api/export/result/<task_id>/.
+//
+//   EPIC-copy-paper-fill-repricing additions:
+//   - Net-PnL cell shows "(curve-sim — not yet repriced)" annotation in yellow
+//     when pnl_is_repriced=false (summary field from API).
+//   - "N signals skipped (slippage)" chip shown when n_rejected>0.
+//   - No FE PnL math change — reads API values as before.
 // created-by: dev-team
-// sprint: sprint-12
-// story: US-63 AC-63.2, AC-63.3
-// last-updated: 2026-06-18
+// sprint: sprint-12, epic/copy-paper-fill-repricing
+// story: US-63 AC-63.2, AC-63.3, EPIC-copy-paper-fill-repricing
+// last-updated: 2026-06-21
 // ---
 
 import { useState, useEffect, useRef } from 'react'
@@ -391,24 +397,55 @@ function RecentTradesLog({ trades }) {
 
 function CohortSummary({ summary }) {
   if (!summary) return null
+
+  // EPIC-copy-paper-fill-repricing: trustworthiness annotation
+  const pnlIsRepriced = summary.pnl_is_repriced === true
+  const nRejected = summary.n_rejected ?? 0
+
   return (
-    <div style={{ display: 'flex', gap: '32px', flexWrap: 'wrap' }}>
-      <div>
-        <div style={labelStyle}>Total Trades</div>
-        <div style={{ color: STYLE.text, fontSize: '20px', fontWeight: 600 }}>{summary.total_trades ?? 0}</div>
+    <div>
+      <div style={{ display: 'flex', gap: '32px', flexWrap: 'wrap' }}>
+        <div>
+          <div style={labelStyle}>Total Trades</div>
+          <div style={{ color: STYLE.text, fontSize: '20px', fontWeight: 600 }}>{summary.total_trades ?? 0}</div>
+        </div>
+        <div>
+          <div style={labelStyle}>Overall Win Rate</div>
+          <div style={{ color: STYLE.text, fontSize: '20px', fontWeight: 600 }}>{fmtWinRate(summary.win_rate)}</div>
+        </div>
+        <div>
+          <div style={labelStyle}>Net PnL</div>
+          <div style={{ fontSize: '20px', fontWeight: 600 }}>{fmtPnl(summary.net_pnl_sol)}</div>
+          {/* EPIC-copy-paper-fill-repricing: warn when PnL is still curve-sim */}
+          {!pnlIsRepriced && (
+            <div style={{ color: STYLE.yellow, fontSize: '11px', marginTop: '3px', fontStyle: 'italic' }}>
+              (curve-sim — not yet repriced)
+            </div>
+          )}
+        </div>
+        <div>
+          <div style={labelStyle}>Since</div>
+          <div style={{ color: STYLE.textSecondary, fontSize: '14px' }}>{summary.since ? new Date(summary.since).toLocaleString() : '—'}</div>
+        </div>
       </div>
-      <div>
-        <div style={labelStyle}>Overall Win Rate</div>
-        <div style={{ color: STYLE.text, fontSize: '20px', fontWeight: 600 }}>{fmtWinRate(summary.win_rate)}</div>
-      </div>
-      <div>
-        <div style={labelStyle}>Net PnL</div>
-        <div style={{ fontSize: '20px', fontWeight: 600 }}>{fmtPnl(summary.net_pnl_sol)}</div>
-      </div>
-      <div>
-        <div style={labelStyle}>Since</div>
-        <div style={{ color: STYLE.textSecondary, fontSize: '14px' }}>{summary.since ? new Date(summary.since).toLocaleString() : '—'}</div>
-      </div>
+
+      {/* EPIC-copy-paper-fill-repricing: "N signals skipped (slippage)" chip */}
+      {nRejected > 0 && (
+        <div style={{ marginTop: '12px' }}>
+          <span style={{
+            display: 'inline-block',
+            background: '#2a1e10',
+            color: STYLE.yellow,
+            border: `1px solid ${STYLE.yellow}`,
+            borderRadius: '4px',
+            padding: '3px 10px',
+            fontSize: '12px',
+            fontWeight: 600,
+          }}>
+            {nRejected} signal{nRejected !== 1 ? 's' : ''} skipped (slippage)
+          </span>
+        </div>
+      )}
     </div>
   )
 }

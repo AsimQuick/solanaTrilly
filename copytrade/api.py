@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.api
-# sprint: sprint-12
-# story: US-63 AC-63.1, AC-63.3
-# status: implemented
+# sprint: sprint-12, epic/copy-paper-fill-repricing
+# story: US-63 AC-63.1, AC-63.3, EPIC-copy-paper-fill-repricing
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-21
 # dependencies: djangorestframework, copytrade.models, copytrade.cohort_lifecycle,
 #   copytrade.engine_control, copytrade.validators, copytrade.tasks
 # ---
@@ -130,11 +130,15 @@ def copytrade_trades_view(request):
     except (TypeError, ValueError):
         limit = 50
 
+    # EPIC-copy-paper-fill-repricing: EXCLUDE ENTRY_REJECTED from trades log.
+    # Those rows were never entered (slippage cap), lost nothing, and should not
+    # appear in the trade history (they inflate the loss-count).
     rows = list(
         CopytradePosition.objects.filter(
             cohort_id=cohort_id,
             status=CopytradePosition.STATUS_CLOSED,
         )
+        .exclude(exit_reason=CopytradePosition.EXIT_ENTRY_REJECTED)
         .order_by("-exit_ts")[:limit]
         .values(
             "id",
@@ -150,6 +154,7 @@ def copytrade_trades_view(request):
             "exit_reason",
             "realized_pnl_sol",
             "realized_pnl_pct",
+            "entry_reprice_status",
         )
     )
     return Response({"cohort_id": cohort_id, "trades": rows})
@@ -183,16 +188,33 @@ def copytrade_summary_view(request):
                 "mode": settings.mode,
                 "n_open_positions": 0,
                 "n_wallets": 0,
+                # EPIC-copy-paper-fill-repricing fields
+                "n_rejected": 0,
+                "n_repriced": 0,
+                "n_no_tape": 0,
+                "n_pending": 0,
+                "pnl_is_repriced": False,
             }
         )
 
     cohort = CopytradeCohort.objects.filter(cohort_id=cohort_id, active=True).first()
     since = cohort.created_at.isoformat() if cohort else None
 
-    closed_qs = CopytradePosition.objects.filter(
+    # EPIC-copy-paper-fill-repricing: EXCLUDE ENTRY_REJECTED from trade count + win-rate.
+    # Those were never entered (slippage cap), lost nothing.  n_rejected is surfaced
+    # separately so the dashboard can show the "N signals skipped (slippage)" chip.
+    all_closed_qs = CopytradePosition.objects.filter(
         cohort_id=cohort_id,
         status=CopytradePosition.STATUS_CLOSED,
     )
+
+    # Count rejected entries (excluded from trades, returned as n_rejected)
+    n_rejected = all_closed_qs.filter(
+        exit_reason=CopytradePosition.EXIT_ENTRY_REJECTED,
+    ).count()
+
+    # Trades queryset excludes ENTRY_REJECTED
+    closed_qs = all_closed_qs.exclude(exit_reason=CopytradePosition.EXIT_ENTRY_REJECTED)
     total_trades = closed_qs.count()
     agg = closed_qs.aggregate(
         net_pnl=Sum("realized_pnl_sol"),
@@ -201,6 +223,19 @@ def copytrade_summary_view(request):
     net_pnl_sol = float(agg["net_pnl"] or 0.0)
     wins = agg["wins"] or 0
     win_rate = round(wins / total_trades, 4) if total_trades > 0 else 0.0
+
+    # Reprice trustworthiness counts (from non-rejected closed positions)
+    reprice_agg = closed_qs.aggregate(
+        n_repriced=Count("id", filter=Q(entry_reprice_status=CopytradePosition.REPRICE_STATUS_REPRICED)),
+        n_no_tape=Count("id", filter=Q(entry_reprice_status=CopytradePosition.REPRICE_STATUS_NO_TAPE)),
+        n_pending=Count("id", filter=Q(entry_reprice_status__isnull=True)),
+    )
+    n_repriced = reprice_agg["n_repriced"] or 0
+    n_no_tape = reprice_agg["n_no_tape"] or 0
+    n_pending = reprice_agg["n_pending"] or 0
+    # pnl_is_repriced = True only when ALL non-rejected closed positions are REPRICED
+    # (NO_TAPE counts as NOT trusted — curve-sim price kept)
+    pnl_is_repriced = (total_trades > 0) and (n_pending == 0) and (n_no_tape == 0)
 
     n_open = CopytradePosition.objects.filter(
         cohort_id=cohort_id,
@@ -219,6 +254,12 @@ def copytrade_summary_view(request):
             "mode": settings.mode,
             "n_open_positions": n_open,
             "n_wallets": n_wallets,
+            # EPIC-copy-paper-fill-repricing fields
+            "n_rejected": n_rejected,
+            "n_repriced": n_repriced,
+            "n_no_tape": n_no_tape,
+            "n_pending": n_pending,
+            "pnl_is_repriced": pnl_is_repriced,
         }
     )
 
