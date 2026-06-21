@@ -1,10 +1,10 @@
 # ---
 # module: trading.tape_settler
-# sprint: sprint-13
+# sprint: sprint-13, fix/model-exit-faithful-tp12tr15
 # story: US-66 AC-66.2
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-21
 # dependencies: trading.schemas
 # ---
 """Tape settler: simulate_tape_exit — the SOLE paper/observe settler (Principle #5).
@@ -125,12 +125,25 @@ def _config_to_pol(config: TradingConfig) -> dict:
     The oracle resettle() uses fractional thresholds (0.0–1.0) while
     TradingConfig stores percentages (0.0–100.0).  The conversion is
     field-by-field division by 100.
+
+    stop_loss_pct and disaster_cap_pct are Optional — None means the guard is
+    disabled.  When None, pol["sl"] / pol["disaster"] are None, which the
+    _resettle walk already handles via:
+        if pol["sl"] is not None and ret <= -pol["sl"]: ...
+        if pol["disaster"] is not None and ret <= -pol["disaster"]: ...
+
+    The validated tp12tr15_t1200 policy (lab source of truth, v31_winner_check.py:15):
+        dict(tp=0.12, tr=0.15, timer=1200, holder=None, ratio=None)
+    produces: timer=1200, tp=0.12, sl=None, disaster=None, rugcut=0.15
+    — only TAKE_PROFIT_PCT, RUG_PULL, and AUTO_SELL_TIMER can fire.
     """
+    sl = config.stop_loss_pct
+    disaster = config.disaster_cap_pct
     return {
         "timer": config.auto_sell_timer_s,
         "tp": config.take_profit_pct / 100.0,
-        "sl": config.stop_loss_pct / 100.0,
-        "disaster": config.disaster_cap_pct / 100.0,
+        "sl": sl / 100.0 if sl is not None else None,
+        "disaster": disaster / 100.0 if disaster is not None else None,
         "rugcut": config.rug_pull_drop_pct / 100.0,
     }
 

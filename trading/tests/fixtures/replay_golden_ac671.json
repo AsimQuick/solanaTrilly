@@ -1,20 +1,13 @@
 {
   "meta": {
-    "source_tape": "2026-06-12.parquet (top-5 mints by trade count)",
+    "note": "Golden regenerated 2026-06-21 after fix/model-exit-faithful-tp12tr15. PR #355 (migration 0006) invented stop_loss_pct=8.0 and disaster_cap_pct=12.0 to satisfy the old Pydantic invariant that required all three of sl/disaster/rug to be non-None. The VALIDATED tp12tr15_t1200 policy (lab source: v31_winner_check.py:15 -> dict(tp=0.12, tr=0.15, timer=1200, holder=None, ratio=None)) has NO stop-loss and NO disaster cap. With sl=8.0 active, STOP_LOSS fired on losers before the tr15 trailing stop or 1200s timer could run, corrupting the observe measurement. This fix: stop_loss_pct=None, disaster_cap_pct=None (migration 0007+0008). Only TAKE_PROFIT_PCT (+12%), RUG_PULL trailing (15% giveback from peak), and AUTO_SELL_TIMER (1200s) can fire. All 5 golden tokens now exit via TAKE_PROFIT_PCT as expected (previously 2 were cut at STOP_LOSS).",
+    "policy": "tp12tr15_t1200_faithful",
+    "predictor": "constant_one",
     "score_delay_s": 30,
+    "score_threshold": 0.5,
     "size_sol": 0.1,
     "sol_usd": 140.0,
-    "score_threshold": 0.5,
-    "predictor": "constant_one",
-    "policy": "tp12tr15_t1200",
-    "note": "Golden regenerated 2026-06-21 after applying tp12tr15_t1200 policy (migration 0006). Old policy was tp100sl20dc40rp50_t300. New policy: take_profit_pct=12, rug_pull_drop_pct=15 (tr15 trailing), auto_sell_timer_s=1200, stop_loss_pct=8, disaster_cap_pct=12."
-  },
-  "config": {
-    "take_profit_pct": 12.0,
-    "stop_loss_pct": 8.0,
-    "disaster_cap_pct": 12.0,
-    "rug_pull_drop_pct": 15.0,
-    "auto_sell_timer_s": 1200
+    "source_tape": "2026-06-12.parquet (top-5 mints by trade count)"
   },
   "results": [
     {
@@ -30,22 +23,22 @@
     {
       "enterable": true,
       "flow": 48588.289992,
-      "held": 3.0,
+      "held": 5.0,
       "mint": "A9wttooU42wTiEtChjcrpKW7RGZwu44B3Dfh53UTpump",
-      "peak": 0.616057785803581,
-      "pnl": 16.500909617363526,
+      "peak": 17.74552021114044,
+      "pnl": 14.756797609996863,
       "score": 1.0,
-      "trigger": "STOP_LOSS"
+      "trigger": "TAKE_PROFIT_PCT"
     },
     {
       "enterable": true,
       "flow": 45666.198832,
-      "held": 4.0,
+      "held": 18.0,
       "mint": "APErok2eCRnSa9iSx8oW5ybjCASsTczVxm4fTX42pump",
-      "peak": 1.203906316448733,
-      "pnl": -4.897259819146127,
+      "peak": 14.24119880305268,
+      "pnl": 4.6601394526929685,
       "score": 1.0,
-      "trigger": "STOP_LOSS"
+      "trigger": "TAKE_PROFIT_PCT"
     },
     {
       "enterable": true,
