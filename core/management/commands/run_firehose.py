@@ -1495,7 +1495,7 @@ class FirehoseDaemon:
             except AttributeError:
                 pass
 
-        source = HeliusMigrateSource(api_key=helius_api_key, event_source=event_source)
+        source = HeliusMigrateSource(api_key=helius_api_key, event_source=event_source, clock=self._clock)
         consumer = DetectionConsumer(source=source, clock=self._clock, config_fn=get_active_config)
         logger.info(
             "%s graduation: primary=HeliusMigrateSource event_source=%s",

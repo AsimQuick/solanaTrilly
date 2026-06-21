@@ -2,10 +2,10 @@
 # module: core.tape.helius_birth_tape_source
 # sprint: sprint-8
 # story: US-34 AC-34.1, EPIC-graduation-migrate-detection
-# status: implemented
+# status: fixed
 # created-by: dev-team
 # last-updated: 2026-06-21
-# dependencies: core.datasource, base64, hashlib, struct, json, logging, typing
+# dependencies: core.datasource, core.clock, base64, hashlib, struct, json, logging, typing
 # ---
 """HeliusBirthTapeSource — program-wide Helius transactionSubscribe DataSource.
 
@@ -52,6 +52,7 @@ import logging
 import struct
 from typing import Any, AsyncGenerator
 
+from core.clock import Clock, WallClock
 from core.datasource import DataSource
 
 logger = logging.getLogger(__name__)
@@ -394,6 +395,7 @@ def decode_helius_migrate_event(
     data: dict,
     *,
     event_source: str = "pump_dot_fun",
+    fallback_epoch: int = 0,
 ) -> dict | None:
     """Map a raw Helius transactionNotification dict to a MEME_DATA graduation event.
 
@@ -425,19 +427,25 @@ def decode_helius_migrate_event(
         "address":              <SPL mint>,
         "source":               <event_source>,   # default "pump_dot_fun"
         "poolAddress":          "",               # not extractable; fallback
-        "blockTime":            <slot epoch int>, # or 0 on decode failure
-        "graduated_block_time": <slot epoch int>,
+        "blockTime":            <fallback_epoch>, # event-arrival Unix epoch (NOT slot)
+        "graduated_block_time": <fallback_epoch>, # same as blockTime; real epoch seconds
         "creation_time":        0,
         "progress_percent":     0.0,
         "decimals":             None,
         "raw":                  <transaction result dict>,
         "dex_source":           "helius_migrate",
+        "slot":                 <slot int>,       # real slot for audit/ordering
       }
 
     Args:
-        data:         Raw dict from the Helius WebSocket frame (already JSON-parsed).
-        event_source: The "source" stamp value; must match config.detection.filter.source
-                      ("pump_dot_fun") for DetectionConsumer to persist the Token row.
+        data:           Raw dict from the Helius WebSocket frame (already JSON-parsed).
+        event_source:   The "source" stamp value; must match config.detection.filter.source
+                        ("pump_dot_fun") for DetectionConsumer to persist the Token row.
+        fallback_epoch: Unix epoch seconds to use for blockTime and graduated_block_time.
+                        A migrate notification arrives within ~1 s of the block, so the
+                        caller-supplied wall-clock arrival time is second-accurate.
+                        This mirrors map_new_pair_frame's fallback_epoch pattern exactly.
+                        The real slot is preserved in the "slot" field for audit use.
 
     Returns:
         A MEME_DATA graduation event dict, or None if this frame is not a migrate.
@@ -473,14 +481,14 @@ def decode_helius_migrate_event(
         )
         return None
 
-    # block_time: use the slot as a proxy epoch (Solana slots ≈ 0.4s apart;
-    # actual block_time not available in the notification envelope without a
-    # separate getBlock call).  The slot-as-int is not a Unix timestamp but is
-    # used here only as a monotonic ordering hint; graduated_block_time is
-    # populated from block_time.  Callers that need precise UTC should wait for
-    # the Birdeye secondary (MigrateReconciler) to fill it in.
-    # NOTE: this is consistent with how helius_reconciler.py populates
-    # graduated_block_time when block_time is absent.
+    # Real slot for audit/ordering (kept as-is — it is NOT used as a timestamp).
+    # blockTime and graduated_block_time are set to fallback_epoch (the caller's
+    # wall-clock arrival time), which is a real Unix epoch second — identical in
+    # intent to map_new_pair_frame's fallback_epoch pattern.  A migrate
+    # notification arrives within ~1 s of the block, so arrival-time gives a
+    # second-accurate anchor.  Using the slot as the epoch was a bug: slot
+    # ~427_972_941 interpreted as Unix seconds = 1983-07-25, which poisons
+    # graduated_block_time and breaks all rel = swap_time − grad_time scoring.
     slot_raw = result.get("slot")
     slot: int = int(slot_raw) if slot_raw is not None else 0
 
@@ -492,15 +500,15 @@ def decode_helius_migrate_event(
         "address": mint,
         "source": event_source,
         "poolAddress": "",          # not extractable from this tx — fallback
-        "blockTime": slot,          # slot as monotonic proxy; not a Unix epoch
-        "graduated_block_time": slot,
+        "blockTime": fallback_epoch,           # real Unix epoch (arrival time)
+        "graduated_block_time": fallback_epoch,  # canonical field; real epoch seconds
         "creation_time": 0,
         "progress_percent": 0.0,
         "decimals": None,
         "raw": result,              # verbatim transaction result for audit
         "dex_source": MIGRATE_DEX_SOURCE,
         "signature": sig,
-        "slot": slot,
+        "slot": slot,               # real slot for audit/ordering (NOT a timestamp)
     }
     return event
 
@@ -648,10 +656,12 @@ class HeliusMigrateSource(DataSource):
         api_key: str,
         event_source: str = "pump_dot_fun",
         endpoint: str = HELIUS_WS_URL,
+        clock: Clock | None = None,
     ) -> None:
         self._api_key: str = api_key
         self._event_source: str = event_source
         self._endpoint: str = endpoint
+        self._clock: Clock = clock or WallClock()
         self._ws: Any = None
         self._sub_id: int | None = None
         self._seen_mints: set[str] = set()
@@ -734,7 +744,12 @@ class HeliusMigrateSource(DataSource):
             if not isinstance(parsed, dict):
                 continue
 
-            event = decode_helius_migrate_event(parsed, event_source=self._event_source)
+            fallback_epoch = int(self._clock.now().timestamp())
+            event = decode_helius_migrate_event(
+                parsed,
+                event_source=self._event_source,
+                fallback_epoch=fallback_epoch,
+            )
             if event is None:
                 continue
 
