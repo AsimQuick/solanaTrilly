@@ -86,6 +86,55 @@ class _MockBankEmpty:
         return 0
 
 
+class _MockBankNonZero:
+    """Non-zero mock for WalletBankLookup — every wallet has resolved history.
+
+    Returns a single resolved (non-NaN) outcome row per wallet so that, AS LONG
+    AS buyers are extracted, compute_rep_features / compute_recurrence_features
+    produce NON-ZERO output.  If buyer extraction yields an empty pool (the bug
+    this file guards), the bank is never consulted and every feature stays 0.0.
+    """
+
+    def get_wallet_history(self, pool, wallet, grad_unix_T, H):
+        import numpy as np
+
+        # One row inside the leak-safe window (grad_unix <= T - H) with resolved
+        # (non-NaN) outcomes → drives repmean/repmax/ngood non-zero.
+        return {
+            "grad_unix": np.array([grad_unix_T - float(H) - 100.0]),
+            "y_rdollar": np.array([2.5]),
+            "y_pk24": np.array([3.0]),
+            "weight": np.array([1.0]),
+        }
+
+    def count_prior_appearances(self, pool, wallet, grad_unix_T):
+        return 4
+
+
+def _make_raw_tape_swap(
+    owner: str,
+    vol_sol: float,
+    block_time: int,
+    side: str = "buy",
+    price: float = 5e-5,
+) -> dict:
+    """Build a swap dict in the RAW LIVE tape shape — crucially WITHOUT ``rel``.
+
+    The live firehose buffers raw collected swaps (block_time / side / owner /
+    vol_sol / price) and never stamps ``rel``; ``rel`` is computed downstream by
+    to_pregrad_swaps.  This helper reproduces that shape so the regression test
+    exercises the real bug surface (the existing ``_make_swap`` helper pre-sets
+    ``rel`` and ``side``, which is why the prior suite never caught it).
+    """
+    return {
+        "owner": owner,
+        "vol_sol": vol_sol,
+        "block_time": block_time,
+        "side": side,
+        "price": price,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Test 1: basic time-pool extraction (first-10 by arrival order)
 # ---------------------------------------------------------------------------
@@ -612,3 +661,79 @@ def test_assemble_v4_features_assembles_all_53_keys() -> None:
         assert result[fname] == 0.0, (
             f"Expected 0.0 for {fname} with empty bank, got {result[fname]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 10: REGRESSION — raw live tape (no `rel`) must still yield buyers +
+#          non-zero REP/recurrence features.  Guards the degraded-v4 bug where
+#          assemble_v4_features passed the RAW tape straight to
+#          extract_buyers_from_swaps, whose `side=="buy" and rel<0` filter
+#          dropped every swap (raw dicts have no `rel`) → 0 buyers → all 33
+#          features zero-filled → v4 silently ran as enrich20-only.
+# ---------------------------------------------------------------------------
+
+
+def test_raw_tape_straight_to_extract_yields_no_buyers() -> None:
+    """Documents the bug: raw tape (no `rel`) → extract_buyers directly = empty.
+
+    This is the exact pre-fix code path. `s.get("rel", 0) < 0` is `0 < 0` →
+    False for every raw swap, so both pools come back empty. The fix is to
+    normalize via to_pregrad_swaps (which stamps rel) BEFORE extraction.
+    """
+    from core.v4_rep_builder import extract_buyers_from_swaps
+
+    grad_block_time = 1_700_000_000
+    raw_swaps = [
+        _make_raw_tape_swap(f"WALLET_{i:04d}", vol_sol=0.5 + i * 0.05,
+                            block_time=grad_block_time - 3000 + i * 60)
+        for i in range(25)
+    ]
+    # Raw dicts carry no `rel` → the filter drops everything.
+    time_buyers, size_buyers = extract_buyers_from_swaps(raw_swaps)
+    assert time_buyers == [] and size_buyers == [], (
+        "Raw tape (no rel) must yield NO buyers through the direct path — this "
+        "is the bug; assemble_v4_features must normalize first."
+    )
+
+
+def test_assemble_v4_features_raw_tape_lights_up_rep_features() -> None:
+    """REGRESSION: raw live tape through assemble_v4_features → NON-ZERO features.
+
+    Feeds the RAW tape shape (no `rel`) — identical to what the live firehose
+    buffers — into assemble_v4_features with a non-zero bank. After the fix
+    (to_pregrad_swaps normalization before buyer extraction), buyers are found,
+    the bank is consulted, and the 33 REP+recurrence features are non-zero.
+
+    Before the fix this returned all-zero REP+recurrence (the `0/33` health-log
+    signature) and this test would FAIL on the non-zero assertions below.
+    """
+    from core.management.commands.run_firehose import assemble_v4_features
+    from core.v4_rep_builder import RECURRENCE_FEATURE_NAMES, REP_FEATURE_NAMES
+
+    grad_block_time = 1_700_000_000
+    raw_swaps = [
+        _make_raw_tape_swap(f"WALLET_{i:04d}", vol_sol=0.5 + i * 0.05,
+                            block_time=grad_block_time - 3000 + i * 60)
+        for i in range(25)
+    ]
+
+    result = assemble_v4_features(
+        raw_swaps,
+        graduated_block_time=grad_block_time,
+        wallet_bank=_MockBankNonZero(),
+        sol_usd_spot=150.0,
+    )
+
+    assert result is not None, "Expected a 53-feature dict from a 25-swap raw tape"
+    assert len(result) == 53
+
+    rep_nonzero = sum(1 for f in REP_FEATURE_NAMES if result[f] != 0.0)
+    rec_nonzero = sum(1 for f in RECURRENCE_FEATURE_NAMES if result[f] != 0.0)
+    assert rep_nonzero > 0, (
+        "REP features are all zero on a raw tape with a non-zero bank — the "
+        "buyer pools came back empty (the degraded-v4 regression). "
+        "assemble_v4_features must normalize the raw tape before extracting buyers."
+    )
+    assert rec_nonzero > 0, (
+        "Recurrence features are all zero — buyer pools empty; same regression."
+    )
