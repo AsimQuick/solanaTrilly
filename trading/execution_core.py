@@ -1,7 +1,7 @@
 # ---
 # module: trading.execution_core
-# sprint: sprint-13, feat/copy-live-exec-curve-ix
-# story: US-64 AC-64.1 / US-65 AC-65.3, copy-live-exec
+# sprint: sprint-13, feat/copy-live-exec-curve-ix, hotfix/preflight-ghostbuy
+# story: US-64 AC-64.1 / US-65 AC-65.3, copy-live-exec, preflight-ghostbuy
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
@@ -47,18 +47,24 @@ class ExecuteResult:
     and the result carries the transaction signature.
 
     Attributes:
-        sent:      True only when a real transaction was submitted to mainnet.
-        mode:      "observe" when trading_enabled=False; "live" otherwise.
-        signature: Transaction signature from the Sender, or None in observe.
-        reason:    Human-readable refuse reason when sent=False on the live path
-                   (e.g. "daily_cap_exceeded", "open_live_cap_exceeded",
-                   "budget_check_error").  None when sent=True or mode='observe'.
+        sent:        True only when a real transaction was submitted to mainnet.
+        mode:        "observe" when trading_enabled=False; "live" otherwise.
+        signature:   Transaction signature from the Sender, or None in observe.
+        reason:      Human-readable refuse reason when sent=False on the live path
+                     (e.g. "daily_cap_exceeded", "open_live_cap_exceeded",
+                     "budget_check_error", "preflight_failed").
+                     None when sent=True or mode='observe'.
+        send_result: The raw SendResult from the Sender (only when sent=True).
+                     Carries sol_spent_lamports (pre/post payer balance delta)
+                     needed by the ghost-buy reconciliation in open_live_position.
+                     None in observe mode or when send failed.
     """
 
     sent: bool
     mode: str
     signature: str | None = None
     reason: str | None = None
+    send_result: Any = None  # trading.sender.SendResult | None — Any to preserve isolation
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +201,26 @@ class ExecutionCore:
             )
             return ExecuteResult(sent=False, mode="live", reason="budget_check_error")
 
-        # --- LIVE PATH: trading_enabled=True + sender wired + budget OK ---
+        # --- PREFLIGHT: simulateTransaction before any real send ---
+        # Never raised — Sender.simulate() returns ok=None on network error.
+        # Treat ok=None (inconclusive) as fail-safe: do NOT send.
+        sim = self._sender.simulate(serialized_tx_b64)
+        if sim.ok is not True:
+            import logging as _logging
+            _logging.getLogger("trading").warning(
+                "[execution] preflight-fail: ok=%s err=%s — refusing send",
+                sim.ok,
+                sim.err,
+            )
+            return ExecuteResult(sent=False, mode="live", reason="preflight_failed")
+
+        # --- LIVE PATH: trading_enabled=True + sender wired + budget OK + preflight OK ---
         result = self._sender.send_buy(serialized_tx_b64)
         return ExecuteResult(
             sent=True,
             mode="live",
             signature=result.signature,
+            send_result=result,  # carries sol_spent_lamports for reconciliation
         )
 
     def execute_sell(self, serialized_tx_b64: str) -> ExecuteResult:

@@ -1,7 +1,7 @@
 # ---
 # module: trading.sender
-# sprint: sprint-13, feat/copy-live-exec-curve-ix
-# story: US-65 AC-65.3, copy-live-exec
+# sprint: sprint-13, feat/copy-live-exec-curve-ix, hotfix/preflight-ghostbuy
+# story: US-65 AC-65.3, copy-live-exec, preflight-ghostbuy
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
@@ -34,6 +34,7 @@ All HTTP calls require a live wallet key provisioned at Cutover (§16).
 from __future__ import annotations
 
 import collections
+import logging
 import time
 from dataclasses import dataclass, field
 
@@ -113,8 +114,8 @@ class GhostBuyResult:
     Attributes:
         received: True = tokens landed; False = ghost buy; None = inconclusive
                   (all poll attempts returned RPC errors, so we cannot confirm
-                  whether tokens arrived — the caller should book the position
-                  to avoid orphaning tokens that may have landed).
+                  whether tokens arrived — the position is NOT booked; the send
+                  signature is logged for manual reconciliation if tokens landed).
         balance:  Actual ATA balance in raw token units.
                   0  → ghost buy confirmed.
                   -1 → inconclusive (all RPC errors).
@@ -123,6 +124,29 @@ class GhostBuyResult:
 
     received: bool | None
     balance: int
+
+
+@dataclass
+class SimulateResult:
+    """Result of a simulateTransaction preflight check.
+
+    Used by Sender.simulate() and consumed by ExecutionCore.execute_buy() to
+    gate real sends.  Never raises — network / decode errors produce ok=None
+    (treated as inconclusive → do NOT send).
+
+    Attributes:
+        ok:     True  → simulation succeeded (no err in result.value.err).
+                False → simulation failed (anchor / program error present).
+                None  → inconclusive (network error, malformed response) —
+                        the caller must treat this as fail-safe and NOT send.
+        err:    The decoded anchor error dict when ok=False.  None when ok=True
+                or inconclusive.
+        raw_err: The raw result.value.err object from the RPC response, or None.
+    """
+
+    ok: bool | None
+    err: dict | None = None
+    raw_err: object = None
 
 
 @dataclass
@@ -140,6 +164,18 @@ class SendResult:
                     drained, etc.).
         anchor_err: Decoded meta_err dict (always present; fields are None when
                     meta_err is None or un-decodable).
+        pre_balance_lamports:  Payer's SOL lamport balance BEFORE the tx
+                               (index 0 of meta.preBalances).  None if not
+                               available from the confirmation response.
+        post_balance_lamports: Payer's SOL lamport balance AFTER the tx
+                               (index 0 of meta.postBalances).  None if not
+                               available.
+        sol_spent_lamports:    pre - post (total SOL debit including tx fee
+                               and any ATA-creation rent).  None if either
+                               balance is unavailable.
+                               Approximation: fee + rent are bundled; we
+                               cannot isolate token-purchase SOL without
+                               parsing inner instructions.
     """
 
     signature: str
@@ -152,6 +188,9 @@ class SendResult:
         "instruction_index": None,
         "raw": "None",
     })
+    pre_balance_lamports: int | None = None
+    post_balance_lamports: int | None = None
+    sol_spent_lamports: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -294,10 +333,93 @@ class Sender:
             window_s=self._cfg.cb_window_s,
             cooldown_s=self._cfg.cb_cooldown_s,
         )
+        # Fail-LOUD on misconfiguration: simulate() and _confirm() both POST to
+        # rpc_url. If it is empty while the Sender is otherwise live-configured,
+        # every simulate() raises -> SimulateResult(ok=None) -> execute_buy
+        # refuses every buy with reason="preflight_failed" SILENTLY (no crash,
+        # just a WARNING per tx). Surface it once at construction instead.
+        if self._cfg.sender_url and not self._cfg.rpc_url:
+            logging.getLogger("trading").error(
+                "[sender] rpc_url is EMPTY — simulate()/_confirm() will fail and "
+                "ALL live sends will be refused (preflight_failed). Set the Helius "
+                "RPC URL in SenderConfig.rpc_url before enabling trading."
+            )
 
     # ------------------------------------------------------------------
     # Public API — called ONLY from ExecutionCore when trading_enabled=True
     # ------------------------------------------------------------------
+
+    def simulate(self, serialized_tx_b64: str) -> SimulateResult:
+        """POST simulateTransaction and return whether it would succeed.
+
+        Uses replaceRecentBlockhash=True so the simulation is not invalidated
+        by an expired blockhash.  sigVerify=False avoids the need to re-sign
+        for simulation.
+
+        Returns:
+            SimulateResult(ok=True)   — simulation succeeded (no err).
+            SimulateResult(ok=False)  — simulation failed (program error / slippage).
+            SimulateResult(ok=None)   — inconclusive (network error, unexpected
+                                        response shape).  Caller must treat as
+                                        fail-safe (do NOT send).
+
+        Never raises — all exceptions are caught and mapped to ok=None.
+        """
+        try:
+            import requests  # deferred import — live path only
+
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "simulateTransaction",
+                "params": [
+                    serialized_tx_b64,
+                    {
+                        "encoding": "base64",
+                        "sigVerify": False,
+                        "replaceRecentBlockhash": True,
+                    },
+                ],
+            }
+            try:
+                resp = requests.post(self._cfg.rpc_url, json=payload, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                import logging as _logging
+                _logging.getLogger("trading").warning(
+                    "[sender] simulate network-error: %s — inconclusive", exc
+                )
+                return SimulateResult(ok=None)
+
+            if "error" in data:
+                import logging as _logging
+                _logging.getLogger("trading").warning(
+                    "[sender] simulate rpc-error: %s — inconclusive", data["error"]
+                )
+                return SimulateResult(ok=None)
+
+            value = (data.get("result") or {}).get("value")
+            if value is None:
+                import logging as _logging
+                _logging.getLogger("trading").warning(
+                    "[sender] simulate missing result.value — inconclusive"
+                )
+                return SimulateResult(ok=None)
+
+            raw_err = value.get("err")
+            if raw_err is None:
+                return SimulateResult(ok=True)
+
+            decoded = decode_anchor_error(raw_err)
+            return SimulateResult(ok=False, err=decoded, raw_err=raw_err)
+
+        except Exception as exc:  # noqa: BLE001 — simulate must never raise
+            import logging as _logging
+            _logging.getLogger("trading").warning(
+                "[sender] simulate unexpected-error: %s — inconclusive", exc
+            )
+            return SimulateResult(ok=None)
 
     def send_buy(self, serialized_tx_b64: str) -> SendResult:
         """Submit a buy transaction via Helius Sender.
@@ -488,19 +610,45 @@ class Sender:
                 time.sleep(2)
                 continue
 
-            meta_err = (tx.get("meta") or {}).get("err")
+            meta = tx.get("meta") or {}
+            meta_err = meta.get("err")
             anchor = decode_anchor_error(meta_err) if meta_err is not None else {
                 "anchor_name": None,
                 "custom_code": None,
                 "instruction_index": None,
                 "raw": "None",
             }
+
+            # Extract payer SOL balance delta (index 0 = fee-payer account).
+            # pre/postBalances are lamport arrays parallel to tx.message.accountKeys.
+            # The total debit (pre[0] - post[0]) covers: tx fee + ATA-creation rent
+            # (if any) + SOL spent on the instruction (token purchase cost).
+            # Approximation: fee and rent are bundled with the purchase cost;
+            # isolating the pure token-purchase SOL would require parsing inner
+            # instructions (out of scope — documented in PR body).
+            pre_bals = meta.get("preBalances") or []
+            post_bals = meta.get("postBalances") or []
+            pre_lam: int | None = None
+            post_lam: int | None = None
+            sol_spent_lam: int | None = None
+            if pre_bals and post_bals:
+                try:
+                    pre_lam = int(pre_bals[0])
+                    post_lam = int(post_bals[0])
+                    delta = pre_lam - post_lam
+                    sol_spent_lam = delta if delta >= 0 else None
+                except (TypeError, ValueError, IndexError):
+                    pass
+
             return SendResult(
                 signature=sig,
                 confirmed=meta_err is None,
                 synthetic=False,
                 meta_err=meta_err,
                 anchor_err=anchor,
+                pre_balance_lamports=pre_lam,
+                post_balance_lamports=post_lam,
+                sol_spent_lamports=sol_spent_lam,
             )
 
         # Fallback: getSignatureStatuses (handles Jito txs that land late)

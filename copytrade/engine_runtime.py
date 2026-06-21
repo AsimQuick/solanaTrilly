@@ -511,36 +511,67 @@ def handle_event(
                     trigger_wallet=event.wallet,
                     entry_ts=entry_ts,
                 )
+
+                # Extract sender from execution_core for ghost-buy reconciliation.
+                # _sender is protected; we access it here (the only caller that needs
+                # the ghost-buy path) to avoid duplicating RPC logic.
+                _sender_for_ghost = getattr(execution_core, "_sender", None)
+
                 position, exec_result = open_live_position(
                     _legacy_record,
                     entry_price,
                     _live_config,
                     execution_core,
                     serialized_tx_b64=_tx_b64,
+                    sender=_sender_for_ghost,
+                    expected_tokens=int(fill.tokens),
                 )
-                # Patch the V2 fields (strategy_id, entry_tokens, USD sizing) that
-                # open_live_position does not set (it uses the legacy record shape).
-                CopytradePosition.objects.filter(pk=position.pk).update(
-                    strategy_id=strategy_id,
-                    entry_tokens=float(entry_tokens),
-                    size_usd=usd_size,
-                    high_water_price=entry_price,
-                )
-                position.strategy_id = strategy_id
-                position.entry_tokens = float(entry_tokens)
-                position.size_usd = usd_size
-                position.high_water_price = entry_price
 
-                logger.info(
-                    "[copytrade] live-buy: head=%s wallet=%.8s mint=%.8s usd=%.2f "
-                    "sent=%s sig=%s",
-                    strategy_id,
-                    event.wallet,
-                    event.mint,
-                    usd_size,
-                    exec_result.sent,
-                    exec_result.signature or "none",
-                )
+                if position is None:
+                    # Ghost buy or inconclusive (no tokens landed) — already logged
+                    # inside open_live_position.  Do NOT fall through to observe.
+                    logger.info(
+                        "[copytrade] live-buy-ghost: head=%s wallet=%.8s mint=%.8s "
+                        "sent=%s sig=%s — no position written",
+                        strategy_id,
+                        event.wallet,
+                        event.mint,
+                        exec_result.sent,
+                        exec_result.signature or "none",
+                    )
+                    state.multiplicity.open_positions_count -= 1
+                    state.multiplicity.open_mints.discard(event.mint)
+                    return None
+                else:
+                    # Patch the V2 fields (strategy_id, USD sizing) that
+                    # open_live_position does not set (it uses the legacy record shape).
+                    # entry_tokens is already set from the reconciled real_tokens;
+                    # we use max(real_tokens, estimated_tokens) for the DB patch
+                    # so if reconciliation set entry_tokens from ghost.balance we keep it.
+                    _real_entry_tokens = float(position.entry_tokens or entry_tokens)
+                    CopytradePosition.objects.filter(pk=position.pk).update(
+                        strategy_id=strategy_id,
+                        entry_tokens=_real_entry_tokens,
+                        size_usd=usd_size,
+                        high_water_price=entry_price,
+                    )
+                    position.strategy_id = strategy_id
+                    position.entry_tokens = _real_entry_tokens
+                    position.size_usd = usd_size
+                    position.high_water_price = entry_price
+
+                    logger.info(
+                        "[copytrade] live-buy: head=%s wallet=%.8s mint=%.8s usd=%.2f "
+                        "sent=%s sig=%s entry=%.8g tokens=%.0f",
+                        strategy_id,
+                        event.wallet,
+                        event.mint,
+                        usd_size,
+                        exec_result.sent,
+                        exec_result.signature or "none",
+                        position.entry_price or entry_price,
+                        _real_entry_tokens,
+                    )
 
             except Exception as _live_exc:  # noqa: BLE001
                 logger.error(
@@ -554,6 +585,12 @@ def handle_event(
 
     # OBSERVE path — either trading_enabled=False or live path fell back.
     # BYTE-FOR-BYTE UNCHANGED from the pre-live version.
+    # NOT reached when the ghost-buy path returned None above.
+    # Reached when:
+    #   - trading_enabled=False (observe/paper default); OR
+    #   - keypair missing (live-fallback-observe); OR
+    #   - live path raised before/during build/sign (infrastructure error —
+    #     no real send happened, so observing is safe).
     if position is None:
         position = open_observe_position_v2(
             record,

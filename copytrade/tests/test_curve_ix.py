@@ -1,13 +1,13 @@
 # ---
 # module: copytrade.tests.test_curve_ix
-# sprint: feat/copy-live-exec-curve-ix
-# story: copy-live-exec
-# status: implemented
+# sprint: feat/copy-live-exec-curve-ix, hotfix/preflight-ghostbuy
+# story: copy-live-exec, preflight-ghostbuy
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
 # dependencies: pytest, pytest-django, ast, pathlib, copytrade.curve_ix,
 #   copytrade.blockhash_fetcher, trading.tx_signer, trading.execution_core,
-#   trading.schemas, copytrade.models
+#   trading.schemas, copytrade.models, trading.sender
 # ---
 """Offline tests for the bonding-curve ix builders + budget kill-switch.
 
@@ -440,10 +440,16 @@ def test_execute_buy_live_path_mock_sender_sent_true():
     from trading.schemas import TradingConfig
 
     # Mock Sender returns a fake SendResult
-    mock_send_result = MagicMock()
-    mock_send_result.signature = "fake_sig_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    from trading.sender import SendResult, SimulateResult
+    mock_send_result = SendResult(
+        signature="fake_sig_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        confirmed=True,
+        sol_spent_lamports=10_000_000,
+    )
     mock_sender = MagicMock()
     mock_sender.send_buy.return_value = mock_send_result
+    # Preflight must pass (ok=True) for execute_buy to proceed to send_buy
+    mock_sender.simulate.return_value = SimulateResult(ok=True)
 
     # TradingConfig with trading_enabled=True; generous caps so they don't fire
     config = TradingConfig(
@@ -554,10 +560,16 @@ def test_execute_buy_allowed_just_under_daily_cap():
     )
     pos.save()
 
-    mock_send_result = MagicMock()
-    mock_send_result.signature = "sig_OK"
+    from trading.sender import SendResult, SimulateResult
+    mock_send_result = SendResult(
+        signature="sig_OK",
+        confirmed=True,
+        sol_spent_lamports=15_000_000,
+    )
     mock_sender = MagicMock()
     mock_sender.send_buy.return_value = mock_send_result
+    # Preflight must pass for execute_buy to reach send_buy
+    mock_sender.simulate.return_value = SimulateResult(ok=True)
 
     config = TradingConfig(
         trading_enabled=True,
