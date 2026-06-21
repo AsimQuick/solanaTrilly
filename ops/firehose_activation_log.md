@@ -216,3 +216,40 @@ the banked tape: **5,185 rows** (was 0 — AC-3 → swaps surface proven live).
 service then idles (no spend) — no container to `docker rm`. **Do NOT deploy during the
 soak unless necessary** (a deploy recreates `inference_engine`; it self-resumes since
 `firehose_active` persists, but causes a ~30s gap).
+
+---
+
+## 2026-06-21 — v4 model-track observe (trilly_pregrad_v4, faithful REP+recurrence)
+
+**Activation:** Birdeye graduation + Helius birth-tape collection on the persistent
+`inference_engine` service (gated on `PipelineState.firehose_active`). State throughout:
+`firehose_active=t, scoring_enabled=t, trading_enabled=f` (OBSERVE / PAPER — no capital,
+operator-gated line never crossed). `trilly_pregrad_v4` is the active model
+(`model_registry` id=2, `is_active=t`, 53 features = enrich20 + REP24 + recurrence9);
+v3.2 deactivated. Wallet bank loaded as a startup singleton from
+`/app/models/trilly_pregrad_v4/v4_wallet_bank.parquet` (443,953 rows, pools size+time).
+
+**Purpose:** observe-soak v4 scoring *as trained*, then read no-inversion + realized
+paper PnL on settled `trading_positions(source='model')`.
+
+**v4 fidelity work this session (so the live score == the offline score):**
+- PR #360 — buyer-assembly faithfulness: sort tape by `block_time` before first-10-by-time;
+  time-pool weight = first-buy USD (lab `usd_in`), not cumulative.
+- PR #361 — per-score health log `v4-features: N/33 REP+recurrence non-zero`.
+- **PR #362 — THE degraded-v4 fix.** `assemble_v4_features` was passing the RAW tape to
+  `extract_buyers_from_swaps`, whose `side=="buy" and rel<0` filter dropped every swap
+  (raw dicts have no `rel`) → 0 buyers → all 33 REP+recurrence features zero-filled
+  (health log read `0/33 ... time_buyers=0 size_buyers=0`; v4 ran as enrich20-only).
+  Fix = normalize via `to_pregrad_swaps(...)` before buyer extraction. Merged `f04ff00`,
+  deployed (run 27896053018, success). Post-deploy: bank reloaded 443,953 rows + cached;
+  fix code confirmed in the running image. PENDING: confirm a real score logs `>0/33`.
+
+**Deploy-during-firehose note:** the v4 fix deploy DID recreate `inference_engine`
+mid-observe — acceptable here because (a) it's the persistent service (self-resumes on
+`firehose_active=t`, not an `st_fh` orphan), (b) no bounded `st_fh` window was running,
+(c) the recreate IS the restart needed to load the fix + reload the bank against the
+active v4 model. Brief (~30s) scoring/collection gap only.
+
+**Teardown:** `firehose_state off` (or dashboard Inference Stop) when the observe read is
+banked; service then idles (no spend). `trading_enabled` stays False (model track is
+$0/observe — real capital is operator-gated, not authorized on the model track).
