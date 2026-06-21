@@ -528,6 +528,11 @@ def test_no_test_file_imports_trading_sender():
         # simulate() + _confirm() methods with fully mocked requests (sys.modules
         # injection via _mock_requests context manager). No live network call.
         "test_preflight_ghostbuy.py",
+        # F2 (capital path wiring) ghost-buy pubkey fix: imports Sender to unit-test
+        # the wallet_pubkey parameter at construction — verifies the REAL pubkey is
+        # passed to _get_ata_balance vs the empty-string placeholder (no live RPC).
+        # No real mainnet send: requests are never called; _get_ata_balance is patched.
+        "test_capital_path_wiring.py",
     }
     violations = []
     for py_file in sorted(REPO_ROOT.rglob("*.py")):

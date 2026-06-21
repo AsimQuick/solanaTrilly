@@ -335,6 +335,11 @@ def handle_event(
     # 3a. Resolve strategy_id
     strategy_id: str = state.wallet_to_strategy.get(event.wallet, "")
 
+    # F4: sizing uses usd_size_per_trade (the 2.x engine's USD-denominated size).
+    # CopyTradeSettings.sol_size_per_trade is a LEGACY 1.x field stored in the DB
+    # but is NEVER read here — the 2.x path converts USD→SOL via sol_usd (below).
+    # Operator must set usd_size_per_trade ≈ 0.02 × sol_usd (e.g. ~3 USD @ $150/SOL)
+    # before the live send so sol_in ≈ 0.02 SOL. 2 positions × 0.02 = 0.04 = daily cap.
     usd_size = float(getattr(settings, "usd_size_per_trade", 25.0))
     entry_ts = clock.now()
 
@@ -453,6 +458,24 @@ def handle_event(
 
     if trading_enabled and execution_core is not None:
         # --- LIVE PATH ---
+        # F7: skip Token-2022 cashback coins in the live path.
+        # manage_positions sells gross entry_tokens (entire balance); cashback coins
+        # apply a transfer fee on the sell side → Anchor 6023 NotEnoughTokensToSell.
+        # Gate: is_cashback_coin must be False (not None, not True).
+        # Production should query real ATA balance like billy's _resolve_sell_amount;
+        # for validation, simply skip cashback coins so we never hit Anchor 6023.
+        if getattr(curve_state, "is_cashback_coin", None) is True:
+            logger.warning(
+                "[copytrade] live-buy-skip-cashback: wallet=%.8s mint=%.8s "
+                "is_cashback_coin=True — skipping live buy to avoid Anchor 6023 "
+                "on sell (F7 validation gate). Production: resolve real ATA balance.",
+                event.wallet,
+                event.mint,
+            )
+            state.multiplicity.open_positions_count -= 1
+            state.multiplicity.open_mints.discard(event.mint)
+            return None
+
         # Load keypair. If missing: log + fall back to observe (never crash).
         _keypair = keypair
         if _keypair is None:

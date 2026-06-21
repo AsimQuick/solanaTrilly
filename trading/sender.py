@@ -1,7 +1,8 @@
 # ---
 # module: trading.sender
-# sprint: sprint-13, feat/copy-live-exec-curve-ix, hotfix/preflight-ghostbuy
-# story: US-65 AC-65.3, copy-live-exec, preflight-ghostbuy
+# sprint: sprint-13, feat/copy-live-exec-curve-ix, hotfix/preflight-ghostbuy,
+#   feature/copy-capital-path-wiring
+# story: US-65 AC-65.3, copy-live-exec, preflight-ghostbuy, EPIC-copy-capital-path-wiring
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
@@ -326,8 +327,25 @@ class Sender:
       - Never raises — decoding must not break the confirmation path.
     """
 
-    def __init__(self, config: SenderConfig | None = None) -> None:
+    def __init__(self, config: SenderConfig | None = None, wallet_pubkey: str = "") -> None:
+        """Initialise the Sender with config and the trading wallet's pubkey.
+
+        Args:
+            config:        SenderConfig instance, or None for defaults.
+            wallet_pubkey: Base58 pubkey of the live trading wallet.  Required for
+                           verify_ghost_buy to query the real ATA balance — without
+                           it _get_ata_balance uses an empty owner → returns 0 →
+                           every buy is misclassified as a ghost buy (F2 fix).
+                           Injected from trading.tx_signer.wallet_pubkey_str(keypair)
+                           at Cutover (run_copytrade_engine.py live path).
+                           Empty string is safe in observe/paper mode: trading_enabled
+                           gates are False so send_buy/verify_ghost_buy are never called.
+        """
         self._cfg = config or SenderConfig()
+        # F2 fix: store wallet_pubkey on the Sender at construction so that
+        # verify_ghost_buy → _get_ata_balance queries the REAL wallet's ATA,
+        # not the empty-string placeholder that caused every buy to read balance 0.
+        self._wallet_pubkey: str = wallet_pubkey or ""
         self._circuit_breaker = CircuitBreaker(
             threshold=self._cfg.cb_threshold,
             window_s=self._cfg.cb_window_s,
@@ -343,6 +361,17 @@ class Sender:
                 "[sender] rpc_url is EMPTY — simulate()/_confirm() will fail and "
                 "ALL live sends will be refused (preflight_failed). Set the Helius "
                 "RPC URL in SenderConfig.rpc_url before enabling trading."
+            )
+        # F2 fix (continued): warn loudly if wallet_pubkey is absent in live mode
+        # so operators know ghost-buy queries will be degraded (won't reach real
+        # mainnet at all unless sender_url is set, but emit the warning anyway for
+        # any future code path that constructs a Sender with an empty pubkey).
+        if self._cfg.sender_url and not self._wallet_pubkey:
+            logging.getLogger("trading").warning(
+                "[sender] wallet_pubkey is EMPTY — verify_ghost_buy will query "
+                "getTokenAccountsByOwner with an empty owner, returning balance=0 "
+                "and classifying every buy as a ghost buy. Inject the real wallet "
+                "pubkey at Cutover via Sender(config, wallet_pubkey=pubkey_str)."
             )
 
     # ------------------------------------------------------------------
@@ -522,7 +551,12 @@ class Sender:
             if get_balance_fn is not None:
                 balance = get_balance_fn(mint_address)
             else:
-                balance = self._get_ata_balance(mint_address)
+                # F2 fix: pass self._wallet_pubkey (injected at construction from the
+                # real keypair) so getTokenAccountsByOwner queries the correct owner.
+                # The previous code called _get_ata_balance with the default "" owner,
+                # which always returned 0 tokens → every buy was misclassified as a
+                # ghost buy → no position ever written in live mode (SHOWSTOPPER).
+                balance = self._get_ata_balance(mint_address, self._wallet_pubkey)
 
             if balance is None:
                 continue  # RPC error — inconclusive, keep retrying
