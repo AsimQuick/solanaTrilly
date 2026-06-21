@@ -5,7 +5,7 @@
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-21
-# dependencies: requests, django.conf.settings, logging, time, typing
+# dependencies: urllib (stdlib), django.conf.settings, json, logging, time, typing
 # ---
 """BirdeyeBackfiller — Tier-3 tape-sourcing escalation (Birdeye REST, last resort).
 
@@ -41,7 +41,7 @@ Design
 - Principle #7: no ``datetime.now()`` / ``time.time()`` — all date math is
   derived from ``graduated_block_time`` (caller-supplied).  ``time.sleep`` is
   the only ``time.*`` call and is used only for rate-limit backoff.
-- Testable in isolation as a pure sync function (blocking requests.get; wrapped
+- Testable in isolation as a pure sync function (blocking urllib call; wrapped
   in ``sync_to_async(thread_sensitive=False)`` by the daemon caller so it never
   stalls the event loop).
 """
