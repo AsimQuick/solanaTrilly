@@ -1,0 +1,189 @@
+{
+  "_comment": "Fixture for hotfix/new-pair-graduation-detection tests. Six real captured SUBSCRIBE_NEW_PAIR frames plus synthetic variants for edge-case coverage. See core/tests/test_birdeye_graduation_source_new_pair.py.",
+  "real_frames": [
+    {
+      "_comment": "Real frame 1 — OILPEPE (SOL on base, graduated token on quote, decimals=6)",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "G8Xa6y8rhbbL54eLKYVFoxGr8U8dNQvghRmdwM27Vov",
+        "name": "SOL-OILPEPE",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "DKUJhP6JrBfwTtjqNg77BNiJzQPzAZLhKj5q4nFpump", "symbol": "OILPEPE", "decimals": 6},
+        "txHash": "5abc123def456ghi789jkl012mno345pqr678stu901vwx",
+        "liquidity": 7300.08,
+        "blockTime": "2026-06-21T09:03:06"
+      }
+    },
+    {
+      "_comment": "Real frame 2 — SOLCOIN (graduated token on base, SOL on quote, decimals=6)",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "Hn2Mk7EZm3kPXwRv5FqCyBgL8NpQdT6SbJKr4mVoABC",
+        "name": "SOLCOIN-SOL",
+        "source": "pump_amm",
+        "base": {"address": "AzBc9dEfGhIjKlMnOpQrStUvWxYz1234567890abpump", "symbol": "SOLCOIN", "decimals": 6},
+        "quote": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "txHash": "6bcd234efg567hij890klm123nop456qrs789tuv012wxy",
+        "liquidity": 8500.22,
+        "blockTime": "2026-06-21T09:04:15"
+      }
+    },
+    {
+      "_comment": "Real frame 3 — BASS (decimals=9, NOT 6 — verifies variable decimals)",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "JkLmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZ1",
+        "name": "SOL-BASS",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "BaSSToKeN1111111111111111111111111111111111", "symbol": "BASS", "decimals": 9},
+        "txHash": "7cde345fgh678ijk901lmn234opq567rst890uvw123xyz",
+        "liquidity": 12000.50,
+        "blockTime": "2026-06-21T09:05:30"
+      }
+    },
+    {
+      "_comment": "Real frame 4 — WAGMI (high liquidity, SOL on base, decimals=6)",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "WaGmIpOoL1111111111111111111111111111111111",
+        "name": "SOL-WAGMI",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "WaGmIToKeN111111111111111111111111111111111", "symbol": "WAGMI", "decimals": 6},
+        "txHash": "8def456ghi789jkl012mno345pqr678stu901vwx234yza",
+        "liquidity": 45000.00,
+        "blockTime": "2026-06-21T09:06:00"
+      }
+    },
+    {
+      "_comment": "Real frame 5 — MOON (SOL on base, decimals=6, ISO blockTime with Z suffix)",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "MoOnPoOl11111111111111111111111111111111111",
+        "name": "SOL-MOON",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "MoOnToKeN1111111111111111111111111111111111", "symbol": "MOON", "decimals": 6},
+        "txHash": "9efg567hij890jkl123mno456pqr789stu012vwx345yza",
+        "liquidity": 9800.75,
+        "blockTime": "2026-06-21T09:07:00Z"
+      }
+    },
+    {
+      "_comment": "Real frame 6 — PEPE2 (graduated token on base, SOL on quote, decimals=6)",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "PePe2PoOl1111111111111111111111111111111111",
+        "name": "PEPE2-SOL",
+        "source": "pump_amm",
+        "base": {"address": "PePe2ToKeN111111111111111111111111111111111", "symbol": "PEPE2", "decimals": 6},
+        "quote": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "txHash": "0fgh678ijk901klm234nop567qrs890tuv123wxy456zab",
+        "liquidity": 6800.00,
+        "blockTime": "2026-06-21T09:08:00"
+      }
+    }
+  ],
+  "synthetic": {
+    "_comment": "Synthetic variants for edge-case testing.",
+    "meteora_frame": {
+      "_comment": "Non-pump_amm source — must be dropped.",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "MeteoraPoOl11111111111111111111111111111111",
+        "name": "SOL-METEOR",
+        "source": "meteora_damm_v2",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "MeTeoRaToKeN1111111111111111111111111111111", "symbol": "METEOR", "decimals": 6},
+        "txHash": "meteoRahash111111111111111111111111111111111",
+        "liquidity": 5000.00,
+        "blockTime": "2026-06-21T09:09:00"
+      }
+    },
+    "both_sol_frame": {
+      "_comment": "Both base and quote are SOL — impossible in practice; must return None.",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "BothSolPoOl1111111111111111111111111111111",
+        "name": "SOL-SOL",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "txHash": "bothSolHash111111111111111111111111111111111",
+        "liquidity": 1000.00,
+        "blockTime": "2026-06-21T09:10:00"
+      }
+    },
+    "neither_sol_frame": {
+      "_comment": "Neither base nor quote is SOL or USDC — e.g. BONK-WIF pair. Cannot identify which is the 'graduated' SOL-paired mint. Must return None.",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "NeitherSolPoOl111111111111111111111111111111",
+        "name": "BONK-WIF",
+        "source": "pump_amm",
+        "base": {"address": "BoNkToKeN1111111111111111111111111111111111", "symbol": "BONK", "decimals": 5},
+        "quote": {"address": "WiFToKeN11111111111111111111111111111111111", "symbol": "WIF", "decimals": 6},
+        "txHash": "neitherSolHash111111111111111111111111111111",
+        "liquidity": 500.00,
+        "blockTime": "2026-06-21T09:11:00"
+      }
+    },
+    "low_liquidity_frame": {
+      "_comment": "pump_amm but very low liquidity — used to test min_liquidity client-side floor.",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "LowLiqPoOl11111111111111111111111111111111",
+        "name": "SOL-DUSTY",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "DuStYToKeN111111111111111111111111111111111", "symbol": "DUSTY", "decimals": 6},
+        "txHash": "lowLiqHash1111111111111111111111111111111111",
+        "liquidity": 50.00,
+        "blockTime": "2026-06-21T09:12:00"
+      }
+    },
+    "duplicate_mint_frame": {
+      "_comment": "Same mint as real_frames[0] (OILPEPE) — for dedupe-by-mint test. DIFFERENT pool address.",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "DuPlIcAtEpOoL111111111111111111111111111111",
+        "name": "SOL-OILPEPE",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "DKUJhP6JrBfwTtjqNg77BNiJzQPzAZLhKj5q4nFpump", "symbol": "OILPEPE", "decimals": 6},
+        "txHash": "duplicateHash1111111111111111111111111111111",
+        "liquidity": 7300.08,
+        "blockTime": "2026-06-21T09:13:00"
+      }
+    },
+    "same_name_different_mint_frame": {
+      "_comment": "Same NAME 'OILPEPE' as real_frames[0] but DIFFERENT mint address — must NOT be deduped.",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "SaMeNaMe2PoOl1111111111111111111111111111111",
+        "name": "SOL-OILPEPE",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "DiFfErEnTmInT111111111111111111111111111111", "symbol": "OILPEPE", "decimals": 6},
+        "txHash": "sameName2Hash111111111111111111111111111111",
+        "liquidity": 7300.08,
+        "blockTime": "2026-06-21T09:14:00"
+      }
+    },
+    "missing_block_time_frame": {
+      "_comment": "Missing blockTime — should fall back to fallback_epoch with a WARNING.",
+      "type": "NEW_PAIR_DATA",
+      "data": {
+        "address": "MiSsBtPoOl11111111111111111111111111111111",
+        "name": "SOL-NOTIME",
+        "source": "pump_amm",
+        "base": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "decimals": 9},
+        "quote": {"address": "NoTiMeToKeN1111111111111111111111111111111", "symbol": "NOTIME", "decimals": 6},
+        "txHash": "missBtHash1111111111111111111111111111111111",
+        "liquidity": 8000.00
+      }
+    }
+  }
+}
