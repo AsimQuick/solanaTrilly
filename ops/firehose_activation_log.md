@@ -280,3 +280,24 @@ graduation connection (kills the silent-connection failure mode + adds a no-data
 
 **Teardown:** `firehose_state off` → `f|f|f`. `trading_enabled` never moved. Verdict: the
 silent-graduation-connection failure mode is structurally eliminated; no more restart-babysitting.
+
+---
+
+## 2026-06-22 — Birdeye REST diagnostic spend: Tier-3 backfill validation (Build 2, PRs #373/#374/#375)
+
+NOT a firehose window (no `firehose_active` toggle; scoring stayed OFF). Direct
+`BirdeyeBackfiller.run_for_mint` / `_be_get` probes against `/defi/txs/token/seek_by_time`
+to validate the new Tier-3 adapter live (operator cleared Birdeye spend 2026-06-21).
+
+**Spend:** ~a few hundred Birdeye REST calls total (probes on ~16 fresh/dead/slot-bug tokens
+returning 0, BONK sanity check, + two full paginated fetches of ~2441 swaps each = ~25 pages
+each). Small; not counted as a firehose "activation" (those track full windows).
+
+**What it caught (live, that unit tests missed — synthetic fixtures ≠ reality):**
+1. `requests` not in the prod image → rewrote on `urllib` (#374).
+2. Real seek_by_time items have no `volume_usd`; SOL notional is on the `quote` leg →
+   mapper rejected every item → derive `vol_sol` from the quote leg (#375).
+
+**Result:** Birdeye CONFIRMED to index pre-grad `source=pump_dot_fun` bonding-curve swaps.
+`run_for_mint` on a known token returned 2441 mapped pre-grad swaps (all rel<0, sorted, 637
+owners) and normalized cleanly via `to_pregrad_swaps`. Tier-3 validated end-to-end.
