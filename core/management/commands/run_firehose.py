@@ -98,6 +98,7 @@ from core.firehose.spine import (
     score_pregrad,
     score_time_reached,
     settle_paper_trade,
+    to_pregrad_swaps,
 )
 
 logger = logging.getLogger(__name__)
@@ -316,8 +317,23 @@ def assemble_v4_features(
     )
 
     try:
+        # Normalize the raw collected tape to the §7.1 shape BEFORE extracting
+        # buyers. extract_buyers_from_swaps filters on `side=="buy" and rel<0`;
+        # raw tape dicts carry neither a canonical `side` nor a `rel` field
+        # (rel = block_time - graduated_block_time is computed by the normalizer),
+        # so passing raw swaps drops every swap -> 0 buyers -> the 33 REP+
+        # recurrence features silently zero-fill (v4 runs degraded as enrich20).
+        # This is the SAME normalization the enrich20 path uses internally, so
+        # the buyer basis (rel<0, canonical side, owner, USD `vol`) matches the
+        # lab's whale_edges builder exactly.
+        norm = to_pregrad_swaps(
+            swaps,
+            graduated_block_time,
+            base_decimals=base_decimals,
+            sol_usd_spot=sol_usd_spot,
+        )
         time_buyers, size_buyers = extract_buyers_from_swaps(
-            swaps, deployer=deployer
+            norm, deployer=deployer
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
