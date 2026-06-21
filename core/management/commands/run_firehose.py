@@ -1,7 +1,7 @@
 # ---
 # module: core.management.commands.run_firehose
 # sprint: epic-tape-sourcing-escalation
-# story: EPIC-tape-sourcing-escalation Tier 2, hotfix-single-connection-fanout
+# story: EPIC-tape-sourcing-escalation Tier 2 + Tier 3, hotfix-single-connection-fanout
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
@@ -11,7 +11,8 @@
 #               core.management.commands.run_listener, core.detection.consumer,
 #               core.detection.helius_reconciler, core.firehose.spine, core.clock,
 #               core.resolver, core.models, core.v4_rep_builder,
-#               core.backfill.lake_backfill
+#               core.backfill.lake_backfill, core.backfill.birdeye_backfill,
+#               core.pricing.sol_usd
 # ---
 """run_firehose — the gated live daemon that ties the pipeline spine together.
 
@@ -545,6 +546,11 @@ class FirehoseDaemon:
         # running (concurrent-dedup).  Ephemeral per-process — restart-safety
         # comes from Token.status (DETECTED filter in _due_tokens_sync).
         self._backfill_pending: set[str] = set()
+        # Tier-3 Birdeye REST backfill: concurrency cap so at most N token
+        # backfills hit the REST API concurrently (credit safety on the 313+
+        # DETECTED backlog).  Initialised lazily in _lake_backfill_task (the
+        # event loop must be running when asyncio.Semaphore is first created).
+        self._birdeye_backfill_sem: asyncio.Semaphore | None = None
         self._stop = asyncio.Event()
         self._active_sources: list = []
         # POST-grad subscription bookkeeping.
@@ -1639,19 +1645,24 @@ class FirehoseDaemon:
     async def _lake_backfill_task(
         self, mint: str, graduated_block_time: int
     ) -> None:
-        """Tier-2: read the firehose lake for *mint* and populate the in-memory buffer.
+        """Tier-2 + Tier-3: read the firehose lake, then Birdeye REST, for *mint*.
 
         Fire-and-forget coroutine (caller uses asyncio.create_task).  On
         completion the mint re-enters scoring via the normal _score_tick loop
         (no explicit re-notify needed — the tick runs on its own schedule).
 
-        If the lake has rows for this mint the buffer is populated via
-        TapeStore.load_without_sink (no on_add fired → no lake duplication).
-
-        If the lake returns zero rows the token is marked status=SKIPPED so a
-        restart does not re-dispatch the scan (avoids a perpetual retry loop
-        when the tape genuinely was not recorded, e.g. the firehose was OFF
-        during the graduation window).
+        Tape-sourcing escalation chain (within this task):
+            Tier 2 — local firehose lake (LakeBackfiller): free, fast, no
+                      external calls.  On HIT: loads buffer via
+                      ``TapeStore.load_without_sink`` (no on_add sink → no
+                      lake duplication).
+            Tier 3 — Birdeye REST seek_by_time (BirdeyeBackfiller): last
+                      resort when the lake is empty.  On HIT: loads buffer via
+                      ``TapeStore.add`` (on_add fires → newly-fetched tape is
+                      BANKED to the lake for future reuse).  Concurrency-capped
+                      by ``self._birdeye_backfill_sem`` (5 concurrent max).
+            Terminal — status=SKIPPED (both lake and Birdeye returned empty):
+                       definitively marks the token so restarts don't re-dispatch.
         """
         from core.backfill.lake_backfill import LakeBackfiller  # noqa: PLC0415
 
@@ -1678,14 +1689,77 @@ class FirehoseDaemon:
                 "will score on next tick.",
                 LOG_PREFIX, mint, len(swaps),
             )
+            return  # Tier-2 HIT — no need to fall through to Tier 3.
+
+        # ------------------------------------------------------------------
+        # Tier-3: lake miss → try Birdeye REST backfill.
+        # The semaphore is lazily initialised here (event loop is guaranteed
+        # running at this point, which is required for asyncio.Semaphore).
+        # ------------------------------------------------------------------
+        logger.info(
+            "%s lake-backfill: mint=%s zero rows in lake — escalating to Tier-3 "
+            "(Birdeye REST).",
+            LOG_PREFIX, mint,
+        )
+
+        if self._birdeye_backfill_sem is None:
+            self._birdeye_backfill_sem = asyncio.Semaphore(5)
+
+        from core.backfill.birdeye_backfill import BirdeyeBackfiller  # noqa: PLC0415
+
+        # Resolve the cached SOL/USD spot for price-consistent mapping.
+        try:
+            from core.pricing.sol_usd import get_sol_usd  # noqa: PLC0415
+
+            sol_usd_spot: float | None = await sync_to_async(
+                get_sol_usd, thread_sensitive=False
+            )()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "%s lake-backfill: mint=%s sol_usd fetch failed (%s) — "
+                "continuing without spot price.",
+                LOG_PREFIX, mint, exc,
+            )
+            sol_usd_spot = None
+
+        be_backfiller = BirdeyeBackfiller()
+        try:
+            async with self._birdeye_backfill_sem:
+                be_swaps: list[dict] = await sync_to_async(
+                    be_backfiller.run_for_mint, thread_sensitive=False
+                )(mint, graduated_block_time, sol_usd_spot=sol_usd_spot)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "%s birdeye-backfill: mint=%s REST fetch failed (%s) — "
+                "will retry on next tick.",
+                LOG_PREFIX, mint, exc,
+            )
+            # Remove from pending so a later tick can retry (transient error).
+            self._backfill_pending.discard(mint)
+            return
+
+        if be_swaps:
+            # Tier-3 HIT: load via TapeStore.add so the on_add sink fires and
+            # the newly-fetched tape is banked to the lake for future reuse.
+            # (Unlike the lake-hit path which uses load_without_sink to avoid
+            # duplicating already-banked rows, REST-fetched rows are NEW and
+            # SHOULD be banked.)
+            for swap in be_swaps:
+                self._tape.add(mint, swap)
+            logger.info(
+                "%s birdeye-backfill: mint=%s loaded %d pre-grad swaps from "
+                "Birdeye REST → banked to lake + will score on next tick.",
+                LOG_PREFIX, mint, len(be_swaps),
+            )
         else:
-            # Definitive no-tape (lake was not recording during this window).
+            # Definitive no-tape (lake AND Birdeye both returned empty).
             # Mark SKIPPED so a restart does not re-dispatch.
             await sync_to_async(
                 self._set_token_status_sync, thread_sensitive=True
             )(mint, "SKIPPED")
             logger.info(
-                "%s lake-backfill: mint=%s zero rows in lake — marking SKIPPED.",
+                "%s birdeye-backfill: mint=%s zero rows from Birdeye REST — "
+                "marking SKIPPED (both lake and REST exhausted).",
                 LOG_PREFIX, mint,
             )
 
