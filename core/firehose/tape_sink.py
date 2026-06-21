@@ -1,8 +1,8 @@
 # ---
 # module: core.firehose.tape_sink
-# sprint: sprint-14
-# story: US-79 AC-3 (durable per-mint tape store); fix/us78-export-from-lake
-# status: fixed
+# sprint: epic-tape-sourcing-escalation
+# story: EPIC-tape-sourcing-escalation Tier 2
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
 # dependencies: gzip, json, datetime, pathlib
@@ -48,6 +48,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+#: The root directory of the firehose lake.  This is the DEDICATED lake that
+#: LakeTapeSink writes to and the Tier-2/3 backfill reads from.  It is SEPARATE
+#: from ``lake/tapes`` (the dashboard's historical lake).  Exported as a module
+#: constant so every consumer (tape_sink, lake_backfill, tests) uses the SAME
+#: path — never a bare string literal.  A mismatch here = silent no-op (the
+#: backfiller scans the wrong tree and returns 0 rows every time).
+FIREHOSE_LAKE_BASE: Path = Path("lake/firehose")
 
 #: Hard cap on the in-memory batch so a persistent disk failure can never grow
 #: memory without bound — oldest rows are dropped (logged) past this.

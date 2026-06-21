@@ -1,7 +1,7 @@
 # ---
 # module: core.management.commands.run_firehose
-# sprint: sprint-14
-# story: live-firehose-spine, EPIC-graduation-migrate-detection
+# sprint: epic-tape-sourcing-escalation
+# story: EPIC-tape-sourcing-escalation Tier 2
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
@@ -10,7 +10,8 @@
 #               core.tape.birdeye_swap_mapper, core.tape.helius_birth_tape_source,
 #               core.management.commands.run_listener, core.detection.consumer,
 #               core.detection.helius_reconciler, core.firehose.spine, core.clock,
-#               core.resolver, core.models, core.v4_rep_builder
+#               core.resolver, core.models, core.v4_rep_builder,
+#               core.backfill.lake_backfill
 # ---
 """run_firehose — the gated live daemon that ties the pipeline spine together.
 
@@ -429,6 +430,28 @@ class TapeStore:
         """Return the mints currently buffered (snapshot)."""
         return list(self._by_mint.keys())
 
+    def load_without_sink(self, mint: str, swaps: list[dict]) -> None:
+        """Bulk-append *swaps* for *mint* WITHOUT firing the on_add sink.
+
+        This is the Tier-2/3 backfill entry point.  ``add()`` fires ``on_add``
+        which re-records swaps to the lake; lake rows fed back through ``add()``
+        would DUPLICATE the corpus.  This method bypasses the hook entirely so
+        the in-memory buffer is populated without any lake write.
+
+        The caller (lake_backfill task) is responsible for ensuring only
+        pre-grad phase="pre" rows are passed here (already filtered in
+        LakeBackfiller.run_for_mint).
+
+        Args:
+            mint:  The Solana mint address.
+            swaps: Pre-filtered swap dicts from the lake (same shape as the
+                   live buffer holds — no additional normalization required).
+        """
+        if not swaps:
+            return
+        bucket = self._by_mint.setdefault(mint, [])
+        bucket.extend(swaps)
+
 
 # ---------------------------------------------------------------------------
 # FirehoseDaemon — the runnable, testable core
@@ -495,6 +518,12 @@ class FirehoseDaemon:
         # scoring task and read by the collection buffer's two-tier idle-kill so
         # a graduated mint is PROTECTED from pre-grad eviction (kept for scoring).
         self._graduated_mints: set[str] = set()
+        # Tier-2 lake backfill: track mints for which a backfill task has already
+        # been dispatched this daemon session.  Prevents concurrent ticks from
+        # dispatching a second scan for the same mint while the first is still
+        # running (concurrent-dedup).  Ephemeral per-process — restart-safety
+        # comes from Token.status (DETECTED filter in _due_tokens_sync).
+        self._backfill_pending: set[str] = set()
         self._stop = asyncio.Event()
         self._active_sources: list = []
         # POST-grad subscription bookkeeping.
@@ -1199,10 +1228,26 @@ class FirehoseDaemon:
                     swaps, graduated_block_time, sol_usd_spot=sol_usd
                 )
             if features is None:
-                logger.info(
-                    "%s score: mint=%s no pre-grad tape yet (%d swaps) — deferring.",
-                    LOG_PREFIX, mint, len(swaps),
-                )
+                # Tier-2 lake backfill: if the buffer is empty AND we have not
+                # already dispatched a lake scan for this mint this session,
+                # fire-and-forget a task that reads the firehose lake and
+                # populates the buffer.  The mint re-enters via the normal loop
+                # on a later tick after the fill lands.
+                if len(swaps) == 0 and mint not in self._backfill_pending:
+                    self._backfill_pending.add(mint)
+                    asyncio.create_task(
+                        self._lake_backfill_task(mint, graduated_block_time),
+                        name=f"firehose-lake-backfill-{mint[:8]}",
+                    )
+                    logger.info(
+                        "%s score: mint=%s no pre-grad tape — dispatching lake backfill.",
+                        LOG_PREFIX, mint,
+                    )
+                else:
+                    logger.info(
+                        "%s score: mint=%s no pre-grad tape yet (%d swaps) — deferring.",
+                        LOG_PREFIX, mint, len(swaps),
+                    )
                 continue
 
             result = score_pregrad(features, scorer=scorer, ref_dist=ref_dist)
@@ -1232,6 +1277,10 @@ class FirehoseDaemon:
 
             if not passed:
                 self._scored_mints.add(mint)
+                # Tier-2: write status=SCORED so a restart skips this token.
+                await sync_to_async(
+                    self._set_token_status_sync, thread_sensitive=True
+                )(mint, "SCORED")
                 continue
 
             # --- Task d: PAPER TRADE over the POST-grad tape (gated) ---
@@ -1248,9 +1297,89 @@ class FirehoseDaemon:
                 continue
 
             self._scored_mints.add(mint)
+            # Tier-2: write status=SCORED so a restart skips this token.
+            await sync_to_async(
+                self._set_token_status_sync, thread_sensitive=True
+            )(mint, "SCORED")
             trades = _swaps_to_trade_tuples(postgrad_swaps)
             await sync_to_async(self._paper_trade_sync, thread_sensitive=True)(
                 mint, blend, trades, entry_ts_epoch, trading_cfg, size_sol, sol_usd, trading_enabled,
+            )
+
+    @staticmethod
+    def _set_token_status_sync(mint: str, status: str) -> None:
+        """Update Token.status for *mint* (sync ORM, run via sync_to_async).
+
+        Tier-2 restart-safety: called after a successful score (status=SCORED)
+        or a definitive no-tape outcome (status=SKIPPED) so the next daemon
+        restart filters this token out of _due_tokens_sync without re-dispatching
+        a lake scan or Birdeye REST call.
+
+        Failure-isolated: a DB error here must never block scoring/trading.
+        The in-memory _scored_mints set ensures correct behaviour in the current
+        session even if the DB write fails.
+        """
+        try:
+            from core.models import Token  # noqa: PLC0415
+
+            Token.objects.filter(mint=mint).update(status=status)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "%s set_token_status: mint=%s status=%s failed (%s) — continuing.",
+                LOG_PREFIX, mint, status, exc,
+            )
+
+    async def _lake_backfill_task(
+        self, mint: str, graduated_block_time: int
+    ) -> None:
+        """Tier-2: read the firehose lake for *mint* and populate the in-memory buffer.
+
+        Fire-and-forget coroutine (caller uses asyncio.create_task).  On
+        completion the mint re-enters scoring via the normal _score_tick loop
+        (no explicit re-notify needed — the tick runs on its own schedule).
+
+        If the lake has rows for this mint the buffer is populated via
+        TapeStore.load_without_sink (no on_add fired → no lake duplication).
+
+        If the lake returns zero rows the token is marked status=SKIPPED so a
+        restart does not re-dispatch the scan (avoids a perpetual retry loop
+        when the tape genuinely was not recorded, e.g. the firehose was OFF
+        during the graduation window).
+        """
+        from core.backfill.lake_backfill import LakeBackfiller  # noqa: PLC0415
+
+        try:
+            backfiller = LakeBackfiller()
+            # sync_to_async wraps the blocking file I/O so it does not block
+            # the event loop during the partition scan.
+            swaps = await sync_to_async(
+                backfiller.run_for_mint, thread_sensitive=False
+            )(mint, graduated_block_time)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "%s lake-backfill: mint=%s failed (%s) — will retry on next tick.",
+                LOG_PREFIX, mint, exc,
+            )
+            # Remove from pending so a later tick can retry.
+            self._backfill_pending.discard(mint)
+            return
+
+        if swaps:
+            self._tape.load_without_sink(mint, swaps)
+            logger.info(
+                "%s lake-backfill: mint=%s loaded %d pre-grad swaps from lake → "
+                "will score on next tick.",
+                LOG_PREFIX, mint, len(swaps),
+            )
+        else:
+            # Definitive no-tape (lake was not recording during this window).
+            # Mark SKIPPED so a restart does not re-dispatch.
+            await sync_to_async(
+                self._set_token_status_sync, thread_sensitive=True
+            )(mint, "SKIPPED")
+            logger.info(
+                "%s lake-backfill: mint=%s zero rows in lake — marking SKIPPED.",
+                LOG_PREFIX, mint,
             )
 
     @staticmethod
@@ -1278,7 +1407,17 @@ class FirehoseDaemon:
     # ------------------------------------------------------------------
 
     def _due_tokens_sync(self) -> list[tuple[str, int]]:
-        """Return (mint, graduated_block_time) for tokens due to score, unscored."""
+        """Return (mint, graduated_block_time) for tokens due to score, unscored.
+
+        Tier-2 restart-safety: only Token rows with status=DETECTED are candidates.
+        Rows with status=SCORED (set on scoring success) or status=SKIPPED (set on
+        definitive no-tape) are excluded so a daemon restart does not re-dispatch
+        the lake scan or re-score already-processed tokens.
+
+        The data migration (0014_backfill_scored_token_status) ensures legacy Token
+        rows that already have an associated Prediction are set to status=SCORED
+        before this filter is applied, so old soaked tokens are also excluded.
+        """
         from core.models import Token
         from core.resolver import get_active_config
 
@@ -1289,11 +1428,14 @@ class FirehoseDaemon:
         now = self._clock.now()
         due: list[tuple[str, int]] = []
         graduated: set[str] = set()
+        # Scan ALL Token rows to refresh the graduated-mint set (protects
+        # collection buffer idle-kill), but ONLY include status=DETECTED tokens
+        # as scoring candidates.
         for tok in Token.objects.all():
-            # Refresh the graduated-mint set so the collection buffer's two-tier
-            # idle-kill protects every graduated mint (retained for scoring) — not
-            # just the ones already scored.  A Token row == graduated.
             graduated.add(tok.mint)
+            # Skip already-scored or definitively no-tape tokens (restart-safety).
+            if tok.status in (Token.STATUS_SCORED, Token.STATUS_SKIPPED):
+                continue
             if tok.mint in self._scored_mints:
                 continue
             if score_time_reached(tok.graduated_at, score_at, now):
