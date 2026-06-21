@@ -2,7 +2,7 @@
 # module: core.tests.test_helius_migrate_source
 # sprint: sprint-14
 # story: EPIC-graduation-migrate-detection
-# status: implemented
+# status: fixed
 # created-by: dev-team
 # last-updated: 2026-06-21
 # dependencies: core.tape.helius_birth_tape_source, core.detection.consumer,
@@ -91,6 +91,11 @@ RUN_FIREHOSE_FILE = REPO_ROOT / "core" / "management" / "commands" / "run_fireho
 REAL_FRAME_MINT = "74gPctSqK6stvYRCSe1GpNzcn9cTAh49GN3SmpUGAp3q"
 REAL_FRAME_SIG = "3tAbrT6pCnDpTaoquqmiWDooZVfNtphNxodqpGthxtkFhScyLqA8Uc4r5HnttJJczmgq5gycHqmXrYyKGHkRVRLU"
 REAL_FRAME_SLOT = 427956654
+
+# Fixed epoch used in all decode_helius_migrate_event test calls so tests are
+# deterministic.  Value chosen to be obviously a real 2024 Unix timestamp (NOT a slot).
+# The 1983 bug would have set this to ~427_972_941 (the slot) instead.
+TEST_FALLBACK_EPOCH = 1_719_000_000
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -190,7 +195,7 @@ def test_decode_migrate_returns_meme_data_for_real_frame() -> None:
         "Run the capture script first."
     )
     frame = _load_real_fixture()
-    event = decode_helius_migrate_event(frame)
+    event = decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH)
     assert event is not None, "decode_helius_migrate_event returned None for real migrate frame"
     assert event.get("type") == "MEME_DATA", f"Expected type='MEME_DATA', got {event.get('type')!r}"
     assert event.get("graduated") is True, "Expected graduated=True"
@@ -207,7 +212,7 @@ def test_decode_migrate_mint_matches_known_value() -> None:
     from core.tape.helius_birth_tape_source import decode_helius_migrate_event
 
     frame = _load_real_fixture()
-    event = decode_helius_migrate_event(frame)
+    event = decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH)
     assert event is not None
     assert event["address"] == REAL_FRAME_MINT, (
         f"Mint mismatch: expected {REAL_FRAME_MINT!r}, got {event['address']!r}"
@@ -224,7 +229,7 @@ def test_decode_migrate_none_for_trade_frame() -> None:
     from core.tape.helius_birth_tape_source import decode_helius_migrate_event
 
     frame = _make_synthetic_trade_frame("Buy")
-    assert decode_helius_migrate_event(frame) is None
+    assert decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH) is None
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +242,7 @@ def test_decode_migrate_none_for_non_notification() -> None:
     from core.tape.helius_birth_tape_source import decode_helius_migrate_event
 
     ack = _make_subscription_ack()
-    assert decode_helius_migrate_event(ack) is None
+    assert decode_helius_migrate_event(ack, fallback_epoch=TEST_FALLBACK_EPOCH) is None
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +255,7 @@ def test_decode_migrate_none_for_failed_tx() -> None:
     from core.tape.helius_birth_tape_source import decode_helius_migrate_event
 
     frame = _make_migrate_frame_with_meta_err()
-    assert decode_helius_migrate_event(frame) is None
+    assert decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH) is None
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +268,7 @@ def test_decode_migrate_none_for_create_frame() -> None:
     from core.tape.helius_birth_tape_source import decode_helius_migrate_event
 
     frame = _make_create_frame()
-    assert decode_helius_migrate_event(frame) is None
+    assert decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH) is None
 
 
 # ---------------------------------------------------------------------------
@@ -272,11 +277,18 @@ def test_decode_migrate_none_for_create_frame() -> None:
 
 
 def test_decode_migrate_event_shape() -> None:
-    """The returned event has all required MEME_DATA fields with correct types."""
+    """The returned event has all required MEME_DATA fields with correct types.
+
+    Key regression guard: blockTime and graduated_block_time must equal the
+    passed fallback_epoch (a real Unix timestamp) — NOT the slot number.
+    The 1983 bug set both to the slot (~427_972_941) which interpreted as Unix
+    seconds = 1983-07-25 and poisoned scoring anchors.  The real slot is
+    preserved separately in event["slot"].
+    """
     from core.tape.helius_birth_tape_source import decode_helius_migrate_event
 
     frame = _load_real_fixture()
-    event = decode_helius_migrate_event(frame)
+    event = decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH)
     assert event is not None
 
     # Required fields and types
@@ -293,6 +305,26 @@ def test_decode_migrate_event_shape() -> None:
     assert event.get("dex_source") == "helius_migrate"
     # raw must be the transaction result dict
     assert isinstance(event.get("raw"), dict)
+
+    # --- Regression guard: blockTime must be the passed fallback_epoch, NOT the slot ---
+    # slot ~427_972_941 as Unix seconds = 1983-07-25 (the old bug)
+    # fallback_epoch is a real 2024/2025/2026 Unix timestamp
+    assert event["blockTime"] == TEST_FALLBACK_EPOCH, (
+        f"blockTime should equal fallback_epoch={TEST_FALLBACK_EPOCH}, "
+        f"got {event['blockTime']} (if this looks like a slot number, the 1983 bug is back)"
+    )
+    assert event["graduated_block_time"] == TEST_FALLBACK_EPOCH, (
+        f"graduated_block_time should equal fallback_epoch={TEST_FALLBACK_EPOCH}, "
+        f"got {event['graduated_block_time']}"
+    )
+    # Real slot must still be preserved for audit/ordering
+    assert event.get("slot") == REAL_FRAME_SLOT, (
+        f"slot field should hold the real slot {REAL_FRAME_SLOT}, got {event.get('slot')!r}"
+    )
+    # The slot must NOT equal the blockTime (that would be the 1983 bug)
+    assert event["slot"] != event["blockTime"], (
+        "slot and blockTime must differ: slot is an ordering index, blockTime is a Unix epoch"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +382,7 @@ def test_detection_consumer_accepts_migrate_event() -> None:
 
     # Decode the real migrate frame to get a graduation event
     frame = _load_real_fixture()
-    event = decode_helius_migrate_event(frame)
+    event = decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH)
     assert event is not None, "Decoder failed on real fixture"
 
     mint = event["address"]
@@ -497,7 +529,7 @@ def test_mint_key_equality() -> None:
     from core.tape.helius_birth_tape_source import decode_helius_migrate_event
 
     frame = _load_real_fixture()
-    event = decode_helius_migrate_event(frame)
+    event = decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH)
     assert event is not None
     mint = event["address"]
 
@@ -545,9 +577,119 @@ def test_decode_migrate_dex_source_stamp() -> None:
     from core.tape.helius_birth_tape_source import MIGRATE_DEX_SOURCE, decode_helius_migrate_event
 
     frame = _load_real_fixture()
-    event = decode_helius_migrate_event(frame)
+    event = decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH)
     assert event is not None
     assert event.get("dex_source") == "helius_migrate", (
         f"Expected dex_source='helius_migrate', got {event.get('dex_source')!r}"
     )
     assert MIGRATE_DEX_SOURCE == "helius_migrate"
+
+
+# ---------------------------------------------------------------------------
+# Test 15: graduated_block_time == fallback_epoch, slot preserved separately
+# ---------------------------------------------------------------------------
+
+
+def test_decode_migrate_blocktime_equals_fallback_epoch_not_slot() -> None:
+    """graduated_block_time and blockTime must equal fallback_epoch, NOT the slot.
+
+    This is the regression test that catches the '1983 bug' where the slot
+    number (~427_972_941) was used as a Unix timestamp, producing a date of
+    1983-07-25 in the DB and poisoning all scoring anchors.
+
+    The slot is preserved separately in event["slot"] for audit/ordering.
+    """
+    from core.tape.helius_birth_tape_source import decode_helius_migrate_event
+
+    frame = _load_real_fixture()
+    event = decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH)
+    assert event is not None
+
+    # blockTime and graduated_block_time must be the passed fallback_epoch
+    assert event["blockTime"] == TEST_FALLBACK_EPOCH, (
+        f"blockTime={event['blockTime']} != fallback_epoch={TEST_FALLBACK_EPOCH}. "
+        "If blockTime looks like a slot number (~4e8), the 1983 bug has returned."
+    )
+    assert event["graduated_block_time"] == TEST_FALLBACK_EPOCH, (
+        f"graduated_block_time={event['graduated_block_time']} != fallback_epoch={TEST_FALLBACK_EPOCH}."
+    )
+    # The real slot must still be in event["slot"] for audit
+    assert event.get("slot") == REAL_FRAME_SLOT, (
+        f"slot field lost: expected {REAL_FRAME_SLOT}, got {event.get('slot')!r}"
+    )
+    # Slot and blockTime must differ (slot is an index, not a Unix epoch)
+    assert event["slot"] != event["blockTime"], (
+        "slot == blockTime: slot must NOT be used as a timestamp"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 16: HeliusMigrateSource uses injected clock for blockTime
+# ---------------------------------------------------------------------------
+
+
+def test_helius_migrate_source_uses_injected_clock() -> None:
+    """HeliusMigrateSource emits events with blockTime from the injected clock.
+
+    Injects a VirtualClock set to a known epoch and drives events() with a
+    fake WebSocket yielding the real migrate fixture frame.  Asserts that the
+    emitted event's graduated_block_time equals the virtual clock's epoch —
+    not the slot number.
+    """
+    from datetime import datetime, timezone
+
+    from core.clock import VirtualClock
+    from core.tape.helius_birth_tape_source import HeliusMigrateSource
+
+    # A known epoch clearly in the 2020s — not a slot number
+    CLOCK_EPOCH = 1_750_000_000   # approx 2025-06-15
+    clock = VirtualClock(datetime.fromtimestamp(CLOCK_EPOCH, tz=timezone.utc))
+
+    frame = _load_real_fixture()
+
+    class _FakeWS:
+        """Async iterable over a single serialised frame string."""
+
+        def __init__(self, frames: list[str]) -> None:
+            self._frames = frames
+
+        def __aiter__(self):
+            self._it = iter(self._frames)
+            return self
+
+        async def __anext__(self) -> str:
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def close(self) -> None:
+            pass
+
+    src = HeliusMigrateSource(api_key="testkey", clock=clock)
+    src._ws = _FakeWS([json.dumps(frame)])
+
+    events_collected: list[dict] = []
+
+    async def _run() -> None:
+        async for ev in src.events():
+            events_collected.append(ev)
+
+    asyncio.run(_run())
+
+    assert len(events_collected) == 1, (
+        f"Expected 1 graduation event from fake WS, got {len(events_collected)}"
+    )
+    ev = events_collected[0]
+    assert ev["graduated_block_time"] == CLOCK_EPOCH, (
+        f"graduated_block_time={ev['graduated_block_time']} should equal "
+        f"CLOCK_EPOCH={CLOCK_EPOCH} (the injected clock's epoch). "
+        "If it looks like a slot number, the clock injection is broken."
+    )
+    assert ev["blockTime"] == CLOCK_EPOCH, (
+        f"blockTime={ev['blockTime']} should equal CLOCK_EPOCH={CLOCK_EPOCH}."
+    )
+    # Slot must still be the real slot from the fixture (not the clock epoch)
+    assert ev.get("slot") == REAL_FRAME_SLOT, (
+        f"slot={ev.get('slot')!r} should be the real frame slot {REAL_FRAME_SLOT}"
+    )
