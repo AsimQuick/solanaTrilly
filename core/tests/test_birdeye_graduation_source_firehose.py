@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_birdeye_graduation_source_firehose
 # sprint: sprint-14
-# story: live-firehose-spine, hotfix-graduation-pumpfun-mapping
-# status: fixed
+# story: live-firehose-spine, hotfix-graduation-pumpfun-mapping, hotfix-new-pair-graduation-detection
+# status: updated
 # created-by: dev-team
-# last-updated: 2026-06-20
+# last-updated: 2026-06-21
 # dependencies: pytest, asyncio, ast, datetime, pathlib,
 #               core.tape.birdeye_graduation_source, core.replay_source,
 #               core.detection.consumer, core.clock
@@ -13,8 +13,8 @@
 
 Tests the LEGACY ``map_new_listing_frame`` function (TOKEN_NEW_LISTING_DATA shape)
 which is preserved for backward compatibility.  New graduation detection uses
-``map_meme_data_frame`` (SUBSCRIBE_MEME / MEME_DATA) — see
-``test_birdeye_graduation_source_us76_ac1.py``.
+``map_new_pair_frame`` (SUBSCRIBE_NEW_PAIR / NEW_PAIR_DATA) — see
+``test_birdeye_graduation_source_new_pair.py``.
 
 The frame shape and hotfixes tested here:
 
@@ -257,12 +257,13 @@ def test_pool_address_is_none_when_frame_has_no_pool():
 # ---------------------------------------------------------------------------
 
 
-def test_subscribe_message_is_now_subscribe_meme():
-    """US-76 AC-1: default subscription is SUBSCRIBE_MEME (not SUBSCRIBE_TOKEN_NEW_LISTING)."""
+def test_subscribe_message_is_now_subscribe_new_pair():
+    """hotfix-new-pair: default subscription is SUBSCRIBE_NEW_PAIR (was SUBSCRIBE_MEME)."""
     msg = build_subscribe_message(None)
-    assert msg["type"] == "SUBSCRIBE_MEME"
-    assert msg["data"]["graduated"] is True
-    assert msg["data"]["source"] == "pump_dot_fun"
+    assert msg["type"] == "SUBSCRIBE_NEW_PAIR"
+    # The default NEW_PAIR subscribe has no server-side filter (empty data dict, min_liq=0).
+    # Use a config override to add min_liquidity when needed.
+    assert "graduated" not in msg["data"]
 
 
 def test_subscribe_message_config_override():
@@ -323,12 +324,12 @@ class _FakeWS:
         self._closed = True
 
 
-def test_events_legacy_frames_yield_nothing_via_meme_data_mapper():
-    """TOKEN_NEW_LISTING_DATA frames are NOT recognized by the new MEME_DATA mapper.
+def test_events_legacy_frames_yield_nothing_via_new_pair_mapper():
+    """TOKEN_NEW_LISTING_DATA frames are NOT recognized by the new NEW_PAIR mapper.
 
-    The events() loop now uses map_meme_data_frame which expects type=="MEME_DATA".
+    The events() loop now uses map_new_pair_frame which expects type=="NEW_PAIR_DATA".
     Legacy frames (type=="TOKEN_NEW_LISTING_DATA") are silently dropped.
-    This confirms the old subscription is dead — only SUBSCRIBE_MEME frames fire.
+    This confirms the old subscription is dead — only SUBSCRIBE_NEW_PAIR frames fire.
     """
     source = BirdeyeGraduationSource(api_key="k", config=None, clock=VirtualClock(_T0))
     source._ws = _FakeWS([_WELCOME_FRAME, _PUMP_FRAME, _PANCAKE_FRAME, _METEORA_FRAME])
@@ -337,7 +338,7 @@ def test_events_legacy_frames_yield_nothing_via_meme_data_mapper():
         return [e async for e in source.events()]
 
     events = asyncio.run(_collect())
-    # Legacy frames are dropped by the new mapper — zero events.
+    # Legacy TOKEN_NEW_LISTING_DATA frames are dropped by the new mapper — zero events.
     assert len(events) == 0
 
 
