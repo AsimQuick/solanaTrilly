@@ -1,6 +1,6 @@
 # ---
 # module: trading.models
-# sprint: sprint-13, sprint-14, hotfix
+# sprint: sprint-13, sprint-14, hotfix, fix/model-exit-faithful-tp12tr15
 # story: US-64 AC-64.1, US-64 AC-64.2, US-66 AC-66.1, US-67 AC-67.1, US-72 AC-72.1, fix/model-exit-timer-1200
 # status: refactored
 # created-by: dev-team
@@ -70,16 +70,21 @@ class TradingSettings(models.Model):
     )
 
     # --- Exit rule parameters (PRD §10.1 priority ladder) ---
-    # Defaults reflect the tp12tr15_t1200 policy (trilly_pregrad_v3_2/meta.json):
-    #   take_profit_pct=12.0  → pol["tp"]      = 0.12  (+12% gain)
-    #   rug_pull_drop_pct=15  → pol["rugcut"]  = 0.15  (trailing 15% from peak)
-    #   auto_sell_timer_s=1200 → pol["timer"]  = 1200s
-    #   stop_loss_pct=8       → pol["sl"]      = 0.08  (absolute loss guard)
-    #   disaster_cap_pct=12   → pol["disaster"]= 0.12  (deep-drop guard)
-    # Ordering invariant: stop_loss(8) < disaster(12) < rug_pull(15)  ✓
+    # Defaults reflect the validated tp12tr15_t1200 policy.
+    # Lab source of truth (v31_winner_check.py:15):
+    #   dict(tp=0.12, tr=0.15, timer=1200, holder=None, ratio=None)
+    #
+    #   take_profit_pct=12.0    → pol["tp"]      = 0.12  (+12% gain)
+    #   rug_pull_drop_pct=15.0  → pol["rugcut"]  = 0.15  (trailing 15% from peak)
+    #   auto_sell_timer_s=1200  → pol["timer"]   = 1200s
+    #   stop_loss_pct=None      → pol["sl"]      = None  (disabled — not in validated policy)
+    #   disaster_cap_pct=None   → pol["disaster"]= None  (disabled — not in validated policy)
+    #
+    # NULL in DB == guard disabled. tape_settler._resettle already guards:
+    #   `if pol["sl"] is not None` / `if pol["disaster"] is not None`
     take_profit_pct = models.FloatField(default=12.0)
-    stop_loss_pct = models.FloatField(default=8.0)
-    disaster_cap_pct = models.FloatField(default=12.0)
+    stop_loss_pct = models.FloatField(null=True, blank=True, default=None)
+    disaster_cap_pct = models.FloatField(null=True, blank=True, default=None)
     rug_pull_drop_pct = models.FloatField(default=15.0)
     next_poll_guard_s = models.IntegerField(default=10)
     auto_sell_timer_s = models.IntegerField(default=1200)
