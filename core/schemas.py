@@ -2,10 +2,11 @@
 # module: core.schemas
 # sprint: sprint-3, sprint-8, sprint-10
 # story: US-10 AC-10.1, AC-10.2, AC-10.3, AC-10.4; US-35 AC-35.1; US-38 AC-38.1, AC-38.2;
-#        US-48 AC-48.2; US-49 AC-49.1; US-50 AC-50.2; US-51 AC-51.1
-# status: implemented
+#        US-48 AC-48.2; US-49 AC-49.1; US-50 AC-50.2; US-51 AC-51.1;
+#        hotfix-single-connection-fanout
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-17
+# last-updated: 2026-06-21
 # dependencies: pydantic>=2.0, core.schemas.CohortGroupingConfig
 # ---
 """Pydantic v2 schema for the PipelineConfig tunable sections (PRD §5.1, §5.2).
@@ -76,6 +77,14 @@ class TapeConfig(BaseModel):
     # to feed the paper-trade settler.  At capacity, new graduated mints are skipped
     # (logged "at-capacity skip"), never silently dropped.  Default 5.
     max_postgrad_subscriptions: int = Field(default=5, gt=0)
+    # No-data watchdog for the single-connection fan-out (hotfix-single-connection-fanout).
+    # If the shared Helius WebSocket delivers zero frames for this many seconds, the
+    # _helius_loop treats the socket as silently dead and forces a reconnect.  Default
+    # 120s — the collection stream normally delivers thousands of frames/minute, so
+    # 120s of total silence is definitively a dead socket (no false positives under
+    # normal load).  Mirror of pre_grad_idle_kill_ttl_s: defined here, resolved once
+    # at loop startup via _resolve_helius_watchdog_s_sync.
+    graduation_silence_watchdog_s: int = Field(default=120, gt=0)
 
 
 class ScoringConfig(BaseModel):
