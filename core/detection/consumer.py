@@ -1,10 +1,11 @@
 # ---
 # module: core.detection.consumer
 # sprint: sprint-4
-# story: US-15 AC-15.1, US-15 AC-15.2, US-15 AC-15.3, hotfix-graduation-null-pool
+# story: US-15 AC-15.1, US-15 AC-15.2, US-15 AC-15.3, hotfix-graduation-null-pool,
+#        EPIC-graduation-migrate-detection
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-19
+# last-updated: 2026-06-21
 # dependencies: core.datasource, core.clock, core.schemas, asgiref, datetime, typing
 # ---
 """DetectionConsumer — reads MEME graduation events from a DataSource seam.
@@ -140,12 +141,18 @@ class DetectionConsumer:
         load time (core.models imports core.schemas, which is already in scope
         at the package level; the lazy import sidesteps any load-order issues).
 
-        Field mapping (Birdeye MEME_DATA event → Token row):
+        Field mapping (MEME_DATA event → Token row):
           address      → mint (primary key)
           poolAddress  → pool_address
           blockTime    → graduated_block_time + graduated_at (UTC epoch conversion)
-          source       → dex_source
+          dex_source   → dex_source  (if present; falls back to source)
+          source       → dex_source  (fallback when dex_source key is absent)
           <full event> → raw_graduation (verbatim JSONB)
+
+        The ``dex_source`` key is preferred over ``source`` so that migrate-path
+        events (dex_source="helius_migrate", source="pump_dot_fun") store the
+        correct provenance.  Birdeye events carry only ``source``; the fallback
+        preserves their existing behavior.
 
         If blockTime is absent, graduated_at falls back to the injected clock's
         timestamp (the stamp_events timestamp passed into this call).
@@ -159,7 +166,10 @@ class DetectionConsumer:
         # cleanly instead of crashing the chain (downstream scores on pre-grad
         # Helius features keyed by mint and tolerates an empty pool).
         pool_address: str = event.get("poolAddress") or ""
-        dex_source: str = event.get("source", "")
+        # dex_source: prefer the explicit "dex_source" key (set by HeliusMigrateSource
+        # to "helius_migrate") over "source" (set to "pump_dot_fun" for filter matching).
+        # Birdeye events carry only "source"; the fallback preserves their behavior.
+        dex_source: str = event.get("dex_source") or event.get("source", "")
 
         block_time = event.get("blockTime")
         if block_time is not None:
