@@ -5,7 +5,7 @@
 # status: implemented
 # created-by: dev-team
 # last-updated: 2026-06-21
-# dependencies: requests, django.conf.settings, logging, time, typing
+# dependencies: urllib (stdlib), django.conf.settings, json, logging, time, typing
 # ---
 """BirdeyeBackfiller — Tier-3 tape-sourcing escalation (Birdeye REST, last resort).
 
@@ -41,15 +41,19 @@ Design
 - Principle #7: no ``datetime.now()`` / ``time.time()`` — all date math is
   derived from ``graduated_block_time`` (caller-supplied).  ``time.sleep`` is
   the only ``time.*`` call and is used only for rate-limit backoff.
-- Testable in isolation as a pure sync function (blocking requests.get; wrapped
+- Testable in isolation as a pure sync function (blocking urllib call; wrapped
   in ``sync_to_async(thread_sensitive=False)`` by the daemon caller so it never
   stalls the event loop).
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
+import urllib.error
+import urllib.request
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -97,52 +101,50 @@ def _be_get(
         ``{"_err": <status_code>}``.  Callers check for ``"_err"`` in the
         result and treat it as an empty / terminal response.
     """
-    import requests  # noqa: PLC0415 — lazy import so module loads without requests
-
+    # HTTP via urllib (stdlib) — matches the codebase convention
+    # (core/pricing/sol_usd.py); `requests` is NOT in the production image.
     headers = {"X-API-KEY": api_key, "x-chain": "solana"}
+    url = f"{_SEEK_BY_TIME_URL}?{urlencode(params)}"
     for i in range(tries):
+        req = urllib.request.Request(url, headers=headers, method="GET")
         try:
-            r = requests.get(
-                _SEEK_BY_TIME_URL, headers=headers, params=params, timeout=45
-            )
-        except Exception as exc:  # noqa: BLE001 — network error
-            logger.debug("[BIRDEYE_BACKFILL] request error (attempt %d): %s", i + 1, exc)
-            time.sleep(_SERVER_ERR_SLEEP_FACTOR * (i + 1))
-            continue
-
-        if r.status_code == 200:
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                raw = resp.read()
             try:
-                return r.json()
+                return json.loads(raw)
             except Exception as exc:  # noqa: BLE001 — bad JSON
                 logger.warning("[BIRDEYE_BACKFILL] JSON decode error: %s", exc)
                 return {"_err": "json_error"}
-
-        if r.status_code == 429:
-            retry_after = float(r.headers.get("Retry-After", 2)) + 1.0
-            logger.debug(
-                "[BIRDEYE_BACKFILL] 429 rate-limited — sleeping %.1fs (attempt %d).",
-                retry_after,
-                i + 1,
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            if status == 429:
+                retry_after = float((exc.headers.get("Retry-After", 2) if exc.headers else 2) or 2) + 1.0
+                logger.debug(
+                    "[BIRDEYE_BACKFILL] 429 rate-limited — sleeping %.1fs (attempt %d).",
+                    retry_after,
+                    i + 1,
+                )
+                time.sleep(retry_after)
+                continue
+            if status >= 500:
+                sleep_s = _SERVER_ERR_SLEEP_FACTOR * (i + 1)
+                logger.debug(
+                    "[BIRDEYE_BACKFILL] HTTP %d — sleeping %.1fs (attempt %d).",
+                    status,
+                    sleep_s,
+                    i + 1,
+                )
+                time.sleep(sleep_s)
+                continue
+            # Non-retryable error (4xx other than 429).
+            logger.warning(
+                "[BIRDEYE_BACKFILL] HTTP %d — non-retryable, aborting.", status
             )
-            time.sleep(retry_after)
+            return {"_err": status}
+        except (urllib.error.URLError, OSError) as exc:  # network error
+            logger.debug("[BIRDEYE_BACKFILL] request error (attempt %d): %s", i + 1, exc)
+            time.sleep(_SERVER_ERR_SLEEP_FACTOR * (i + 1))
             continue
-
-        if r.status_code >= 500:
-            sleep_s = _SERVER_ERR_SLEEP_FACTOR * (i + 1)
-            logger.debug(
-                "[BIRDEYE_BACKFILL] HTTP %d — sleeping %.1fs (attempt %d).",
-                r.status_code,
-                sleep_s,
-                i + 1,
-            )
-            time.sleep(sleep_s)
-            continue
-
-        # Non-retryable error (4xx other than 429).
-        logger.warning(
-            "[BIRDEYE_BACKFILL] HTTP %d — non-retryable, aborting.", r.status_code
-        )
-        return {"_err": r.status_code}
 
     return {"_err": "exhausted"}
 

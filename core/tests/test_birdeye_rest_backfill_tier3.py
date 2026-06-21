@@ -31,6 +31,7 @@ T3-13 Tier-2 HIT does NOT fall through to Tier-3 (Birdeye NOT called).
 from __future__ import annotations
 
 import asyncio
+import urllib.error
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -214,31 +215,36 @@ def test_swap_dict_sell_side():
 
 def test_429_backoff_then_success():
     """A 429 response causes backoff; the subsequent success returns items."""
-    # Build a 429 mock response then a 200 response.
-    resp_429 = MagicMock()
-    resp_429.status_code = 429
-    resp_429.headers = {"Retry-After": "0"}
+    # Build a 429 (raised by urllib as HTTPError) then a 200 response.
+    import json as _json
+
+    err_429 = urllib.error.HTTPError(
+        url="https://public-api.birdeye.so/defi/txs/token/seek_by_time",
+        code=429,
+        msg="rate-limited",
+        hdrs={"Retry-After": "0"},
+        fp=None,
+    )
 
     good_item = _make_rest_item(1, block_time=_GRAD_BT - 300)
-    resp_200 = MagicMock()
-    resp_200.status_code = 200
-    resp_200.json.return_value = _make_page([good_item])
+    good_cm = MagicMock()
+    good_cm.__enter__.return_value.read.return_value = _json.dumps(
+        _make_page([good_item])
+    ).encode()
 
     from core.backfill import birdeye_backfill
 
     sleep_calls: list[float] = []
 
-    # Patch time.sleep in the birdeye_backfill module and requests.get
-    # via sys.modules so we don't need requests installed in the test env.
-    import sys
-    import types
-
-    fake_requests = types.ModuleType("requests")
-    fake_requests.get = MagicMock(side_effect=[resp_429, resp_200])
-
+    # urllib (stdlib) is the HTTP layer — mock urlopen directly: first call
+    # raises 429, second returns a context-manager whose .read() gives the page.
     with (
         patch.object(birdeye_backfill.time, "sleep", side_effect=sleep_calls.append),
-        patch.dict(sys.modules, {"requests": fake_requests}),
+        patch.object(
+            birdeye_backfill.urllib.request,
+            "urlopen",
+            side_effect=[err_429, good_cm],
+        ),
     ):
         bf = birdeye_backfill.BirdeyeBackfiller(api_key="test_key")
         result = bf.run_for_mint(_MINT, _GRAD_BT, sol_usd_spot=_SOL_USD_SPOT)
