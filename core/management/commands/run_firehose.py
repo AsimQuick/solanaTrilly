@@ -355,6 +355,17 @@ def assemble_v4_features(
     feats.update(enrich_feats)
     feats.update(rep_feats)
     feats.update(rec_feats)
+
+    # v4 health: log how many of the 33 REP+recurrence features are non-zero on
+    # each real score. If this is 0 while the bank is loaded, the builder/bank is
+    # broken and v4 is running degraded (the failure we revert v4 for).
+    if wallet_bank is not None:
+        nz = sum(1 for k, v in {**rep_feats, **rec_feats}.items() if v)
+        logger.info(
+            "%s v4-features: %d/33 REP+recurrence non-zero "
+            "(time_buyers=%d size_buyers=%d) — bank ACTIVE.",
+            LOG_PREFIX, nz, len(time_buyers), len(size_buyers),
+        )
     return feats
 
 
