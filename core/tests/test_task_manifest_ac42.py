@@ -36,6 +36,7 @@ def _load_manifest_tasks() -> set:
 
 def _registered_app_tasks() -> set:
     """Return registered non-builtin task names (excludes tasks with prefix 'celery.')."""
+    import copytrade.tasks  # noqa: F401 — registers copytrade @shared_task decorators
     import core.tasks  # noqa: F401 — side-effect: registers @shared_task decorators
     from config import celery_app
 

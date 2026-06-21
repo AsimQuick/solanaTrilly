@@ -1,12 +1,12 @@
 # ---
 # module: copytrade.position_manager
-# sprint: sprint-12, sprint-13
-# story: US-61 AC-61.2, US-68 AC-68.1
+# sprint: sprint-12, sprint-13, epic/copy-paper-fill-repricing
+# story: US-61 AC-61.2, US-68 AC-68.1, EPIC-copy-paper-fill-repricing
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-21
 # dependencies: copytrade.models, copytrade.schemas, trading.models,
-#   trading.position_closer
+#   trading.position_closer, copytrade.tasks
 # ---
 """AC-61.2 / AC-68.1: Position exit-condition engine + shared Position settler.
 
@@ -151,6 +151,17 @@ def close_position(
 
     _update_pnl_by_wallet(position)
 
+    # --- EPIC-copy-paper-fill-repricing: dispatch retrospective repricing task ---
+    # Wrapped in bare except so close_position NEVER crashes due to this dispatch.
+    # The task runs on celery-worker (which mounts the lake); do NOT dispatch for
+    # ENTRY_REJECTED positions (already rejected at live path; nothing to reprice).
+    if exit_reason != CopytradePosition.EXIT_ENTRY_REJECTED:
+        try:
+            from copytrade.tasks import reprice_copy_fill
+            reprice_copy_fill.delay(position.pk)
+        except Exception:  # noqa: BLE001 — bare except: close must never crash
+            pass
+
     # --- AC-68.1: settle the shared trading.Position row (if linked) ---
     if position.shared_position_id:
         try:
@@ -195,13 +206,18 @@ def _update_pnl_by_wallet(position: CopytradePosition) -> None:
 
     Re-aggregates all closed positions for the (cohort_id, trigger_wallet)
     pair so the rollup stays accurate without floating-point drift.
+
+    EPIC-copy-paper-fill-repricing: EXCLUDES ENTRY_REJECTED positions from
+    the trade count and win-rate (never bought, lost nothing — moving 32% → 47%
+    as described in the epic spec).  PnL rollup also excludes ENTRY_REJECTED
+    (PnL is NULL for those rows).
     """
     closed = list(
         CopytradePosition.objects.filter(
             cohort_id=position.cohort_id,
             trigger_wallet=position.trigger_wallet,
             status=CopytradePosition.STATUS_CLOSED,
-        )
+        ).exclude(exit_reason=CopytradePosition.EXIT_ENTRY_REJECTED)
     )
     n_trades = len(closed)
     if n_trades == 0:

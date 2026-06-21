@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.models
-# sprint: sprint-12, copytrade-2.1-loader, US-75
-# story: US-58 AC-58.1, US-58 AC-58.2, US-62 AC-62.1, copytrade-v2.1, US-75 AC-1
+# sprint: sprint-12, copytrade-2.1-loader, US-75, epic/copy-paper-fill-repricing
+# story: US-58 AC-58.1, US-58 AC-58.2, US-62 AC-62.1, copytrade-v2.1, US-75 AC-1, EPIC-copy-paper-fill-repricing
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-20
+# last-updated: 2026-06-21
 # dependencies: django, copytrade.schemas, pydantic
 # ---
 """Django models for the copytrade §5-isolated namespace (SPEC §2, §5, §7, §9).
@@ -347,6 +347,25 @@ class CopytradePosition(models.Model):
     # IntegerField (not FK) to avoid Django cascade semantics and preserve §5 isolation.
     # Null when the position was created before AC-68.1 or outside the shared path.
     shared_position_id = models.IntegerField(null=True, blank=True, db_index=True)
+
+    # --- EPIC-copy-paper-fill-repricing: retrospective reprice status ---
+    # NULL     = pending (repricing task not yet run, or position not yet closed)
+    # "REPRICED"              = fill repriced from firehose lake; entry_price updated
+    # "ENTRY_REJECTED_TAPE"   = repriced price was >15% above wallet quote
+    # "NO_TAPE"               = no matching lake row in window; curve-sim price kept
+    REPRICE_STATUS_REPRICED = "REPRICED"
+    REPRICE_STATUS_ENTRY_REJECTED_TAPE = "ENTRY_REJECTED_TAPE"
+    REPRICE_STATUS_NO_TAPE = "NO_TAPE"
+
+    entry_reprice_status = models.CharField(
+        max_length=24,
+        null=True,
+        blank=True,
+        help_text=(
+            "EPIC-copy-paper-fill-repricing: NULL=pending, REPRICED=repriced from lake, "
+            "ENTRY_REJECTED_TAPE=repriced price >15% cap, NO_TAPE=no lake row in window."
+        ),
+    )
 
     class Meta:
         app_label = "copytrade"
