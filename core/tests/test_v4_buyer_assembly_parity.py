@@ -223,30 +223,39 @@ def test_extract_buyers_ignores_post_grad_swaps() -> None:
 
 
 def test_extract_buyers_cumulative_vol_and_weight_clip() -> None:
-    """Buyers' vol is cumulated across multiple swaps; weight >= 1.0 always."""
+    """Lab-faithful weights: TIME pool = FIRST-buy USD (lab usd_in), SIZE pool =
+    cumulative USD (lab total_usd); both clipped >= 1.0.
+
+    W01 buys twice (5.0 then 8.0): first-buy=5.0, cumulative=13.0 — this
+    DISTINGUISHES first-buy (time) from cumulative (size). W03 buys 0.3 twice
+    (first-buy 0.3, cumulative 0.6) — both clip to 1.0.
+    """
     from core.v4_rep_builder import extract_buyers_from_swaps
 
-    # W01 appears twice with vol 0.3 each (cumulative = 0.6 < 1.0 → clipped to 1.0)
-    # W02 appears once with vol=50.0
     swaps = [
-        _make_swap("W01", vol=0.3, rel=-100.0, side="buy"),
+        _make_swap("W01", vol=5.0, rel=-100.0, side="buy"),
         _make_swap("W02", vol=50.0, rel=-90.0, side="buy"),
-        _make_swap("W01", vol=0.3, rel=-80.0, side="buy"),  # second swap for W01
+        _make_swap("W01", vol=8.0, rel=-80.0, side="buy"),   # W01 second buy
+        _make_swap("W03", vol=0.3, rel=-70.0, side="buy"),
+        _make_swap("W03", vol=0.3, rel=-60.0, side="buy"),   # W03 second buy
     ]
     time_buyers, size_buyers = extract_buyers_from_swaps(swaps)
 
-    # Time pool: W01 first (arrived first), W02 second
+    # TIME pool weight = FIRST-buy USD (lab usd_in), NOT cumulative.
     time_by_wallet = {b["wallet"]: b["weight"] for b in time_buyers}
-    assert "W01" in time_by_wallet
-    assert time_by_wallet["W01"] == 1.0, (
-        f"W01 cumulative vol=0.6 < 1.0 should be clipped to 1.0, got {time_by_wallet['W01']}"
+    assert time_by_wallet["W01"] == 5.0, (
+        f"W01 time weight must be FIRST-buy 5.0 (lab usd_in), not cumulative 13.0; got {time_by_wallet['W01']}"
     )
-    assert time_by_wallet.get("W02") == 50.0
+    assert time_by_wallet["W02"] == 50.0
+    assert time_by_wallet["W03"] == 1.0  # first-buy 0.3 clipped to 1.0
 
-    # Size pool: W02 first (higher cumulative vol)
+    # SIZE pool weight = cumulative USD (lab total_usd).
     size_by_wallet = {b["wallet"]: b["weight"] for b in size_buyers}
-    assert size_by_wallet.get("W02") == 50.0
-    assert size_by_wallet["W01"] == 1.0  # clipped
+    assert size_by_wallet["W01"] == 13.0, (
+        f"W01 size weight must be cumulative 13.0 (lab total_usd); got {size_by_wallet['W01']}"
+    )
+    assert size_by_wallet["W02"] == 50.0
+    assert size_by_wallet["W03"] == 1.0  # cumulative 0.6 clipped to 1.0
 
 
 # ---------------------------------------------------------------------------

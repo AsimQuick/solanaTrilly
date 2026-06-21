@@ -435,17 +435,28 @@ def extract_buyers_from_swaps(
 ) -> tuple[list[dict], list[dict]]:
     """Extract the time-pool and size-pool buyers from a pre-grad swap tape.
 
-    Mirrors the whale_edges / whale_edges_bysize logic from the lab:
-    - time pool: first-10 unique buyers by block_time order
-    - size pool: top-10 unique buyers by cumulative usd_in (vol field)
+    Mirrors the whale_edges / whale_edges_bysize logic from the lab EXACTLY
+    (analysis/whale_graph/build_edges.py + build_edges_bysize.py):
+    - time pool: first-10 distinct BUY owners in BLOCK_TIME order; weight =
+      that buyer's FIRST-buy USD (lab `usd_in`), clipped >= 1.
+    - size pool: top-10 distinct buyers by TOTAL USD bought (lab `total_usd`);
+      weight = cumulative USD, clipped >= 1.
     Both pools exclude the deployer and wallets whose address ends with "pump".
+
+    Fidelity notes (2026-06-21, verified against the lab builders):
+    - The lab sorts the tape by block_time before taking the first-10, so we
+      sort here too (do NOT rely on caller order) — otherwise the time-pool
+      buyer SET diverges from training when the live tape is out of order.
+    - The lab time-pool weight is the buyer's FIRST buy's USD (`usd_in`), NOT
+      the cumulative total. (The size pool IS cumulative `total_usd`.) Using
+      cumulative for the time pool diverged time_*_wmean from training.
 
     Parameters
     ----------
     swaps:
         Pre-graduation normalized swap dicts (§7.1 shape, rel < 0, side=buy/sell).
-        Should be ALREADY sorted by (block_time, signature) — the same order
-        compute_pregrad_features uses.
+        `vol` is USD when the sol_usd spot was threaded (matches the lab's USD
+        usd_in/total_usd basis). Order-independent — we sort internally.
     deployer:
         Optional deployer wallet address to exclude.
     top_k:
@@ -455,10 +466,15 @@ def extract_buyers_from_swaps(
     -------
     (time_buyers, size_buyers)
         Each is a list of dicts {wallet, weight} where:
-          time: weight = cumulative vol (usd_in) of that buyer, clipped >= 1
-          size: weight = cumulative vol (total_usd) of that buyer, clipped >= 1
+          time: weight = FIRST-buy USD (lab usd_in) of that buyer, clipped >= 1
+          size: weight = cumulative USD (lab total_usd) of that buyer, clipped >= 1
     """
-    buy_swaps = [s for s in swaps if s.get("side") == "buy" and s.get("rel", 0) < 0]
+    # Sort by block_time (stable) so "first-N by time" matches the lab's
+    # explicit sort; ties keep tape order (the blessed same-block parity break).
+    buy_swaps = sorted(
+        (s for s in swaps if s.get("side") == "buy" and s.get("rel", 0) < 0),
+        key=lambda s: float(s.get("block_time", 0) or 0),
+    )
 
     def _is_excluded(wallet: str) -> bool:
         if not wallet:
@@ -467,8 +483,10 @@ def extract_buyers_from_swaps(
             return True
         return wallet.endswith("pump")
 
-    # Accumulate per-buyer total volume and record first appearance order
+    # Per-buyer: cumulative USD (size weight) + first-buy USD (time weight) +
+    # first-appearance order (time-pool membership).
     buyer_vol: dict[str, float] = {}
+    first_buy_vol: dict[str, float] = {}
     first_appearance: list[str] = []
     for s in buy_swaps:
         wallet = s.get("owner") or ""
@@ -477,16 +495,17 @@ def extract_buyers_from_swaps(
         vol = float(s.get("vol", 0.0))
         if wallet not in buyer_vol:
             buyer_vol[wallet] = 0.0
+            first_buy_vol[wallet] = vol  # lab usd_in = USD of the FIRST buy
             first_appearance.append(wallet)
         buyer_vol[wallet] += vol
 
-    # Time pool: first-top_k unique buyers by arrival order
+    # Time pool: first-top_k distinct buyers by time; weight = FIRST-buy USD.
     time_buyers = [
-        {"wallet": w, "weight": max(1.0, buyer_vol[w])}
+        {"wallet": w, "weight": max(1.0, first_buy_vol[w])}
         for w in first_appearance[:top_k]
     ]
 
-    # Size pool: top-top_k unique buyers by cumulative vol
+    # Size pool: top-top_k distinct buyers by cumulative USD; weight = total USD.
     size_sorted = sorted(buyer_vol.items(), key=lambda x: x[1], reverse=True)
     size_buyers = [
         {"wallet": w, "weight": max(1.0, v)}
