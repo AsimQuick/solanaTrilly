@@ -1,8 +1,8 @@
 # ---
 # module: copytrade.curve_ix
-# sprint: feat/copy-live-exec-curve-ix
-# story: copy-live-exec
-# status: implemented
+# sprint: feat/copy-live-exec-curve-ix, feature/copy-capital-path-wiring
+# story: copy-live-exec, EPIC-copy-capital-path-wiring
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
 # dependencies: copytrade.curve_price, trading.pumpswap_ix, struct, random
@@ -104,8 +104,89 @@ def _pick_breaking_fee_recipient() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Helius Sender tip-account rotation (F1 — capital path wiring)
+# ---------------------------------------------------------------------------
+# Copied VERBATIM from solanaBilly app/tasks/trading_tasks.py lines ~179-205.
+# The Helius Sender plan routes transactions through Jito infrastructure via
+# a dedicated endpoint (HELIUS_SENDER_URL). Sender requires one of these 10
+# specific tip accounts — using the old generic Jito address
+# (96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5) with the Sender endpoint
+# has no effect and wastes ~0.003 SOL per transaction.
+#
+# We rotate randomly across all 10 on each transaction build rather than using
+# a fixed account or a round-robin counter. The rationale: Jito write-lock
+# contention. Each tip account is write-locked during a slot while the
+# Sender infrastructure processes it. If multiple concurrent senders all pick
+# the same account, their transactions queue behind each other. True random
+# selection (random.choice) distributes load without any shared-counter state,
+# which also keeps the helper stateless and easy to test.
+#
+# IMPORTANT: This pool is DISTINCT from PUMP_FUN_BREAKING_FEE_RECIPIENTS above.
+# The breaking-fee pool goes to pump.fun's program; these tip accounts go to
+# the Helius Sender / Jito infrastructure. Never confuse the two.
+HELIUS_SENDER_TIP_ACCOUNTS: tuple[str, ...] = (
+    "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE",
+    "D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ",
+    "9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta",
+    "5VY91ws6B2hMmBFRsXkoAAdsPHBJwRfBht4DXox3xkwn",
+    "2nyhqdwKcJZR2vcqCyrYsaPVdAnFoJjiksCXJ7hfEYgD",
+    "2q5pghRs6arqVjRvT5gfgWfWcHWmw1ZuCzphgd5KfWGJ",
+    "wyvPkWjVZz1M8fHQnMMCDTQDbkManefNNhweYk5WkcF",
+    "3KCKozbAaF75qEU33jtzozcJ29yJuaLJTy2jFdzUY8bT",
+    "4vieeGHPYPG2MmyPRcYjdiDmmhN3ww7hsFNap8pVN3Ey",
+    "4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or",
+)
+
+#: Default Jito tip per transaction in lamports (5_000_000 = 0.005 SOL).
+#: Matches solanaBilly's per-tx tip (trading_tasks.py ~167-205 context).
+DEFAULT_JITO_TIP_LAMPORTS: int = 5_000_000
+
+
+def _pick_helius_sender_tip_account() -> str:
+    """Return a randomly-selected Helius Sender tip account.
+
+    Copied VERBATIM from solanaBilly app/tasks/trading_tasks.py lines ~193-205.
+    Picks from HELIUS_SENDER_TIP_ACCOUNTS using random.choice (not
+    deterministically seeded) so each transaction uses a different account
+    from the pool. This avoids write-lock contention when the Sender
+    infrastructure processes concurrent tips from multiple senders in the
+    same slot.
+
+    Returns:
+        Base58 tip account address string.
+    """
+    return random.choice(HELIUS_SENDER_TIP_ACCOUNTS)
+
+
+# ---------------------------------------------------------------------------
 # Compute-budget helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_system_transfer(from_bytes: bytes, to_bytes: bytes, lamports: int) -> Instruction:
+    """Build a System Program Transfer instruction (pure derivation).
+
+    Used for the Helius Sender Jito tip transfer appended to buy/sell ix lists.
+
+    Args:
+        from_bytes:  32-byte pubkey of the payer/sender (signer + writable).
+        to_bytes:    32-byte pubkey of the tip account (writable, not signer).
+        lamports:    Amount to transfer in lamports.
+
+    Returns:
+        Instruction — serialised System Program Transfer (discriminator 2 + u64 LE).
+    """
+    SYSTEM_PROGRAM_BYTES = bytes(32)  # 11111...
+    # System program Transfer discriminator = 2 (u32 LE) + amount (u64 LE)
+    data = struct.pack("<IQ", 2, lamports)
+    return Instruction(
+        program_id=SYSTEM_PROGRAM_BYTES,
+        accounts=[
+            AccountMeta(pubkey=from_bytes, is_signer=True, is_writable=True, name="from"),
+            AccountMeta(pubkey=to_bytes, is_signer=False, is_writable=True, name="to"),
+        ],
+        data=data,
+    )
 
 
 def _set_compute_unit_price(micro_lamports: int) -> Instruction:
@@ -207,11 +288,18 @@ def build_curve_buy_instructions(
     token_program_b58: str = SPL_TOKEN_PROGRAM,
     compute_unit_price: int = 1000,
     compute_unit_limit: int = 200_000,
+    jito_tip_lamports: int = DEFAULT_JITO_TIP_LAMPORTS,
 ) -> list[Instruction]:
     """Build pump.fun bonding-curve BUY instruction list (18 accounts, post-upgrade).
 
     Returns [set_compute_unit_price, set_compute_unit_limit, create_ata_idempotent,
-             bonding_curve_buy] — 4 instructions, ready for build_signed_tx_b64.
+             bonding_curve_buy, jito_tip_transfer] — 5 instructions, ready for
+             build_signed_tx_b64.
+
+    The jito_tip_transfer (last ix) sends jito_tip_lamports from the wallet to a
+    randomly-chosen Helius Sender tip account (HELIUS_SENDER_TIP_ACCOUNTS). This
+    pool is DISTINCT from the pump.fun breaking-fee pool — do not confuse them.
+    Copied from solanaBilly trading_tasks.py ~167-205 (F1 — capital path wiring).
 
     No network I/O. Pure derivation + struct packing. CAPITAL SAFE.
 
@@ -226,9 +314,12 @@ def build_curve_buy_instructions(
         token_program_b58:     SPL Token or Token-2022 — owner of this mint.
         compute_unit_price:    Priority fee in micro-lamports.
         compute_unit_limit:    CU limit for the transaction.
+        jito_tip_lamports:     Lamports to transfer to the Helius Sender Jito tip
+                               account. Default 5_000_000 (0.005 SOL). Set to 0 to
+                               skip the tip instruction (offline/test only).
 
     Returns:
-        List of 4 vendored Instruction objects.
+        List of 5 vendored Instruction objects (4 + jito tip transfer).
 
     Raises:
         ValueError: If creator_b58 is empty (cannot derive creator_vault PDA).
@@ -340,7 +431,20 @@ def build_curve_buy_instructions(
         data=buy_data,
     )
 
-    return [ix_cu_price, ix_cu_limit, ix_create_ata, ix_buy]
+    # --- Helius Sender Jito tip transfer (F1 — capital path wiring) ---
+    # Appended after the main buy ix (same tx).  Tip pool is DISTINCT from the
+    # pump.fun breaking-fee pool above.  Copied from solanaBilly ~167-205.
+    ixs: list[Instruction] = [ix_cu_price, ix_cu_limit, ix_create_ata, ix_buy]
+    if jito_tip_lamports > 0:
+        tip_account_bytes = b58decode(_pick_helius_sender_tip_account())
+        ix_jito_tip = _build_system_transfer(
+            from_bytes=wallet_pubkey_bytes,
+            to_bytes=tip_account_bytes,
+            lamports=jito_tip_lamports,
+        )
+        ixs.append(ix_jito_tip)
+
+    return ixs
 
 
 # ---------------------------------------------------------------------------
@@ -360,15 +464,25 @@ def build_curve_sell_instructions(
     token_program_b58: str = SPL_TOKEN_PROGRAM,
     compute_unit_price: int = 1000,
     compute_unit_limit: int = 200_000,
+    jito_tip_lamports: int = DEFAULT_JITO_TIP_LAMPORTS,
 ) -> list[Instruction]:
     """Build pump.fun bonding-curve SELL instruction list (14-17 accounts, post-upgrade).
 
-    Returns [set_compute_unit_price, set_compute_unit_limit, bonding_curve_sell]
-    — 3 instructions, ready for build_signed_tx_b64.
+    Returns [set_compute_unit_price, set_compute_unit_limit, bonding_curve_sell,
+             jito_tip_transfer] — 4 instructions, ready for build_signed_tx_b64.
 
     The user_volume_accumulator account is ONLY included when is_cashback_coin=True
     (Anchor 6024 if omitted on cashback tokens; harmless to omit for non-cashback).
     bonding_curve_v2 and breaking_fee_recipient are always appended (post-upgrade).
+
+    The jito_tip_transfer (last ix) sends jito_tip_lamports from the wallet to a
+    randomly-chosen Helius Sender tip account (HELIUS_SENDER_TIP_ACCOUNTS). This
+    pool is DISTINCT from the pump.fun breaking-fee pool — do not confuse them.
+    Copied from solanaBilly trading_tasks.py ~167-205 (F1 — capital path wiring).
+
+    NOTE: min_sol_output_lamports=0 is a deliberate validation choice — accepts any
+    return from the curve. Production needs slippage tiering (see F6 / billy's
+    per-attempt tier logic in trading_tasks.py ~3820 sell_position). (F6 doc)
 
     No network I/O. Pure derivation + struct packing. CAPITAL SAFE.
 
@@ -382,12 +496,16 @@ def build_curve_sell_instructions(
                                   user_volume_accumulator in sell accounts.
         token_amount:             Token base units to sell (u64 exact-in).
         min_sol_output_lamports:  Minimum SOL to receive (slippage floor, u64).
+                                  0 = no floor (validation path — accepts any return).
         token_program_b58:        SPL Token or Token-2022 — owner of this mint.
         compute_unit_price:       Priority fee in micro-lamports.
         compute_unit_limit:       CU limit for the transaction.
+        jito_tip_lamports:        Lamports to transfer to the Helius Sender Jito tip
+                                  account. Default 5_000_000 (0.005 SOL). Set to 0 to
+                                  skip the tip instruction (offline/test only).
 
     Returns:
-        List of 3 vendored Instruction objects.
+        List of 4 vendored Instruction objects (3 + jito tip transfer when tip > 0).
 
     Raises:
         ValueError: If creator_b58 is empty.
@@ -485,7 +603,20 @@ def build_curve_sell_instructions(
         data=sell_data,
     )
 
-    return [ix_cu_price, ix_cu_limit, ix_sell]
+    # --- Helius Sender Jito tip transfer (F1 — capital path wiring) ---
+    # Appended after the main sell ix (same tx). Tip pool is DISTINCT from the
+    # pump.fun breaking-fee pool above. Copied from solanaBilly ~167-205.
+    ixs: list[Instruction] = [ix_cu_price, ix_cu_limit, ix_sell]
+    if jito_tip_lamports > 0:
+        tip_account_bytes = b58decode(_pick_helius_sender_tip_account())
+        ix_jito_tip = _build_system_transfer(
+            from_bytes=wallet_pubkey_bytes,
+            to_bytes=tip_account_bytes,
+            lamports=jito_tip_lamports,
+        )
+        ixs.append(ix_jito_tip)
+
+    return ixs
 
 
 __all__ = [
@@ -494,6 +625,8 @@ __all__ = [
     "PUMP_FUN_FEE_RECIPIENT_LEGACY",
     "PUMP_FUN_FEE_RECIPIENT_MAYHEM",
     "PUMP_FUN_BREAKING_FEE_RECIPIENTS",
+    "HELIUS_SENDER_TIP_ACCOUNTS",
+    "DEFAULT_JITO_TIP_LAMPORTS",
     "BUY_DISCRIMINATOR",
     "SELL_DISCRIMINATOR",
     "build_curve_buy_instructions",

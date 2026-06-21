@@ -102,8 +102,8 @@ def _dummy_blockhash() -> str:
 # ===========================================================================
 
 
-def test_buy_instructions_returns_four():
-    """buy builder returns exactly 4 instructions."""
+def test_buy_instructions_returns_four_no_tip():
+    """buy builder returns exactly 4 instructions when jito_tip_lamports=0 (no tip)."""
     ixs = build_curve_buy_instructions(
         wallet_pubkey_bytes=_WALLET_BYTES,
         mint_b58=_MINT,
@@ -111,8 +111,23 @@ def test_buy_instructions_returns_four():
         is_mayhem_mode=False,
         token_amount=1_000_000,
         max_sol_cost_lamports=10_000_000,
+        jito_tip_lamports=0,  # explicitly skip tip for shape test
     )
-    assert len(ixs) == 4, f"expected 4 instructions, got {len(ixs)}"
+    assert len(ixs) == 4, f"expected 4 instructions (no tip), got {len(ixs)}"
+
+
+def test_buy_instructions_returns_five_with_default_tip():
+    """buy builder returns exactly 5 instructions with default jito tip (F1)."""
+    ixs = build_curve_buy_instructions(
+        wallet_pubkey_bytes=_WALLET_BYTES,
+        mint_b58=_MINT,
+        creator_b58=_CREATOR,
+        is_mayhem_mode=False,
+        token_amount=1_000_000,
+        max_sol_cost_lamports=10_000_000,
+        # default jito_tip_lamports=DEFAULT_JITO_TIP_LAMPORTS
+    )
+    assert len(ixs) == 5, f"expected 5 instructions (4 + jito tip), got {len(ixs)}"
 
 
 def test_buy_main_ix_program_id():
@@ -255,8 +270,8 @@ def test_buy_none_mayhem_uses_legacy():
 # ===========================================================================
 
 
-def test_sell_instructions_returns_three_non_cashback():
-    """sell builder returns 3 instructions for non-cashback tokens."""
+def test_sell_instructions_returns_three_non_cashback_no_tip():
+    """sell builder returns 3 instructions for non-cashback tokens when jito_tip=0."""
     ixs = build_curve_sell_instructions(
         wallet_pubkey_bytes=_WALLET_BYTES,
         mint_b58=_MINT,
@@ -265,8 +280,24 @@ def test_sell_instructions_returns_three_non_cashback():
         is_cashback_coin=False,
         token_amount=1_000_000,
         min_sol_output_lamports=0,
+        jito_tip_lamports=0,  # explicitly skip tip for shape test
     )
     assert len(ixs) == 3
+
+
+def test_sell_instructions_returns_four_non_cashback_with_default_tip():
+    """sell builder returns 4 instructions for non-cashback tokens with default tip (F1)."""
+    ixs = build_curve_sell_instructions(
+        wallet_pubkey_bytes=_WALLET_BYTES,
+        mint_b58=_MINT,
+        creator_b58=_CREATOR,
+        is_mayhem_mode=False,
+        is_cashback_coin=False,
+        token_amount=1_000_000,
+        min_sol_output_lamports=0,
+        # default jito_tip_lamports=DEFAULT_JITO_TIP_LAMPORTS
+    )
+    assert len(ixs) == 4
 
 
 def test_sell_discriminator_matches_constant():
