@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.position_opener
-# sprint: sprint-12, sprint-13, cutover (copy-trade live)
-# story: US-61 AC-61.1, US-68 AC-68.1, US-68 AC-68.2, copytrade-runtime
+# sprint: sprint-12, sprint-13, cutover (copy-trade live), hotfix/preflight-ghostbuy
+# story: US-61 AC-61.1, US-68 AC-68.1, US-68 AC-68.2, copytrade-runtime, preflight-ghostbuy
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-19
+# last-updated: 2026-06-21
 # dependencies: copytrade.models, copytrade.schemas, copytrade.trigger_pipeline,
 #   trading.models, trading.execution_core
 # ---
@@ -37,14 +37,18 @@ so the P8 gate cannot be bypassed accidentally.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from copytrade.models import CopytradePosition
 from copytrade.schemas import CopyTradeConfig
 from copytrade.trigger_pipeline import OpenedPositionRecord
 from trading.execution_core import ExecuteResult, ExecutionCore
 from trading.models import Position as SharedPosition
+
+_logger = logging.getLogger("copytrade")
 
 # ---------------------------------------------------------------------------
 # V2 record type — used by the cohort-2.0 engine path
@@ -242,13 +246,20 @@ def open_observe_position_v2(
 # ---------------------------------------------------------------------------
 
 
+_LAMPORTS_PER_SOL: int = 1_000_000_000
+
+
 def open_live_position(
     record: OpenedPositionRecord,
     entry_price: float,
     config: CopyTradeConfig,
     execution_core: ExecutionCore,
     serialized_tx_b64: str = "",
-) -> tuple[CopytradePosition, ExecuteResult]:
+    *,
+    sender: Any = None,
+    expected_tokens: int = 0,
+    get_balance_fn: Any = None,
+) -> tuple[CopytradePosition | None, ExecuteResult]:
     """Open a LIVE-mode position routed through the shared ExecutionCore gate.
 
     This is the AC-68.2 gated boundary: mode=live routes to the shared
@@ -257,16 +268,38 @@ def open_live_position(
     placed.  Capital is only committed at Cutover (PRD §16) when the operator
     provisions the trading-wallet secret and explicitly flips trading_enabled=True.
 
-    Position rows written (capital-OFF / PAPER status until Cutover):
-        shared trading.Position: source=SOURCE_COPYTRADE, mode=MODE_LIVE, status=STATUS_PAPER
-        CopytradePosition:       mode=MODE_LIVE, linked via shared_position_id
+    When trading_enabled=True and exec_result.sent=True, this function performs
+    ghost-buy reconciliation before booking any position:
+
+      1. Calls sender.verify_ghost_buy(mint, expected_tokens, get_balance_fn) to
+         confirm tokens actually landed.
+      2. If received=False (ghost buy) or received=None (inconclusive): does NOT
+         open a CopytradePosition row and does NOT write a shared Position row.
+         Returns (None, exec_result) — no phantom positions.
+      3. If received=True: computes the REAL landed fill:
+         - real_tokens_received = GhostBuyResult.balance (raw token base units).
+         - real_sol_spent = exec_result.send_result.sol_spent_lamports / 1e9 if
+           available; falls back to config.sol_size_per_trade (the simulated curve
+           fill) when the getTransaction decode did not surface balance data.
+           Approximation: sol_spent_lamports includes the tx fee and any ATA-
+           creation rent alongside the token-purchase cost; these are bundled and
+           not separated (see PR body for rationale).
+         - real_entry_price = real_sol_spent / real_tokens_received.
+         Writes the shared Position with status=STATUS_OPEN (non-PAPER) and
+         the CopytradePosition with the real landed entry_price and sol_in.
+
+    When trading_enabled=False (observe/paper gate) or the preflight fails, the
+    function falls through to the original PAPER booking path (unchanged):
+    shared Position status=STATUS_PAPER, CopytradePosition written normally.
+    OBSERVE/PAPER positions are byte-for-byte unchanged.
 
     Parameters
     ----------
     record:
         An OpenedPositionRecord produced by run_trigger_pipeline (US-60 AC-60.3).
     entry_price:
-        The current curve price at which the paper fill is booked.
+        The simulated curve fill price.  Used as entry_price when sent=False
+        (observe/paper gate) or as fallback when reconciliation is unavailable.
     config:
         Active CopyTradeConfig.  mode MUST be 'live'; ValueError is raised otherwise.
     execution_core:
@@ -276,10 +309,23 @@ def open_live_position(
     serialized_tx_b64:
         Base64-encoded signed transaction bytes.  Passed through to
         execution_core.execute_buy.  Empty string is accepted in paper/observe gate.
+    sender:
+        Optional Sender instance for ghost-buy verification.  Required when
+        trading_enabled=True and exec_result.sent=True.  If absent on the live
+        path, reconciliation is skipped and the PAPER booking path is used as
+        a fail-safe (never crashes).
+    expected_tokens:
+        Estimated token amount from the curve buy quote (used for ghost-buy
+        threshold: < 10% of expected → ghost buy).  0 accepted (no threshold).
+    get_balance_fn:
+        Optional callable override for ghost-buy ATA balance query (for testing).
+        None in production — the Sender uses its live _get_ata_balance impl.
 
     Returns
     -------
-    Tuple of (CopytradePosition, ExecuteResult).
+    Tuple of (CopytradePosition | None, ExecuteResult).
+    - (None, exec_result): ghost buy / inconclusive — no position written.
+    - (position, exec_result): position booked (paper or real depending on gate).
     ExecuteResult.sent is False when trading_enabled=False (paper/observe gate).
 
     Raises
@@ -302,7 +348,111 @@ def open_live_position(
         serialized_tx_b64, sol_amount=float(config.sol_size_per_trade)
     )
 
-    # --- Write shared trading.Position row (capital-OFF: STATUS_PAPER until Cutover) ---
+    # --- Ghost-buy reconciliation (LIVE path: exec_result.sent=True) ---
+    if exec_result.sent and sender is not None:
+        try:
+            ghost = sender.verify_ghost_buy(
+                record.mint,
+                expected_tokens,
+                get_balance_fn,
+            )
+
+            if not ghost.received:
+                # received=False → confirmed ghost buy (0 tokens).
+                # received=None  → inconclusive (all RPC errors).
+                # In both cases: do NOT open a phantom position.
+                _logger.warning(
+                    "[copytrade] ghost-buy: mint=%.8s received=%s balance=%d "
+                    "— NO position written (ghost/inconclusive)",
+                    record.mint,
+                    ghost.received,
+                    ghost.balance,
+                )
+                return None, exec_result
+
+            # Tokens confirmed landed — compute the REAL landed fill.
+            real_tokens: int = ghost.balance  # raw base units
+
+            # sol_spent_lamports: total SOL debit from payer account (pre - post balance).
+            # Includes tx fee + ATA-creation rent + token-purchase SOL (bundled).
+            # Approximation: fee/rent not separated from purchase cost.
+            # Fallback to simulated sol_in when the getTransaction decode is unavailable.
+            raw_sr = exec_result.send_result
+            sol_spent_lam: int | None = getattr(raw_sr, "sol_spent_lamports", None)
+            if sol_spent_lam is not None and sol_spent_lam > 0:
+                real_sol_spent = sol_spent_lam / _LAMPORTS_PER_SOL
+            else:
+                # Fallback: use the simulated curve amount.  Log so operator can see.
+                real_sol_spent = float(config.sol_size_per_trade)
+                _logger.info(
+                    "[copytrade] ghost-reconcile-fallback: mint=%.8s "
+                    "sol_spent_lamports unavailable — using simulated sol_in=%.6f",
+                    record.mint,
+                    real_sol_spent,
+                )
+
+            if real_tokens > 0:
+                real_entry_price = real_sol_spent / real_tokens
+            else:
+                real_entry_price = entry_price  # degenerate guard
+                _logger.warning(
+                    "[copytrade] ghost-reconcile: real_tokens=0 — using curve fill price"
+                )
+
+            _logger.info(
+                "[copytrade] live-fill-reconciled: mint=%.8s tokens=%d sol=%.6f "
+                "real_entry_price=%.8g (vs simulated=%.8g)",
+                record.mint,
+                real_tokens,
+                real_sol_spent,
+                real_entry_price,
+                entry_price,
+            )
+
+            # Write shared Position with STATUS_OPEN (real capital at risk — non-PAPER).
+            shared_pos = SharedPosition(
+                mint=record.mint,
+                source=SharedPosition.SOURCE_COPYTRADE,
+                mode=SharedPosition.MODE_LIVE,
+                status=SharedPosition.STATUS_OPEN,  # NON-PAPER: real tokens landed
+                entry_ts=record.entry_ts,
+                entry_price=real_entry_price,
+                size_sol=real_sol_spent,
+            )
+            shared_pos.save()
+
+            # Write CopytradePosition with the REAL landed fill.
+            position = CopytradePosition(
+                cohort_id=record.cohort_id,
+                mint=record.mint,
+                trigger_wallet=record.trigger_wallet,
+                status=CopytradePosition.STATUS_OPEN,
+                mode=CopytradePosition.MODE_LIVE,
+                entry_ts=record.entry_ts,
+                entry_price=real_entry_price,
+                entry_tokens=float(real_tokens),
+                sol_in=real_sol_spent,
+                shared_position_id=shared_pos.pk,
+            )
+            position.save()
+            return position, exec_result
+
+        except Exception as _exc:  # noqa: BLE001 — reconciliation must never crash
+            _logger.error(
+                "[copytrade] ghost-reconcile-error: mint=%.8s err=%s "
+                "— falling back to PAPER booking (fail-safe)",
+                record.mint,
+                _exc,
+            )
+            # Fall through to the PAPER booking path below.
+
+    # --- PAPER booking path (sent=False OR sender absent OR reconcile error) ---
+    # Unchanged from the pre-reconciliation version.
+    # - sent=False (observe/paper gate, preflight failed, budget kill):
+    #   writes STATUS_PAPER (no capital at risk).
+    # - sent=True but no sender / reconciliation error:
+    #   writes STATUS_PAPER as a fail-safe (tokens may have landed — operator
+    #   must manually reconcile; the log above records the send signature).
     shared_pos = SharedPosition(
         mint=record.mint,
         source=SharedPosition.SOURCE_COPYTRADE,
@@ -314,7 +464,6 @@ def open_live_position(
     )
     shared_pos.save()
 
-    # --- Write copytrade-specific position row ---
     position = CopytradePosition(
         cohort_id=record.cohort_id,
         mint=record.mint,
