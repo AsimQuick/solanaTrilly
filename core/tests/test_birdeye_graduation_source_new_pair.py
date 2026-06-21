@@ -294,6 +294,22 @@ def test_bass_decimals_are_9():
 # ---------------------------------------------------------------------------
 
 
+def test_parse_naive_iso_string_is_treated_as_utc():
+    """REQUIRED (capital review): a NAIVE ISO blockTime (no tz suffix) MUST parse
+    as UTC, not host-local time. If it were ever read as local, graduated_block_time
+    would be off by the host tz offset (hours), silently corrupting the pre-grad
+    tape `rel` anchor and the score-join. This pins the UTC contract as code,
+    independent of any frame fixture / the test host's timezone.
+    """
+    from core.tape.birdeye_graduation_source import parse_liquidity_added_at
+
+    # 2026-06-21T09:03:06 UTC == epoch 1782032586
+    assert parse_liquidity_added_at("2026-06-21T09:03:06") == 1782032586
+    assert parse_liquidity_added_at("2026-06-21T09:03:06") == int(
+        datetime(2026, 6, 21, 9, 3, 6, tzinfo=timezone.utc).timestamp()
+    )
+
+
 def test_block_time_is_integer_epoch():
     event = _map(_OILPEPE_FRAME)
     assert isinstance(event["blockTime"], int)

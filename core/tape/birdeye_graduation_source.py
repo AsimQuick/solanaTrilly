@@ -280,6 +280,20 @@ def _dex_allowlist(config: dict | None) -> frozenset[str]:
     return frozenset(DEFAULT_DEX_ALLOWLIST)
 
 
+def _new_pair_source(config: dict | None) -> str:
+    """Return the Birdeye NEW_PAIR ``data.source`` value to filter graduations on.
+
+    Default "pump_amm" (PumpSwap, the sole pump.fun graduation destination).
+    Config-driven so the filter can be retuned live if Birdeye ever relabels the
+    PumpSwap DEX, without a code change/redeploy.
+    """
+    cfg = config or {}
+    raw = cfg.get(_CFG_NEW_PAIR_SOURCE)
+    if isinstance(raw, str) and raw:
+        return raw
+    return DEFAULT_NEW_PAIR_SOURCE
+
+
 # ---------------------------------------------------------------------------
 # Pure timestamp parser — Birdeye blockTime (ISO-8601, UTC) -> epoch int
 # (Also used by legacy TOKEN_NEW_LISTING_DATA tests as parse_liquidity_added_at)
@@ -337,6 +351,7 @@ def map_new_pair_frame(
     event_source: str,
     min_liquidity: int,
     fallback_epoch: int,
+    new_pair_source: str = DEFAULT_NEW_PAIR_SOURCE,
 ) -> dict | None:
     """Map a raw Birdeye NEW_PAIR_DATA frame to a graduation event dict, or None.
 
@@ -379,12 +394,13 @@ def map_new_pair_frame(
     if not isinstance(payload, dict):
         return None
 
-    # Filter to pump.fun (PumpSwap) pairs only.
-    if payload.get("source") != "pump_amm":
+    # Filter to pump.fun (PumpSwap) pairs only (config-driven source, default pump_amm).
+    if payload.get("source") != new_pair_source:
         logger.debug(
-            "[FIREHOSE] new-pair drop: pool=%s source=%r (not pump_amm)",
+            "[FIREHOSE] new-pair drop: pool=%s source=%r (not %s)",
             payload.get("address"),
             payload.get("source"),
+            new_pair_source,
         )
         return None
 
@@ -708,6 +724,7 @@ class BirdeyeGraduationSource(DataSource):
         self._event_source: str = _event_source(self._config)
         self._dex_allowlist: frozenset[str] = _dex_allowlist(self._config)
         self._min_liquidity: int = _min_liquidity(self._config)
+        self._new_pair_source: str = _new_pair_source(self._config)
         # Dedupe: tracks mints for which a graduation event has been emitted this session.
         self._seen_mints: set[str] = set()
         # Below-min-liquidity counter (replaces the old curve-life instant_skipped).
@@ -797,6 +814,7 @@ class BirdeyeGraduationSource(DataSource):
                 event_source=self._event_source,
                 min_liquidity=0,
                 fallback_epoch=fallback_epoch,
+                new_pair_source=self._new_pair_source,
             )
             if event is None:
                 continue
