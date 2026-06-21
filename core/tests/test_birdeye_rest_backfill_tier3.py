@@ -56,20 +56,33 @@ def _make_rest_item(
     ui_change: float = 5.0,
     tx_hash: str | None = None,
 ) -> dict[str, Any]:
-    """Build a synthetic Birdeye seek_by_time REST item."""
+    """Build a synthetic Birdeye seek_by_time REST item (REAL shape).
+
+    Real items carry NO top-level ``volume_usd``; the SOL notional lives on the
+    ``quote`` leg (SOL side: uiChangeAmount in SOL, price = SOL/USD).  ``vol_usd``
+    here parameterises the SOL amount: sol_amt = vol_usd / _SOL_USD_SPOT, so a
+    mapping with sol_usd_spot=_SOL_USD_SPOT reproduces the requested USD volume.
+    """
     bt = block_time if block_time is not None else (_GRAD_BT - 3600 + n * 10)
+    sol_amt = vol_usd / _SOL_USD_SPOT
     return {
         "txHash": tx_hash or f"BIRDSIG{n:04d}" + "A" * 80,
         "blockUnixTime": bt,
         "blockNumber": 40_000_000 + n,
         "side": side,
         "owner": f"BIRDOWNER{n:04d}" + "B" * 50,
+        "source": "pump_dot_fun",
         "base": {
             "address": _MINT,
             "uiChangeAmount": ui_change if side == "buy" else -ui_change,
             "price": price,
         },
-        "volume_usd": vol_usd,
+        "quote": {
+            "address": "So11111111111111111111111111111111111111112",
+            "uiChangeAmount": -sol_amt if side == "buy" else sol_amt,
+            "uiAmount": sol_amt,
+            "price": _SOL_USD_SPOT,
+        },
     }
 
 
@@ -600,7 +613,12 @@ def test_birdeye_backfill_parity_with_live_path():
             "uiChangeAmount": vol_sol / price,  # token quantity
             "price": price,
         },
-        "volume_usd": vol_usd,
+        "quote": {  # SOL leg (real seek_by_time shape; no top-level volume_usd)
+            "address": WSOL,
+            "uiChangeAmount": -vol_sol,  # SOL out on a buy
+            "uiAmount": vol_sol,
+            "price": _SOL_USD_SPOT,
+        },
     }
     rest_swap = _map_rest_item(rest_item, _MINT, _GRAD_BT, _SOL_USD_SPOT)
     assert rest_swap is not None, "_map_rest_item returned None for valid REST item"
