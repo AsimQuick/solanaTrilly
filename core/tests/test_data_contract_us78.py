@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_data_contract_us78
 # sprint: sprint-14
-# story: US-78 AC-78.1 (swaps), AC-78.2 (tokens)
-# status: implemented
+# story: US-78 AC-78.1 (swaps), AC-78.2 (tokens); fix/us78-export-from-lake
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-20
+# last-updated: 2026-06-21
 # dependencies: pytest, pyarrow, pandas, core.data_contract
 # ---
 """US-78 data-contract export — tests for the swaps + tokens Parquet surfaces.
@@ -272,5 +272,53 @@ def test_tokens_surface_schema_partition_manifest(tmp_path):
 def test_tokens_skips_rows_without_grad_time(tmp_path):
     toks = [_token_dict(), {"mint": "X", "graduated_block_time": None, "raw_graduation": {}}]
     res = build_tokens_dataset(toks, out_dir=tmp_path, dataset_id="t")
+    assert res["row_count"] == 1
+    assert res["skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Bad-timestamp guard in the swaps export (fix/us78-export-from-lake)
+# ---------------------------------------------------------------------------
+
+
+def test_swaps_export_drops_epoch_zero_block_time(tmp_path):
+    """build_swaps_dataset must NOT create a dt=1970 partition for block_time=0."""
+    rows = [
+        _lake_row(signature="good", block_time=1_750_000_000),
+        _lake_row(signature="bad_zero", block_time=0),
+    ]
+    res = build_swaps_dataset(rows, out_dir=tmp_path, dataset_id="t")
+    # Only the good row is written; the epoch-zero row is skipped.
+    assert res["row_count"] == 1
+    assert res["skipped"] == 1
+    swaps_dir = Path(res["path"])
+    partitions = [p.name for p in swaps_dir.glob("dt=*")]
+    assert not any("1970" in p for p in partitions), f"1970 partition found: {partitions}"
+    assert not any("1977" in p for p in partitions), f"1977 partition found: {partitions}"
+    # The good row lands in the correct 2025 partition.
+    assert f"dt={utc_date_str(1_750_000_000)}" in partitions
+
+
+def test_swaps_export_drops_pre_2020_block_time(tmp_path):
+    """Rows with a 1977-epoch block_time (raw slot number misused as timestamp) are dropped."""
+    rows = [
+        _lake_row(signature="good", block_time=1_750_000_000),
+        _lake_row(signature="bad_1977", block_time=221_000_000),  # -> 1977-01-xx
+    ]
+    res = build_swaps_dataset(rows, out_dir=tmp_path, dataset_id="t")
+    assert res["row_count"] == 1
+    assert res["skipped"] == 1
+    swaps_dir = Path(res["path"])
+    partitions = [p.name for p in swaps_dir.glob("dt=*")]
+    assert not any("1977" in p for p in partitions), f"1977 partition created: {partitions}"
+
+
+def test_swaps_export_drops_none_block_time(tmp_path):
+    """Rows missing block_time entirely are still dropped (skipped count correct)."""
+    rows = [
+        _lake_row(signature="good", block_time=1_750_000_000),
+        {"mint": "M2", "signature": "bad_none"},  # block_time absent
+    ]
+    res = build_swaps_dataset(rows, out_dir=tmp_path, dataset_id="t")
     assert res["row_count"] == 1
     assert res["skipped"] == 1

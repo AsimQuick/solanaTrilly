@@ -1,10 +1,10 @@
 # ---
 # module: core.data_contract
 # sprint: sprint-14
-# story: US-78 AC-78.1 (swaps), AC-78.2 (tokens)
-# status: implemented
+# story: US-78 AC-78.1 (swaps), AC-78.2 (tokens); fix/us78-export-from-lake
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-20
+# last-updated: 2026-06-21
 # dependencies: pyarrow, hashlib, json, pathlib, core.tape.manifest
 # ---
 """US-78 data-contract export — Parquet surfaces consumed by the solanatrills lab.
@@ -65,6 +65,12 @@ from core.tape.manifest import (
 
 # Quote leg is WSOL on pump.fun / PumpSwap; price is SOL-per-token (quote/base).
 WSOL_MINT = "So11111111111111111111111111111111111111112"
+
+#: Minimum plausible Solana block_time (2020-01-01T00:00:00Z).  Rows with a
+#: block_time at or below this value (or non-positive / None) are treated as
+#: bad-timestamp rows and excluded from the export — they must not create
+#: pre-2020 dt= partitions (the dt=1977 / dt=1970 bucket bug).
+_MIN_VALID_BLOCK_TIME: int = 1_577_836_800  # 2020-01-01 00:00:00 UTC
 
 
 # ---------------------------------------------------------------------------
@@ -202,14 +208,24 @@ def _is_finite_pos(x: Any) -> bool:
 def _project_swap_row(row: dict, mint_decimals: dict[str, int]) -> dict | None:
     """Project a raw lake row into the ``swaps`` surface schema.
 
-    Returns ``None`` for rows lacking the parity sort keys (block_time/signature)
-    — they cannot be placed deterministically and are excluded (counted by caller).
+    Returns ``None`` for rows that:
+    - lack the parity sort keys (block_time / signature) — they cannot be placed
+      deterministically and are excluded (counted by caller); or
+    - have an implausible block_time (<= ``_MIN_VALID_BLOCK_TIME``, i.e. pre-2020)
+      — these are bad-timestamp rows (epoch-zero, raw Solana slot numbers, Birdeye
+      parse failures) that would create junk dt=1970/1977/… partitions.
     """
     block_time = row.get("block_time")
     signature = row.get("signature")
     mint = row.get("mint")
     if block_time is None or signature is None or not mint:
         return None
+    try:
+        bt_int = int(block_time)
+    except (TypeError, ValueError):
+        return None
+    if bt_int <= _MIN_VALID_BLOCK_TIME:
+        return None  # pre-2020 / epoch-zero / slot-sized bad timestamp — drop
 
     vol_sol = row.get("vol_sol")
     price = row.get("price")
@@ -236,7 +252,7 @@ def _project_swap_row(row: dict, mint_decimals: dict[str, int]) -> dict | None:
 
     return {
         "mint": str(mint),
-        "block_time_s": int(block_time),
+        "block_time_s": bt_int,
         "slot": int(row["slot"]) if row.get("slot") is not None else None,
         "tx_signature": str(signature),
         "ix_index": None,  # not persisted — tertiary sort key only
@@ -251,7 +267,7 @@ def _project_swap_row(row: dict, mint_decimals: dict[str, int]) -> dict | None:
         "token_price": _f(price),
         "source": swap_source_from_phase(row.get("phase"), row.get("source")),
         # partition helper (stripped from the parquet columns via schema projection)
-        "_dt": utc_date_str(int(block_time)),
+        "_dt": utc_date_str(bt_int),
     }
 
 
