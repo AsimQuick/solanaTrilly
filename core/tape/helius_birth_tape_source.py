@@ -1,11 +1,11 @@
 # ---
 # module: core.tape.helius_birth_tape_source
 # sprint: sprint-8
-# story: US-34 AC-34.1, EPIC-graduation-migrate-detection
-# status: fixed
+# story: US-34 AC-34.1, EPIC-graduation-migrate-detection, hotfix-single-connection-fanout
+# status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
-# dependencies: core.datasource, core.clock, base64, hashlib, struct, json, logging, typing
+# dependencies: core.datasource, core.clock, base64, hashlib, struct, json, logging, typing, asyncio
 # ---
 """HeliusBirthTapeSource — program-wide Helius transactionSubscribe DataSource.
 
@@ -45,6 +45,7 @@ HeliusBirthTapeSource) using the IDENTICAL subscription parameters.  It
 emits MEME_DATA graduation dicts shaped for DetectionConsumer, stamped
 dex_source="helius_migrate".
 """
+import asyncio
 import base64
 import hashlib
 import json
@@ -616,6 +617,48 @@ class HeliusBirthTapeSource(DataSource):
 
 
 # ---------------------------------------------------------------------------
+# _QueueDataSource — queue-backed DataSource adapter (fan-out helper)
+# ---------------------------------------------------------------------------
+
+
+class _QueueDataSource(DataSource):
+    """DataSource that yields items drained from an asyncio.Queue.
+
+    Used by _helius_loop to fan-out a single raw WebSocket stream into two
+    consumers (collection and graduation detection) without opening a second
+    physical connection.
+
+    connect() and disconnect() are no-ops — the source is driven by the pump
+    task that pushes frames into the queue.  events() yields until a None
+    sentinel is received (put by the teardown path when the pump ends), then
+    returns cleanly so the consumer's run() also returns cleanly.
+
+    IMPORTANT architectural constraints (same as HeliusBirthTapeSource):
+    - No import of LiveSource, ReplaySource, core.live_source, core.replay_source
+    - No top-level ``import websockets`` — lazy import inside connect() only
+    - No ``datetime.now()`` / ``time.time()`` calls anywhere in this class
+    """
+
+    def __init__(self, queue: "asyncio.Queue[dict | None]") -> None:
+        self._queue: "asyncio.Queue[dict | None]" = queue
+
+    async def connect(self) -> None:  # no-op
+        pass
+
+    async def disconnect(self) -> None:  # no-op
+        pass
+
+    async def events(self) -> AsyncGenerator[dict[str, Any], None]:
+        """Yield frames from the queue until a None sentinel is received."""
+        while True:
+            item = await self._queue.get()
+            if item is None:
+                # Sentinel: pump has ended; signal done by returning
+                return
+            yield item
+
+
+# ---------------------------------------------------------------------------
 # HeliusMigrateSource — graduation detection on the migrate instruction
 # (EPIC-graduation-migrate-detection)
 # ---------------------------------------------------------------------------
@@ -721,14 +764,56 @@ class HeliusMigrateSource(DataSource):
             await self._ws.close()
             self._ws = None
 
+    def _decode_and_dedupe(self, raw_frame: dict) -> "dict | None":
+        """Decode a raw transactionNotification frame and apply per-session mint dedupe.
+
+        Used by BOTH the WS-backed events() path AND the queue-backed fan-out path
+        (_QueueDataSource).  Runs decode_helius_migrate_event with the injected clock
+        for fallback_epoch, applies the per-session _seen_mints dedupe set, and logs.
+
+        Args:
+            raw_frame: A JSON-parsed dict from the Helius WebSocket stream.
+
+        Returns:
+            A MEME_DATA graduation event dict if this is a new-mint migrate frame,
+            or None if the frame is not a migrate, failed, or already seen this session.
+        """
+        fallback_epoch = int(self._clock.now().timestamp())
+        event = decode_helius_migrate_event(
+            raw_frame,
+            event_source=self._event_source,
+            fallback_epoch=fallback_epoch,
+        )
+        if event is None:
+            return None
+
+        mint: str = event["address"]
+
+        # Deduplicate: emit at most once per mint per session
+        if mint in self._seen_mints:
+            logger.debug(
+                "[FIREHOSE] migrate-source: dedupe mint=%s sig=%s",
+                mint,
+                event.get("signature", ""),
+            )
+            return None
+
+        self._seen_mints.add(mint)
+        logger.info(
+            "[FIREHOSE] migrate-source: graduation detected mint=%s sig=%s slot=%s",
+            mint,
+            event.get("signature", ""),
+            event.get("slot", ""),
+        )
+        return event
+
     async def events(self) -> AsyncGenerator[dict[str, Any], None]:
         """Yield MEME_DATA graduation event dicts for each migrated pump.fun token.
 
         For each inbound Helius transactionNotification:
           1. JSON-parse.
-          2. Decode via decode_helius_migrate_event — skip non-migrate frames.
-          3. Deduplicate by mint address (emit each mint at most once).
-          4. Log and yield the graduation event.
+          2. Decode+dedupe via _decode_and_dedupe — skip non-migrate/already-seen frames.
+          3. Yield the graduation event.
 
         Yields nothing if the connection was never opened (self._ws is None).
         """
@@ -744,31 +829,41 @@ class HeliusMigrateSource(DataSource):
             if not isinstance(parsed, dict):
                 continue
 
-            fallback_epoch = int(self._clock.now().timestamp())
-            event = decode_helius_migrate_event(
-                parsed,
-                event_source=self._event_source,
-                fallback_epoch=fallback_epoch,
-            )
+            event = self._decode_and_dedupe(parsed)
             if event is None:
                 continue
 
-            mint: str = event["address"]
+            yield event
 
-            # Deduplicate: emit at most once per mint per session
-            if mint in self._seen_mints:
-                logger.debug(
-                    "[FIREHOSE] migrate-source: dedupe mint=%s sig=%s",
-                    mint,
-                    event.get("signature", ""),
-                )
+    async def events_from_queue(
+        self, queue: "asyncio.Queue[dict | None]"
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Yield MEME_DATA graduation events from a pre-populated asyncio.Queue.
+
+        Alternative to events() for the fan-out path where a single physical
+        WebSocket (HeliusBirthTapeSource) fans raw frames into a queue.  Drains
+        the queue until the None sentinel (put by the pump teardown), decoding and
+        deduping each frame via _decode_and_dedupe.
+
+        This method is used by _helius_loop in run_firehose to serve graduation
+        detection off the shared collection socket rather than a second WS.
+
+        Args:
+            queue: asyncio.Queue[dict | None] fed by the pump task in _helius_loop.
+
+        Yields:
+            MEME_DATA graduation event dicts (same shape as events()).
+        """
+        while True:
+            item = await queue.get()
+            if item is None:
+                return  # sentinel: pump ended
+
+            if not isinstance(item, dict):
                 continue
 
-            self._seen_mints.add(mint)
-            logger.info(
-                "[FIREHOSE] migrate-source: graduation detected mint=%s sig=%s slot=%s",
-                mint,
-                event.get("signature", ""),
-                event.get("slot", ""),
-            )
+            event = self._decode_and_dedupe(item)
+            if event is None:
+                continue
+
             yield event

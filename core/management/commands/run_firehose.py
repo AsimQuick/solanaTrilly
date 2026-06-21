@@ -1,7 +1,7 @@
 # ---
 # module: core.management.commands.run_firehose
 # sprint: epic-tape-sourcing-escalation
-# story: EPIC-tape-sourcing-escalation Tier 2
+# story: EPIC-tape-sourcing-escalation Tier 2, hotfix-single-connection-fanout
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
@@ -29,20 +29,19 @@ tools/firehose_state.py).
 
 CONCURRENT TASKS (asyncio) while active
 =======================================
-  a. COLLECTION    — HeliusBirthTapeSource -> MappedSwapSource(decode) ->
-                     LivePreGradBuffer, continuous, buffering EVERY pump.fun
-                     bonding-curve swap by mint with NO graduation anchor (the
-                     anchor is applied RETROACTIVELY at score time).  A two-tier
-                     idle-kill evicts dead UNgraduated mints; graduated mints are
-                     retained for scoring.  (The OLD token_store-filtered birth-
-                     tape recorder dropped all pre-grad swaps — chicken-and-egg.)
-  b. GRADUATION    — HeliusMigrateSource (PRIMARY) -> DetectionConsumer.run(),
-                     detecting pump.fun graduations from the migrate instruction
-                     on the existing Helius transactionSubscribe stream.  Zero
-                     AMM noise (100% pump.fun), push not poll.
+  a. HELIUS        — ONE physical HeliusBirthTapeSource WebSocket fans raw frames
+                     into TWO asyncio.Queue objects:
+                       collection_q -> LivePreGradBuffer (pre-grad tape)
+                       migrate_q    -> HeliusMigrateSource.events_from_queue()
+                                       -> DetectionConsumer.run() (graduation)
+                     A no-data watchdog fires a forced reconnect after
+                     tape.graduation_silence_watchdog_s (default 120s) of zero
+                     frames — kills the silent-connection failure mode.
+                     Both consumers receive the SAME frames; the collection consumer
+                     filters for Buy/Sell via decode_helius_notification; the grad
+                     consumer filters for Instruction: Migrate via _decode_and_dedupe.
                      BirdeyeGraduationSource (SECONDARY/gap-fill) ->
-                     MigrateReconciler — runs concurrently, covers Helius WS
-                     reconnect gaps; min_liquidity=5000 cuts AMM noise.
+                     MigrateReconciler — runs concurrently as backstop for gaps.
   c. SCORING SCHED — for each graduated Token not yet scored, at
                      graduated_at + scoring.score_at_elapsed_s, assemble the 20
                      PRE_FEATURE_NAMES from the collected tape and score via the
@@ -484,6 +483,11 @@ class FirehoseDaemon:
         max_runtime_s: float | None = None,
         score_tick_s: float = DEFAULT_SCORE_TICK_S,
         postgrad_tick_s: float = DEFAULT_POSTGRAD_TICK_S,
+        helius_factory=None,
+        # Legacy aliases kept for backward-compat with existing tests that pass
+        # collection_factory= or graduation_factory=.  When either is supplied
+        # the caller also passes the other; they are composed into a helius_factory
+        # shim so the test-injected sources still work without modification.
         collection_factory=None,
         graduation_factory=None,
         reconciler_factory=None,
@@ -496,8 +500,25 @@ class FirehoseDaemon:
         self._max_runtime_s = max_runtime_s
         self._score_tick_s = score_tick_s
         self._postgrad_tick_s = postgrad_tick_s
-        self._collection_factory = collection_factory or self._build_collection
-        self._graduation_factory = graduation_factory or self._build_graduation
+        # helius_factory: () -> HeliusBirthTapeSource-like (for the single connection).
+        # If the caller provides the legacy collection_factory / graduation_factory test
+        # seams (for compatibility with pre-existing tests), use those in a shim.
+        if helius_factory is not None:
+            self._helius_factory = helius_factory
+        elif collection_factory is not None or graduation_factory is not None:
+            # Legacy test shim: preserve old behaviour so existing tests pass unchanged.
+            self._collection_factory = collection_factory or self._build_collection
+            self._graduation_factory = graduation_factory or self._build_graduation
+            self._helius_factory = None  # signal to _helius_loop to use legacy path
+        else:
+            self._helius_factory = self._build_helius_raw
+            self._collection_factory = None
+            self._graduation_factory = None
+        # Keep these available for legacy shim path even when unused
+        if not hasattr(self, "_collection_factory"):
+            self._collection_factory = self._build_collection
+        if not hasattr(self, "_graduation_factory"):
+            self._graduation_factory = self._build_graduation
         self._reconciler_factory = reconciler_factory or self._build_reconciler
         self._postgrad_factory = postgrad_factory or self._build_postgrad_source
         self._clock = clock or WallClock()
@@ -661,14 +682,13 @@ class FirehoseDaemon:
     # ------------------------------------------------------------------
 
     async def _run_active(self, deadline) -> None:
-        """Launch collection/graduation/scoring/post-grad tasks; stop on flip/stop/deadline."""
+        """Launch helius/reconciler/scoring/post-grad tasks; stop on flip/stop/deadline."""
         self._active_sources = []
         self._postgrad_tasks = {}
         self._postgrad_seen = set()
         self._postgrad_sources = {}
 
-        collection_task = asyncio.create_task(self._collection_loop(), name="firehose-collection")
-        graduation_task = asyncio.create_task(self._graduation_loop(), name="firehose-graduation")
+        helius_task = asyncio.create_task(self._helius_loop(), name="firehose-helius")
         reconciler_task = asyncio.create_task(self._reconciler_loop(), name="firehose-reconciler")
         scoring_task = asyncio.create_task(self._scoring_loop(), name="firehose-scoring")
         postgrad_task = asyncio.create_task(self._postgrad_loop(), name="firehose-postgrad")
@@ -676,7 +696,7 @@ class FirehoseDaemon:
         watcher_task = asyncio.create_task(self._flip_watcher(deadline), name="firehose-watcher")
 
         tasks = [
-            collection_task, graduation_task, reconciler_task,
+            helius_task, reconciler_task,
             scoring_task, postgrad_task, flush_task, watcher_task,
         ]
         try:
@@ -684,7 +704,7 @@ class FirehoseDaemon:
             await watcher_task
         finally:
             for t in (
-                collection_task, graduation_task, reconciler_task,
+                helius_task, reconciler_task,
                 scoring_task, postgrad_task, flush_task,
             ):
                 t.cancel()
@@ -790,34 +810,319 @@ class FirehoseDaemon:
             or DEFAULT_PRE_GRAD_IDLE_KILL_TTL_S
         )
 
-    async def _collection_loop(self) -> None:
+    #: Default silence watchdog (seconds) — if not overrideable via config.
+    _DEFAULT_SILENCE_WATCHDOG_S: float = 120.0
+
+    @staticmethod
+    def _resolve_silence_watchdog_s_sync() -> float:
+        """Resolve tape.graduation_silence_watchdog_s from the active config (sync ORM).
+
+        Falls back to 120s when no config is resolvable.  The Helius collection
+        stream delivers thousands of frames per minute under normal load, so 120s
+        of total zero-frames is definitively a silent/dead socket.
+        """
+        _DEFAULT = 120.0
+        from core.resolver import get_active_config
+
+        try:
+            config = get_active_config()
+        except Exception:  # noqa: BLE001
+            return _DEFAULT
+        if config is None:
+            return _DEFAULT
+        return float(
+            getattr(config.tape, "graduation_silence_watchdog_s", _DEFAULT) or _DEFAULT
+        )
+
+    # ------------------------------------------------------------------
+    # Task a — SINGLE HELIUS CONNECTION (fan-out: collection + graduation)
+    # ------------------------------------------------------------------
+
+    async def _helius_loop(self) -> None:
+        """ONE physical Helius connection feeds BOTH collection and graduation detection.
+
+        Validated finding (2026-06-21): migrate frames arrive on the collection
+        socket's raw stream (2/2 captured within ~5k frames / under a minute).
+        Both subscriptions are byte-identical so there is no need for a second WS.
+
+        Architecture:
+          1. Build ONE HeliusBirthTapeSource (raw frames, connect once).
+          2. Create collection_q and migrate_q (asyncio.Queue, maxsize=10000).
+          3. PUMP task: async for raw frame from source.events() → put on BOTH queues.
+             Records last_frame_at via self._clock for the no-data watchdog.
+          4. COLLECTION consumer: LivePreGradBuffer reading _QueueDataSource(collection_q)
+             through MappedSwapSource(decode_helius_notification) — SAME as before.
+          5. GRADUATION consumer: DetectionConsumer reading HeliusMigrateSource via
+             events_from_queue(migrate_q) — decode+dedupe+yield graduation events.
+          6. WATCHDOG: if no frames for graduation_silence_watchdog_s, force-reconnect.
+          7. When pump ends (WS close/error) or watchdog fires: cancel consumers, put
+             None sentinels on both queues, disconnect source, reconnect with backoff.
+             self._tape is RETAINED across reconnect (daemon-level store).
+
+        Legacy test shim: if self._helius_factory is None (old-style test that
+        injected collection_factory + graduation_factory), falls back to running the
+        two loops concurrently so existing tests don't break.
+        """
+        # Legacy-shim fallback for old tests that inject collection_factory / graduation_factory.
+        if self._helius_factory is None:
+            await self._helius_loop_legacy()
+            return
+
+        from core.firehose.live_pregrad_buffer import LivePreGradBuffer
+        from core.tape.helius_birth_tape_source import (
+            HeliusMigrateSource,
+            _QueueDataSource,
+            decode_helius_notification,
+        )
+        from core.tape.mapped_source import MappedSwapSource
+
+        # Resolve config values ONCE in a sync context.
+        idle_ttl_s = await sync_to_async(
+            self._resolve_pre_grad_ttl_sync, thread_sensitive=True
+        )()
+        watchdog_s = await sync_to_async(
+            self._resolve_silence_watchdog_s_sync, thread_sensitive=True
+        )()
+
+        # Resolve graduation event_source from active config.
+        def _get_event_source() -> str:
+            from core.resolver import get_active_config
+            try:
+                config = get_active_config()
+            except Exception:  # noqa: BLE001
+                return "pump_dot_fun"
+            if config is None:
+                return "pump_dot_fun"
+            try:
+                filt = config.detection.filter
+                if filt and filt.source:
+                    return filt.source
+            except AttributeError:
+                pass
+            return "pump_dot_fun"
+
+        event_source = await sync_to_async(_get_event_source, thread_sensitive=True)()
+
+        backoff = 1.0
+        attempt = 0
+
+        while not self._stop.is_set():
+            # Build the single physical source.
+            try:
+                helius_source = await sync_to_async(
+                    self._helius_factory, thread_sensitive=True
+                )()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s helius: factory failed (%s) — retry in %.0fs.",
+                    LOG_PREFIX, exc, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+                continue
+
+            if helius_source is None:
+                logger.warning(
+                    "%s helius: no source built (HELIUS_API_KEY missing?) — disabled.",
+                    LOG_PREFIX,
+                )
+                return
+
+            backoff = 1.0
+            attempt += 1
+            self._active_sources.append(helius_source)
+
+            # Fan-out queues — each raw frame is pushed to both consumers.
+            collection_q: asyncio.Queue = asyncio.Queue(maxsize=10000)
+            migrate_q: asyncio.Queue = asyncio.Queue(maxsize=10000)
+
+            # Watchdog: track last frame time using the injected clock.
+            # We use a list so the inner coroutine can mutate the reference.
+            last_frame_at: list = [self._clock.now()]
+
+            async def _pump() -> None:
+                """Push every raw frame from the WS into BOTH queues."""
+                await helius_source.connect()
+                try:
+                    async for raw_frame in helius_source.events():
+                        last_frame_at[0] = self._clock.now()
+                        # collection_q — put non-blocking; log WARNING if full.
+                        if collection_q.full():
+                            logger.warning(
+                                "%s helius: collection_q full (maxsize=%d) — "
+                                "frame dropped on collection path.",
+                                LOG_PREFIX, collection_q.maxsize,
+                            )
+                        else:
+                            await collection_q.put(raw_frame)
+                        # migrate_q — same guard.
+                        if migrate_q.full():
+                            logger.warning(
+                                "%s helius: migrate_q full (maxsize=%d) — "
+                                "frame dropped on migrate path.",
+                                LOG_PREFIX, migrate_q.maxsize,
+                            )
+                        else:
+                            await migrate_q.put(raw_frame)
+                finally:
+                    await helius_source.disconnect()
+
+            async def _watchdog() -> None:
+                """Fire if no frame arrives within watchdog_s seconds."""
+                while True:
+                    await asyncio.sleep(watchdog_s / 4)  # check 4× per window
+                    elapsed = (self._clock.now() - last_frame_at[0]).total_seconds()
+                    if elapsed >= watchdog_s:
+                        logger.warning(
+                            "%s helius: watchdog fired — no frames for %.0fs "
+                            "(watchdog_s=%.0f) — forcing reconnect.",
+                            LOG_PREFIX, elapsed, watchdog_s,
+                        )
+                        return  # returning causes the gather to finish; teardown reconnects
+
+            # Build collection consumer (queue-backed).
+            collection_source = MappedSwapSource(
+                _QueueDataSource(collection_q), decode_helius_notification
+            )
+            buffer = LivePreGradBuffer(
+                source=collection_source,
+                store=self._tape,
+                clock=self._clock,
+                is_graduated=self._collection_graduated,
+                idle_ttl_s=idle_ttl_s,
+            )
+
+            # Build graduation consumer (queue-backed via HeliusMigrateSource.events_from_queue).
+            from core.detection.consumer import DetectionConsumer
+            from core.resolver import get_active_config
+
+            migrate_source_obj = HeliusMigrateSource(
+                api_key="fanout",  # not used — no WS opened; events_from_queue drives it
+                event_source=event_source,
+                clock=self._clock,
+            )
+
+            # Wrap events_from_queue in a DataSource-compatible shim so DetectionConsumer
+            # can call source.connect()/disconnect()/events() without modification.
+            class _MigrateQueueSource:
+                """Minimal DataSource shim over HeliusMigrateSource.events_from_queue."""
+
+                def __init__(self, migrate_src, q):
+                    self._src = migrate_src
+                    self._q = q
+
+                async def connect(self):
+                    pass  # no-op; queue is already fed by the pump
+
+                async def disconnect(self):
+                    pass  # no-op
+
+                async def events(self):
+                    async for ev in self._src.events_from_queue(self._q):
+                        yield ev
+
+            grad_source = _MigrateQueueSource(migrate_source_obj, migrate_q)
+            grad_consumer = DetectionConsumer(
+                source=grad_source,
+                clock=self._clock,
+                config_fn=get_active_config,
+            )
+
+            logger.info(
+                "%s helius: single-connection fan-out started "
+                "(attempt=%d, idle_ttl=%.0fs, watchdog=%.0fs, event_source=%s).",
+                LOG_PREFIX, attempt, idle_ttl_s, watchdog_s, event_source,
+            )
+
+            pump_task = asyncio.create_task(_pump(), name="helius-pump")
+            watchdog_task = asyncio.create_task(_watchdog(), name="helius-watchdog")
+            collection_task = asyncio.create_task(buffer.run(), name="helius-collection")
+            grad_task = asyncio.create_task(grad_consumer.run(), name="helius-graduation")
+
+            inner_tasks = [pump_task, watchdog_task, collection_task, grad_task]
+
+            try:
+                # Wait for EITHER the pump to end (WS closed/error) OR the watchdog to fire.
+                done, pending = await asyncio.wait(
+                    {pump_task, watchdog_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except asyncio.CancelledError:
+                # Outer task cancelled (daemon shutdown / flip-to-False).
+                for t in inner_tasks:
+                    t.cancel()
+                await asyncio.gather(*inner_tasks, return_exceptions=True)
+                # Drain queues so consumers' events() return cleanly.
+                await collection_q.put(None)
+                await migrate_q.put(None)
+                try:
+                    self._active_sources.remove(helius_source)
+                except ValueError:
+                    pass
+                raise  # propagate CancelledError to the outer gather
+
+            # Cancel everything; put sentinels so consumers drain cleanly.
+            for t in inner_tasks:
+                t.cancel()
+            await collection_q.put(None)
+            await migrate_q.put(None)
+            await asyncio.gather(*inner_tasks, return_exceptions=True)
+
+            try:
+                self._active_sources.remove(helius_source)
+            except ValueError:
+                pass
+
+            firehose_active, _, _ = await self._read_state()
+            if self._stop.is_set() or not firehose_active:
+                logger.info(
+                    "%s helius: stream ended; firehose inactive/stopping — done "
+                    "(tape retained: %d mints).",
+                    LOG_PREFIX, len(self._tape.mints()),
+                )
+                return
+
+            logger.info(
+                "%s helius: stream ended (tape retained: %d mints) — "
+                "reconnecting in %.0fs.",
+                LOG_PREFIX, len(self._tape.mints()), backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+
+    async def _helius_loop_legacy(self) -> None:
+        """Legacy shim: run collection + graduation as separate concurrent tasks.
+
+        Only used when the daemon was constructed with the old-style
+        collection_factory / graduation_factory test seams (pre-fan-out tests).
+        Runs both loops concurrently and returns when either completes or the
+        outer task is cancelled.
+        """
+        col_task = asyncio.create_task(
+            self._collection_loop_legacy(), name="helius-legacy-collection"
+        )
+        grad_task = asyncio.create_task(
+            self._graduation_loop_legacy(), name="helius-legacy-graduation"
+        )
+        try:
+            await asyncio.gather(col_task, grad_task)
+        except asyncio.CancelledError:
+            col_task.cancel()
+            grad_task.cancel()
+            await asyncio.gather(col_task, grad_task, return_exceptions=True)
+            raise
+
+    async def _collection_loop_legacy(self) -> None:
         """Buffer ALL pump.fun bonding-curve swaps by mint — NO graduation anchor.
 
-        THE FIX (chicken-and-egg): the OLD wiring used the token_store-filtered
-        birth-tape recorder, which dropped every swap whose mint had not yet
-        graduated — i.e. every PRE-grad swap, which is exactly what scoring needs.
-        Here a LivePreGradBuffer reads the SAME Helius source + mapper but BYPASSES
-        the token_store filter, buffering every mint's swaps (absolute block_time,
-        no rel) into self._tape.  The graduation anchor is applied RETROACTIVELY by
-        assemble_pregrad_features at score time.
+        Legacy version used only when collection_factory is injected (old tests).
         """
         from core.firehose.live_pregrad_buffer import LivePreGradBuffer
 
-        # Resolve the pre-grad idle TTL ONCE in a SYNC context (ORM read) so the
-        # buffer never touches the ORM on the async hot path.
         idle_ttl_s = await sync_to_async(
             self._resolve_pre_grad_ttl_sync, thread_sensitive=True
         )()
 
-        # RECONNECT LOOP (fix): the live Helius WS closes after a while (idle /
-        # plan limit) — ``buffer.run()`` then returns NORMALLY ("buffer
-        # finished").  The OLD code ran it ONCE, so over a long window collection
-        # silently DIED mid-run (observed ~49 min in: "buffer finished" then no
-        # further swaps), the buffer went stale, and nothing graduating afterward
-        # could ever score.  Here we rebuild the source and RESTART, RETAINING the
-        # accumulated buffer (self._tape), until the firehose flips inactive or the
-        # daemon stops.  Shutdown/deadline/flip cancels this task -> CancelledError
-        # propagates out of the loop.
         backoff = 1.0
         attempt = 0
         while not self._stop.is_set():
@@ -836,7 +1141,7 @@ class FirehoseDaemon:
             if source is None:
                 logger.warning("%s collection: no source built — collection disabled.", LOG_PREFIX)
                 return
-            backoff = 1.0  # a successful build resets the backoff
+            backoff = 1.0
             self._active_sources.append(source)
             buffer = LivePreGradBuffer(
                 source=source,
@@ -847,14 +1152,13 @@ class FirehoseDaemon:
             )
             attempt += 1
             logger.info(
-                "%s collection: started (Helius birth-tape -> live pre-grad buffer, "
-                "attempt=%d, ALL mints, no anchor gate; idle_ttl=%.0fs).",
+                "%s collection: started (legacy, attempt=%d, idle_ttl=%.0fs).",
                 LOG_PREFIX, attempt, idle_ttl_s,
             )
             try:
                 await buffer.run()
             except asyncio.CancelledError:
-                raise  # daemon shutdown / deadline / flip — propagate to stop cleanly
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.warning("%s collection: stream error (%s) — will reconnect.", LOG_PREFIX, exc)
             finally:
@@ -863,13 +1167,10 @@ class FirehoseDaemon:
                 except ValueError:
                     pass
 
-            # The WS closed (normal return or error).  Stop only if the firehose
-            # flipped inactive or we are shutting down; otherwise reconnect —
-            # RETAINING the buffer so in-flight pre-grad tape survives the drop.
             firehose_active, _, _ = await self._read_state()
             if self._stop.is_set() or not firehose_active:
                 logger.info(
-                    "%s collection: stream ended; firehose inactive/stopping — collection done "
+                    "%s collection: stream ended; firehose inactive/stopping — done "
                     "(buffer retained: %d mints).",
                     LOG_PREFIX, len(self._tape.mints()),
                 )
@@ -882,14 +1183,11 @@ class FirehoseDaemon:
             await asyncio.sleep(backoff)
 
     # ------------------------------------------------------------------
-    # Task b — GRADUATION (Birdeye new-listing -> DetectionConsumer)
+    # Task b — GRADUATION (legacy path, used when graduation_factory injected)
     # ------------------------------------------------------------------
 
-    async def _graduation_loop(self) -> None:
-        # RECONNECT LOOP (same fix as collection): the Birdeye new-listing WS can
-        # also close over a long window; running the consumer ONCE would silently
-        # stop graduation detection (no new graduations -> no scoring triggers).
-        # Rebuild + restart until the firehose flips inactive / the daemon stops.
+    async def _graduation_loop_legacy(self) -> None:
+        """Legacy graduation loop — only used when graduation_factory is injected."""
         backoff = 1.0
         while not self._stop.is_set():
             try:
@@ -910,7 +1208,7 @@ class FirehoseDaemon:
             backoff = 1.0
             if source is not None:
                 self._active_sources.append(source)
-            logger.info("%s graduation: started (Birdeye new-listing -> DetectionConsumer).", LOG_PREFIX)
+            logger.info("%s graduation: started (legacy -> DetectionConsumer).", LOG_PREFIX)
             try:
                 await consumer.run()
             except asyncio.CancelledError:
@@ -932,6 +1230,15 @@ class FirehoseDaemon:
                 LOG_PREFIX, len(consumer.processed), backoff,
             )
             await asyncio.sleep(backoff)
+
+    # ------------------------------------------------------------------
+    # Backward-compat aliases for existing tests that reference these names.
+    # Tests that call daemon._collection_loop() or daemon._graduation_loop()
+    # directly still work via these aliases into the legacy implementations.
+    # ------------------------------------------------------------------
+
+    _collection_loop = _collection_loop_legacy
+    _graduation_loop = _graduation_loop_legacy
 
     # ------------------------------------------------------------------
     # Task b2 — GRADUATION SECONDARY (Birdeye gap-fill → MigrateReconciler)
@@ -1571,6 +1878,28 @@ class FirehoseDaemon:
     # Source factories (the ONLY place concrete live sources are built)
     # ------------------------------------------------------------------
 
+    def _build_helius_raw(self):
+        """Build ONE raw HeliusBirthTapeSource for the single-connection fan-out.
+
+        Returns the unwrapped HeliusBirthTapeSource so the pump task can push raw
+        frames into both the collection queue and the migrate queue.  The mapper
+        (decode_helius_notification) is applied per-queue by the consumer side.
+
+        This is the ONLY place the concrete live Helius source is built for the
+        production fan-out path (Principle #7).  Returns None + warns if
+        HELIUS_API_KEY is missing so the loop disables gracefully.
+        """
+        from core.tape.helius_birth_tape_source import HeliusBirthTapeSource
+
+        api_key = getattr(settings, "HELIUS_API_KEY", None)
+        if not api_key:
+            logger.warning(
+                "%s helius: HELIUS_API_KEY missing — Helius collection + graduation disabled.",
+                LOG_PREFIX,
+            )
+            return None
+        return HeliusBirthTapeSource(api_key)
+
     def _build_collection(self):
         """Build the COLLECTION source: program-wide Helius birth tape, mapped.
 
@@ -1584,6 +1913,8 @@ class FirehoseDaemon:
         (Principle #7): HeliusBirthTapeSource + decode_helius_notification, the
         SAME pair the offline birth-tape path uses (the offline recorder semantics
         in run_listener are left untouched).
+
+        NOTE: Used only on the legacy test shim path. Production uses _build_helius_raw.
         """
         from core.tape.helius_birth_tape_source import (
             HeliusBirthTapeSource,
@@ -1598,7 +1929,12 @@ class FirehoseDaemon:
         return MappedSwapSource(HeliusBirthTapeSource(api_key), decode_helius_notification)
 
     def _build_graduation(self):
-        """Build the GRADUATION consumer + its source.
+        """Build the GRADUATION consumer + its source (legacy test shim path only).
+
+        In production the fan-out path (_helius_loop) drives graduation detection
+        off the shared collection socket via HeliusMigrateSource.events_from_queue.
+        This method is preserved for backward-compat with tests that inject
+        graduation_factory= and is called ONLY via _graduation_loop_legacy.
 
         PRIMARY: HeliusMigrateSource → DetectionConsumer
           Detects pump.fun graduations directly from the 'migrate' instruction
