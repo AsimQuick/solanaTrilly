@@ -1,7 +1,7 @@
 # ---
 # module: core.management.commands.run_firehose
 # sprint: sprint-14
-# story: live-firehose-spine
+# story: live-firehose-spine, EPIC-graduation-migrate-detection
 # status: refactored
 # created-by: dev-team
 # last-updated: 2026-06-21
@@ -9,8 +9,8 @@
 #               core.tape.birdeye_graduation_source, core.tape.birdeye_swap_source,
 #               core.tape.birdeye_swap_mapper, core.tape.helius_birth_tape_source,
 #               core.management.commands.run_listener, core.detection.consumer,
-#               core.firehose.spine, core.clock, core.resolver, core.models,
-#               core.v4_rep_builder
+#               core.detection.helius_reconciler, core.firehose.spine, core.clock,
+#               core.resolver, core.models, core.v4_rep_builder
 # ---
 """run_firehose — the gated live daemon that ties the pipeline spine together.
 
@@ -35,8 +35,13 @@ CONCURRENT TASKS (asyncio) while active
                      idle-kill evicts dead UNgraduated mints; graduated mints are
                      retained for scoring.  (The OLD token_store-filtered birth-
                      tape recorder dropped all pre-grad swaps — chicken-and-egg.)
-  b. GRADUATION    — BirdeyeGraduationSource -> DetectionConsumer.run(),
-                     persisting Token rows on graduation (config-driven WS).
+  b. GRADUATION    — HeliusMigrateSource (PRIMARY) -> DetectionConsumer.run(),
+                     detecting pump.fun graduations from the migrate instruction
+                     on the existing Helius transactionSubscribe stream.  Zero
+                     AMM noise (100% pump.fun), push not poll.
+                     BirdeyeGraduationSource (SECONDARY/gap-fill) ->
+                     MigrateReconciler — runs concurrently, covers Helius WS
+                     reconnect gaps; min_liquidity=5000 cuts AMM noise.
   c. SCORING SCHED — for each graduated Token not yet scored, at
                      graduated_at + scoring.score_at_elapsed_s, assemble the 20
                      PRE_FEATURE_NAMES from the collected tape and score via the
@@ -458,6 +463,7 @@ class FirehoseDaemon:
         postgrad_tick_s: float = DEFAULT_POSTGRAD_TICK_S,
         collection_factory=None,
         graduation_factory=None,
+        reconciler_factory=None,
         postgrad_factory=None,
         clock=None,
         tape_sink=None,
@@ -469,6 +475,7 @@ class FirehoseDaemon:
         self._postgrad_tick_s = postgrad_tick_s
         self._collection_factory = collection_factory or self._build_collection
         self._graduation_factory = graduation_factory or self._build_graduation
+        self._reconciler_factory = reconciler_factory or self._build_reconciler
         self._postgrad_factory = postgrad_factory or self._build_postgrad_source
         self._clock = clock or WallClock()
         # AC-3 durable tape sink: every collected swap is appended to the
@@ -633,17 +640,24 @@ class FirehoseDaemon:
 
         collection_task = asyncio.create_task(self._collection_loop(), name="firehose-collection")
         graduation_task = asyncio.create_task(self._graduation_loop(), name="firehose-graduation")
+        reconciler_task = asyncio.create_task(self._reconciler_loop(), name="firehose-reconciler")
         scoring_task = asyncio.create_task(self._scoring_loop(), name="firehose-scoring")
         postgrad_task = asyncio.create_task(self._postgrad_loop(), name="firehose-postgrad")
         flush_task = asyncio.create_task(self._tape_flush_loop(deadline), name="firehose-tape-flush")
         watcher_task = asyncio.create_task(self._flip_watcher(deadline), name="firehose-watcher")
 
-        tasks = [collection_task, graduation_task, scoring_task, postgrad_task, flush_task, watcher_task]
+        tasks = [
+            collection_task, graduation_task, reconciler_task,
+            scoring_task, postgrad_task, flush_task, watcher_task,
+        ]
         try:
             # The watcher returns when firehose flips False / stop / deadline.
             await watcher_task
         finally:
-            for t in (collection_task, graduation_task, scoring_task, postgrad_task, flush_task):
+            for t in (
+                collection_task, graduation_task, reconciler_task,
+                scoring_task, postgrad_task, flush_task,
+            ):
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await self._cancel_postgrad_subscriptions()
@@ -887,6 +901,78 @@ class FirehoseDaemon:
             logger.info(
                 "%s graduation: stream ended (%d events) — reconnecting in %.0fs.",
                 LOG_PREFIX, len(consumer.processed), backoff,
+            )
+            await asyncio.sleep(backoff)
+
+    # ------------------------------------------------------------------
+    # Task b2 — GRADUATION SECONDARY (Birdeye gap-fill → MigrateReconciler)
+    # ------------------------------------------------------------------
+
+    async def _reconciler_loop(self) -> None:
+        """Secondary gap-fill: BirdeyeGraduationSource → MigrateReconciler.
+
+        Mirrors _graduation_loop's reconnect pattern.  On each reconnect the
+        reconciler uses get_or_create (not update_or_create) so it never
+        overwrites Token rows the primary DetectionConsumer already wrote.
+
+        Returns immediately if _build_reconciler returns (None, None)
+        (i.e. BIRDEYE_API_KEY is absent).
+        """
+        backoff = 1.0
+        while not self._stop.is_set():
+            try:
+                reconciler, source = await sync_to_async(
+                    self._reconciler_factory, thread_sensitive=True
+                )()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s graduation-secondary: factory failed (%s) — retry in %.0fs.",
+                    LOG_PREFIX, exc, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+                continue
+
+            if reconciler is None:
+                logger.info(
+                    "%s graduation-secondary: no reconciler built — Birdeye gap-fill disabled.",
+                    LOG_PREFIX,
+                )
+                return
+
+            backoff = 1.0
+            if source is not None:
+                self._active_sources.append(source)
+            logger.info(
+                "%s graduation-secondary: started (Birdeye → MigrateReconciler).",
+                LOG_PREFIX,
+            )
+            try:
+                await reconciler.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s graduation-secondary: stream error (%s) — will reconnect.",
+                    LOG_PREFIX, exc,
+                )
+            finally:
+                if source is not None:
+                    try:
+                        self._active_sources.remove(source)
+                    except ValueError:
+                        pass
+
+            firehose_active, _, _ = await self._read_state()
+            if self._stop.is_set() or not firehose_active:
+                logger.info(
+                    "%s graduation-secondary: stream ended; firehose inactive/stopping — done.",
+                    LOG_PREFIX,
+                )
+                return
+            logger.info(
+                "%s graduation-secondary: stream ended — reconnecting in %.0fs.",
+                LOG_PREFIX, backoff,
             )
             await asyncio.sleep(backoff)
 
@@ -1370,22 +1456,98 @@ class FirehoseDaemon:
         return MappedSwapSource(HeliusBirthTapeSource(api_key), decode_helius_notification)
 
     def _build_graduation(self):
-        """Build the GRADUATION consumer + its source (Birdeye new-listing)."""
+        """Build the GRADUATION consumer + its source.
+
+        PRIMARY: HeliusMigrateSource → DetectionConsumer
+          Detects pump.fun graduations directly from the 'migrate' instruction
+          on the already-open Helius transactionSubscribe stream.  Zero AMM
+          noise (100% pump.fun), push not poll, event-driven.
+
+        SECONDARY: BirdeyeGraduationSource → MigrateReconciler
+          Retained as a gap-fill backstop (Helius WS drop → Birdeye covers).
+          Wired via _build_reconciler / _reconciler_loop — NOT returned here.
+          A min_liquidity floor (~5000 USDC) filters obvious non-pump-fun pools.
+
+        Returns (consumer, source) for the primary Helius migrate path only.
+        The Birdeye secondary runs in its own separate task (_reconciler_loop).
+        """
         from core.detection.consumer import DetectionConsumer
+        from core.resolver import get_active_config
+        from core.tape.helius_birth_tape_source import HeliusMigrateSource
+
+        helius_api_key = getattr(settings, "HELIUS_API_KEY", None)
+        if not helius_api_key:
+            logger.warning(
+                "%s graduation: HELIUS_API_KEY missing — migrate detection disabled.",
+                LOG_PREFIX,
+            )
+            return None, None
+
+        # Resolve event_source from active config so the emitted event matches
+        # config.detection.filter.source (default "pump_dot_fun").
+        config = get_active_config()
+        event_source = "pump_dot_fun"
+        if config is not None:
+            try:
+                filt = config.detection.filter
+                if filt and filt.source:
+                    event_source = filt.source
+            except AttributeError:
+                pass
+
+        source = HeliusMigrateSource(api_key=helius_api_key, event_source=event_source)
+        consumer = DetectionConsumer(source=source, clock=self._clock, config_fn=get_active_config)
+        logger.info(
+            "%s graduation: primary=HeliusMigrateSource event_source=%s",
+            LOG_PREFIX,
+            event_source,
+        )
+        return consumer, source
+
+    def _build_reconciler(self):
+        """Build the SECONDARY gap-fill: BirdeyeGraduationSource → MigrateReconciler.
+
+        Birdeye is demoted to a gap-fill backstop that covers any Helius WS
+        reconnect gaps.  A min_liquidity=5000 floor cuts obvious non-pump-fun
+        pools (real pump.fun grads exit with ≥$7k liquidity).
+
+        Returns (reconciler, source) or (None, None) if BIRDEYE_API_KEY is absent.
+        """
+        from core.detection.helius_reconciler import MigrateReconciler
         from core.resolver import get_active_config
         from core.tape.birdeye_graduation_source import BirdeyeGraduationSource
 
-        api_key = getattr(settings, "BIRDEYE_API_KEY", None)
-        if not api_key:
-            logger.warning("%s graduation: BIRDEYE_API_KEY missing — graduation disabled.", LOG_PREFIX)
+        birdeye_api_key = getattr(settings, "BIRDEYE_API_KEY", None)
+        if not birdeye_api_key:
+            logger.warning(
+                "%s graduation-secondary: BIRDEYE_API_KEY missing — Birdeye gap-fill disabled.",
+                LOG_PREFIX,
+            )
             return None, None
+
         config = get_active_config()
-        detection_dict = {}
+        detection_dict: dict = {}
         if config is not None:
             detection_dict = config.detection.model_dump()
-        source = BirdeyeGraduationSource(api_key=api_key, config=detection_dict, clock=self._clock)
-        consumer = DetectionConsumer(source=source, clock=self._clock, config_fn=get_active_config)
-        return consumer, source
+
+        # Apply min_liquidity floor to cut non-pump-fun AMM noise.
+        # Real pump.fun grads exit with ≥$7k; 5000 USDC is a safe floor.
+        if not detection_dict.get("graduation_min_liquidity"):
+            detection_dict = dict(detection_dict)
+            detection_dict["graduation_min_liquidity"] = 5000
+
+        source = BirdeyeGraduationSource(
+            api_key=birdeye_api_key,
+            config=detection_dict,
+            clock=self._clock,
+        )
+        reconciler = MigrateReconciler(source=source, clock=self._clock)
+        logger.info(
+            "%s graduation-secondary: Birdeye gap-fill wired min_liquidity=%d",
+            LOG_PREFIX,
+            detection_dict.get("graduation_min_liquidity", 0),
+        )
+        return reconciler, source
 
     def _build_postgrad_source(self, mint: str):
         """Build a POST-grad BirdeyeSwapSource for one mint (adapter wiring layer).

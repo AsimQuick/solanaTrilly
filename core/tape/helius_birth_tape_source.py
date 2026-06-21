@@ -1,11 +1,11 @@
 # ---
 # module: core.tape.helius_birth_tape_source
 # sprint: sprint-8
-# story: US-34 AC-34.1
+# story: US-34 AC-34.1, EPIC-graduation-migrate-detection
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-17
-# dependencies: core.datasource, base64, hashlib, struct, json, typing
+# last-updated: 2026-06-21
+# dependencies: core.datasource, base64, hashlib, struct, json, logging, typing
 # ---
 """HeliusBirthTapeSource — program-wide Helius transactionSubscribe DataSource.
 
@@ -26,14 +26,35 @@ IMPORTANT architectural constraints (enforced by test_tape_recorder_ac181.py):
 Borsh TradeEvent layout (pump.fun / Anchor):
   disc(8) + mint(32) + sol_amount(u64) + token_amount(u64) + is_buy(1)
   + user(32) + timestamp(i64) + vsol(u64) + vtok(u64)  = 113 bytes minimum
+
+MIGRATE DETECTION (EPIC-graduation-migrate-detection)
+=====================================================
+decode_helius_migrate_event() is a pure mapper for the pump.fun 'migrate'
+instruction.  A migrate transaction contains the log line
+"Instruction: Migrate" and has NO Borsh event log to decode.  The SPL mint
+is extracted from the 6EF8 CPI in innerInstructions (the CPI with the most
+accounts — consistently 13 in real frames — has the mint at accounts[2]).
+
+Verified against 3 real transactionNotification frames captured 2026-06-21
+(slots 427956147, 427956654, and one additional).  Account indices confirmed:
+  innerInstructions: 6EF8 CPI with 13 accounts → accounts[2] = SPL mint
+  Pool: not reliably extractable from this tx structure; emitted as "".
+
+HeliusMigrateSource is a separate DataSource (not a fan-out of
+HeliusBirthTapeSource) using the IDENTICAL subscription parameters.  It
+emits MEME_DATA graduation dicts shaped for DetectionConsumer, stamped
+dex_source="helius_migrate".
 """
 import base64
 import hashlib
 import json
+import logging
 import struct
 from typing import Any, AsyncGenerator
 
 from core.datasource import DataSource
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -69,6 +90,28 @@ _PROGRAM_DATA_PREFIX: str = "Program data: "
 
 #: Source tag for NormalizedSwap provenance (AC-34.1)
 SOURCE_TAG: str = "helius_live"
+
+# ---------------------------------------------------------------------------
+# Migrate-detection constants (EPIC-graduation-migrate-detection)
+# ---------------------------------------------------------------------------
+
+#: PumpSwap AMM program address (the sole pump.fun graduation destination).
+PUMP_AMM_PROGRAM: str = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+
+#: Log line that indicates a migrate instruction in the pump.fun program.
+_MIGRATE_LOG_MARKER: str = "Instruction: Migrate"
+
+#: dex_source stamp for migrate-detected graduation events.
+MIGRATE_DEX_SOURCE: str = "helius_migrate"
+
+#: Minimum number of accounts in the 6EF8 CPI that carries the migrate instruction.
+#: Verified on 3 real frames: the migrate CPI consistently has 13 accounts.
+#: The CPI with fewer accounts (5) is MigrateBondingCurveCreator, not migrate.
+_MIGRATE_CPI_MIN_ACCOUNTS: int = 8  # conservative lower bound; real frames have 13
+
+#: Account index for the SPL mint within the 6EF8 migrate CPI accounts list.
+#: Verified against pump.fun IDL (accounts[2]=mint) and 3 real frames.
+_MIGRATE_CPI_MINT_INDEX: int = 2
 
 # ---------------------------------------------------------------------------
 # Base58 encoding — standalone implementation (solders NOT in requirements.txt)
@@ -147,6 +190,56 @@ def _is_trade_log(log_messages: list[str]) -> bool:
         if "Instruction: Buy" in m or "Instruction: Sell" in m:
             return True
     return False
+
+
+def _is_migrate_log(log_messages: list[str]) -> bool:
+    """Return True if log_messages contain the pump.fun Migrate instruction marker.
+
+    A migrate transaction always emits 'Instruction: Migrate' as part of its
+    6EF8rrecthR5… program log.  Verified on 3 real transactionNotification frames
+    (2026-06-21).  Returns False for trade (Buy/Sell) and create frames.
+    """
+    for m in log_messages:
+        if _MIGRATE_LOG_MARKER in m:
+            return True
+    return False
+
+
+def _extract_migrate_mint(inner_instructions: list[dict]) -> str | None:
+    """Extract the graduated SPL mint from innerInstructions of a migrate tx.
+
+    Walks all inner instruction groups and finds the CPI to the pump.fun
+    6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P program that has the most
+    accounts (consistently 13 in real frames).  The mint is at accounts[2]
+    of that CPI, matching the pump.fun IDL 'migrate' instruction layout and
+    verified against 3 real frames captured 2026-06-21.
+
+    Args:
+        inner_instructions: meta.innerInstructions from the transaction result.
+
+    Returns:
+        The SPL mint pubkey string, or None if extraction fails.
+    """
+    best_cpi: dict | None = None
+    best_count: int = 0
+
+    for group in inner_instructions:
+        for ix in group.get("instructions") or []:
+            if ix.get("programId") != PUMP_FUN_PROGRAM:
+                continue
+            accounts: list[str] = ix.get("accounts") or []
+            if len(accounts) > best_count:
+                best_count = len(accounts)
+                best_cpi = ix
+
+    if best_cpi is None or best_count < _MIGRATE_CPI_MIN_ACCOUNTS:
+        return None
+
+    accounts = best_cpi.get("accounts") or []
+    if len(accounts) <= _MIGRATE_CPI_MINT_INDEX:
+        return None
+
+    return accounts[_MIGRATE_CPI_MINT_INDEX] or None
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +386,126 @@ def decode_helius_notification(data: dict) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Migrate event decoder — pure, no I/O (EPIC-graduation-migrate-detection)
+# ---------------------------------------------------------------------------
+
+
+def decode_helius_migrate_event(
+    data: dict,
+    *,
+    event_source: str = "pump_dot_fun",
+) -> dict | None:
+    """Map a raw Helius transactionNotification dict to a MEME_DATA graduation event.
+
+    Returns a graduation event dict in the EXACT shape DetectionConsumer expects
+    (same as map_new_pair_frame in birdeye_graduation_source.py), or None for
+    non-migrate frames.
+
+    Detection criteria:
+      - method == "transactionNotification"
+      - meta.err is None (landed transactions only)
+      - meta.logMessages contains "Instruction: Migrate"
+
+    Mint extraction:
+      Walk meta.innerInstructions for the 6EF8rrecthR5… CPI with the most
+      accounts (≥8); take accounts[2] as the SPL mint.  Verified against
+      pump.fun IDL (accounts[2]=mint) and 3 real frames (2026-06-21).
+
+    Pool address:
+      Not reliably extractable from this transaction structure (the pAMM
+      create_pool CPI accounts in innerInstructions don't expose the pool PDA
+      directly via the jsonParsed encoding; the pfee wrapper obscures the full
+      account list).  Emitted as "" so DetectionConsumer's coerce logic
+      (poolAddress=None → "") persists cleanly.
+
+    Emitted event shape (matches DetectionConsumer._is_graduation_event checks):
+      {
+        "type":                 "MEME_DATA",
+        "graduated":            True,
+        "address":              <SPL mint>,
+        "source":               <event_source>,   # default "pump_dot_fun"
+        "poolAddress":          "",               # not extractable; fallback
+        "blockTime":            <slot epoch int>, # or 0 on decode failure
+        "graduated_block_time": <slot epoch int>,
+        "creation_time":        0,
+        "progress_percent":     0.0,
+        "decimals":             None,
+        "raw":                  <transaction result dict>,
+        "dex_source":           "helius_migrate",
+      }
+
+    Args:
+        data:         Raw dict from the Helius WebSocket frame (already JSON-parsed).
+        event_source: The "source" stamp value; must match config.detection.filter.source
+                      ("pump_dot_fun") for DetectionConsumer to persist the Token row.
+
+    Returns:
+        A MEME_DATA graduation event dict, or None if this frame is not a migrate.
+    """
+    # Only process transactionNotification frames
+    if not isinstance(data, dict) or data.get("method") != "transactionNotification":
+        return None
+
+    result = _result_envelope(data)
+    if result is None:
+        return None
+
+    # Landed-only: drop failed transactions
+    if _meta_err(result) is not None:
+        return None
+
+    logs = _extract_log_messages(result)
+    if not logs or not _is_migrate_log(logs):
+        return None
+
+    # Extract mint from innerInstructions
+    try:
+        inner = result["transaction"]["meta"].get("innerInstructions") or []
+    except (KeyError, TypeError, AttributeError):
+        inner = []
+
+    mint = _extract_migrate_mint(inner)
+    if not mint:
+        logger.warning(
+            "[FIREHOSE] migrate: could not extract mint from innerInstructions "
+            "(sig=%s) — skipping",
+            _signature(result) or "unknown",
+        )
+        return None
+
+    # block_time: use the slot as a proxy epoch (Solana slots ≈ 0.4s apart;
+    # actual block_time not available in the notification envelope without a
+    # separate getBlock call).  The slot-as-int is not a Unix timestamp but is
+    # used here only as a monotonic ordering hint; graduated_block_time is
+    # populated from block_time.  Callers that need precise UTC should wait for
+    # the Birdeye secondary (MigrateReconciler) to fill it in.
+    # NOTE: this is consistent with how helius_reconciler.py populates
+    # graduated_block_time when block_time is absent.
+    slot_raw = result.get("slot")
+    slot: int = int(slot_raw) if slot_raw is not None else 0
+
+    sig = _signature(result) or ""
+
+    event: dict[str, Any] = {
+        "type": "MEME_DATA",
+        "graduated": True,
+        "address": mint,
+        "source": event_source,
+        "poolAddress": "",          # not extractable from this tx — fallback
+        "blockTime": slot,          # slot as monotonic proxy; not a Unix epoch
+        "graduated_block_time": slot,
+        "creation_time": 0,
+        "progress_percent": 0.0,
+        "decimals": None,
+        "raw": result,              # verbatim transaction result for audit
+        "dex_source": MIGRATE_DEX_SOURCE,
+        "signature": sig,
+        "slot": slot,
+    }
+    return event
+
+
+# ---------------------------------------------------------------------------
 # Concrete DataSource — Helius program-wide transactionNotification stream
 # ---------------------------------------------------------------------------
 
@@ -392,3 +605,155 @@ class HeliusBirthTapeSource(DataSource):
 
             if parsed.get("method") == "transactionNotification":
                 yield parsed
+
+
+# ---------------------------------------------------------------------------
+# HeliusMigrateSource — graduation detection on the migrate instruction
+# (EPIC-graduation-migrate-detection)
+# ---------------------------------------------------------------------------
+
+
+class HeliusMigrateSource(DataSource):
+    """Live graduation-event source backed by the Helius transactionSubscribe stream.
+
+    Uses the IDENTICAL subscription parameters as HeliusBirthTapeSource
+    (same endpoint, same accountInclude=[PUMP_FUN_PROGRAM], same encoding).
+    Filters for migrate instructions and emits MEME_DATA graduation event
+    dicts shaped for DetectionConsumer — one event per graduated SPL mint.
+
+    This is the PRIMARY graduation source (replaces BirdeyeGraduationSource as
+    primary).  It emits only real pump.fun graduations (zero AMM noise), push
+    not poll, event-driven, with zero false positives.
+
+    Deduplication: each mint is emitted at most once per session (by mint
+    address).  The ``_seen_mints`` set prevents duplicate graduation events
+    from multiple migrate frames referencing the same token (rare but possible
+    in edge cases).
+
+    Args:
+        api_key:      Helius API key (query parameter in the WS URL).
+        event_source: The "source" stamp on emitted events; must match
+                      config.detection.filter.source ("pump_dot_fun") for
+                      DetectionConsumer to persist the Token row.
+        endpoint:     Helius WebSocket base URL (default: HELIUS_WS_URL).
+
+    IMPORTANT architectural constraints (same as HeliusBirthTapeSource):
+    - No import of LiveSource, ReplaySource, core.live_source, core.replay_source
+    - No top-level ``import websockets`` — lazy import inside connect() only
+    - No ``datetime.now()`` / ``time.time()`` calls anywhere in this class
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        event_source: str = "pump_dot_fun",
+        endpoint: str = HELIUS_WS_URL,
+    ) -> None:
+        self._api_key: str = api_key
+        self._event_source: str = event_source
+        self._endpoint: str = endpoint
+        self._ws: Any = None
+        self._sub_id: int | None = None
+        self._seen_mints: set[str] = set()
+
+    async def connect(self) -> None:
+        """Open the Helius WebSocket and subscribe with identical params to HeliusBirthTapeSource.
+
+        Subscribes to all pump.fun (6EF8rrecthR5…) transactions with
+        commitment='confirmed', jsonParsed encoding, full transaction details,
+        and maxSupportedTransactionVersion=0 — the same subscription that
+        HeliusBirthTapeSource uses for the birth tape.
+        """
+        import websockets  # lazy import — no network at import time
+
+        url = f"{self._endpoint}/?api-key={self._api_key}"
+        self._ws = await websockets.connect(
+            url,
+            open_timeout=20,
+            ping_interval=20,
+            ping_timeout=10,
+        )
+        subscribe_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "transactionSubscribe",
+                "params": [
+                    {
+                        "accountInclude": [PUMP_FUN_PROGRAM],
+                    },
+                    {
+                        "commitment": "confirmed",
+                        "encoding": "jsonParsed",
+                        "transactionDetails": "full",
+                        "maxSupportedTransactionVersion": 0,
+                    },
+                ],
+            }
+        )
+        await self._ws.send(subscribe_msg)
+        try:
+            ack_raw = await self._ws.recv()
+            ack = json.loads(ack_raw)
+            self._sub_id = ack.get("result")
+        except Exception:
+            pass
+
+        logger.info(
+            "[FIREHOSE] migrate-source: connected sub_id=%s endpoint=%s",
+            self._sub_id,
+            self._endpoint,
+        )
+
+    async def disconnect(self) -> None:
+        """Close the WebSocket connection."""
+        if self._ws is not None:
+            await self._ws.close()
+            self._ws = None
+
+    async def events(self) -> AsyncGenerator[dict[str, Any], None]:
+        """Yield MEME_DATA graduation event dicts for each migrated pump.fun token.
+
+        For each inbound Helius transactionNotification:
+          1. JSON-parse.
+          2. Decode via decode_helius_migrate_event — skip non-migrate frames.
+          3. Deduplicate by mint address (emit each mint at most once).
+          4. Log and yield the graduation event.
+
+        Yields nothing if the connection was never opened (self._ws is None).
+        """
+        if self._ws is None:
+            return
+
+        async for raw_message in self._ws:
+            try:
+                parsed = json.loads(raw_message)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            if not isinstance(parsed, dict):
+                continue
+
+            event = decode_helius_migrate_event(parsed, event_source=self._event_source)
+            if event is None:
+                continue
+
+            mint: str = event["address"]
+
+            # Deduplicate: emit at most once per mint per session
+            if mint in self._seen_mints:
+                logger.debug(
+                    "[FIREHOSE] migrate-source: dedupe mint=%s sig=%s",
+                    mint,
+                    event.get("signature", ""),
+                )
+                continue
+
+            self._seen_mints.add(mint)
+            logger.info(
+                "[FIREHOSE] migrate-source: graduation detected mint=%s sig=%s slot=%s",
+                mint,
+                event.get("signature", ""),
+                event.get("slot", ""),
+            )
+            yield event
