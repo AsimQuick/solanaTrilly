@@ -242,6 +242,7 @@ class CopytradePosition(models.Model):
     EXIT_MIRROR = "MIRROR"          # consistent_scalp: mirror the source wallet's sell
     EXIT_ENTRY_REJECTED = "ENTRY_REJECTED"  # US-75 AC-1: slippage cap exceeded at entry
     EXIT_VOID = "VOID"              # orphan reconcile: abandoned non-active-cohort open, NULL PnL
+    EXIT_GRADUATION = "GRADUATION"  # curvestage: sold at graduation (honest 30s post-grad VWAP)
     EXIT_REASON_CHOICES = [
         (EXIT_TP, "Take Profit"),
         (EXIT_SL, "Stop Loss"),
@@ -252,6 +253,7 @@ class CopytradePosition(models.Model):
         (EXIT_MIRROR, "Mirror Wallet Sell"),
         (EXIT_ENTRY_REJECTED, "Entry Rejected (Slippage Cap)"),
         (EXIT_VOID, "Voided (orphaned open, superseded)"),
+        (EXIT_GRADUATION, "Sold at Graduation (curvestage)"),
     ]
 
     cohort_id = models.CharField(max_length=255, db_index=True)

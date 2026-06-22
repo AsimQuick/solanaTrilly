@@ -12,6 +12,8 @@
     "core.tasks.export_annotations",
     "core.tasks.export_data_contract",
     "copytrade.tasks.export_copytrade_positions",
-    "copytrade.tasks.reprice_copy_fill"
+    "copytrade.tasks.reprice_copy_fill",
+    "copytrade.tasks.settle_curvestage_positions",
+    "copytrade.tasks.retrain_curvestage_classifier"
   ]
 }
