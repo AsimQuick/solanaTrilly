@@ -301,3 +301,40 @@ each). Small; not counted as a firehose "activation" (those track full windows).
 **Result:** Birdeye CONFIRMED to index pre-grad `source=pump_dot_fun` bonding-curve swaps.
 `run_for_mint` on a known token returned 2441 mapped pre-grad swaps (all rel<0, sorted, 637
 owners) and normalized cleanly via `to_pregrad_swaps`. Tier-3 validated end-to-end.
+
+---
+
+## 2026-06-22 (PM) — Post-grad entry-tape fix: live debugging + validation (PRs #381, #382)
+
+Continuous live-model observe run (inference_engine persistent service; firehose_active=t,
+scoring_enabled=t, trading_enabled=f throughout). Not a bounded firehose window — diagnosis +
+hotfixes on the running pipeline. Operator cleared Birdeye spend.
+
+**Two cascading bugs fixed (model track booked ZERO paper trades all session until these):**
+- **#381** postgrad subscription slots hung forever on SILENT post-grad streams past their TTL
+  (`async for` blocks on a dead WS; in-loop deadline never re-checks) → 0 free slots → 0 entries.
+  Fix: bound each event-await by the remaining TTL via `asyncio.wait_for`. Validated: slots churn
+  (10 ttl-expired/10min vs 0 in the prior 2h).
+- **#382** the live Birdeye WS post-grad sub starts ~median 75s/max 227s after graduation, MISSING
+  the fixed grad+120s entry quote window → `has_quote` structurally False → "awaiting post-grad
+  swaps (have 482)" forever. Fix: `BirdeyeBackfiller.run_for_window` recovers the entry tape
+  historically via `seek_by_time` over `[entry-30, entry+window_s]`, wired into `_score_tick`
+  (fire-and-forget, Sem(3), dedup, 3×45s indexing-lag retry, stay-DETECTED on empty).
+
+**Birdeye spend (read-only probes + the live REST path going on):** ~a few hundred REST calls —
+a post-grad coverage probe over 4 tokens (validated entry-window ENTERABILITY + ~6-10s index lag),
+a 3-item payload capture (test fixture), a pre-grad supply probe over 6 gate-rejected tokens, plus
+the live `run_for_window` path now firing per gate-passer (rare; ~few/hr). Small.
+
+**Validated live (green against reality, not mocks):** known-good mint → 96 quote-window swaps + 501
+fills → ENTERABLE; 600/600 real items mapped (no #375 shape bug); and the END-TO-END proof — mint
+`DgNoDybzHi…` recovered 91 swaps via REST → booked paper position id=528 (exact mint attribution,
+AUTO_SELL_TIMER exit, −8.2% legit losing pick). **Model track now books paper trades.**
+
+**Finding (NOT a bug):** the ~8% gate-pass rate is a genuine population read. Birdeye-probed 6
+gate-rejected tokens → genuinely 1,1,2,5,5,12 pre-grad swaps. `min_liquidity=0` captures every
+graduation (incl. thin/whale-bonded junk); the ≥20 secondary gate correctly filters. Backfilling
+thin buffers would NOT help. Trade rate is population-limited (~top 30/day).
+
+**Teardown:** firehose left RUNNING (continuous observe soak per the operator runbook).
+`trading_enabled` never moved. Scope `-p solanatrilly` throughout; solanaBilly untouched.
