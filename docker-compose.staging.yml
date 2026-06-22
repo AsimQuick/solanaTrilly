@@ -207,6 +207,11 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: 0
       REDIS_URL: redis://redis:6379/0
+      # The curvestage settler (copytrade.tasks.settle_curvestage_positions) runs
+      # HERE and fetches the post-grad tape from Birdeye to reconstruct honest PnL.
+      # Without the key it returns empty -> NOTHING settles -> zero copy PnL.
+      BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
+      HELIUS_API_KEY: ${HELIUS_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
