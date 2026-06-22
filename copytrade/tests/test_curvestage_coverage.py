@@ -248,3 +248,79 @@ def test_retrain_mature_lake_pending_build(tmp_path):
     (tmp_path / "dt=2026-06-22").mkdir()  # 12 days -> mature
     res = retrain_from_lake(str(tmp_path), str(tmp_path))
     assert res["reason"] == "lake_retrain_pending_build" and res["lake_age_days"] == 12
+
+
+# ---------------------------------------------------------------------------
+# margin coverage: gate edge paths, _graduation_bt, URLError, classifier props
+# ---------------------------------------------------------------------------
+
+
+def _cs_event(mint="Mpump", program=""):
+    return mock.Mock(mint=mint, wallet="W1", sol_amount=2.0, block_time=1000,
+                     tx_type="buy", raw={"program": program})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_curvestage_gate2_curve_frac_blocks():
+    from copytrade.curvestage_engine import handle_curvestage_buy
+
+    feats = {"curve_frac": 0.7, "pre_sol_in": 59.5}  # > 0.6 -> gate 2 fail
+    otr = [(1, 1.0, 1.0, "buy", "o", 0.1)]
+    with mock.patch("copytrade.curvestage_engine.fetch_token_tape", return_value=[{"x": 1}]), \
+         mock.patch("copytrade.curvestage_engine.birdeye_items_to_owner_tape", return_value=otr), \
+         mock.patch("copytrade.curvestage_engine.entry_features", return_value=feats):
+        assert handle_curvestage_buy(_cs_event(), 150.0, "copy_x_curvestage", "s1") is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_curvestage_feats_none_skips():
+    from copytrade.curvestage_engine import handle_curvestage_buy
+
+    with mock.patch("copytrade.curvestage_engine.fetch_token_tape", return_value=[{"x": 1}]), \
+         mock.patch("copytrade.curvestage_engine.birdeye_items_to_owner_tape", return_value=[]), \
+         mock.patch("copytrade.curvestage_engine.entry_features", return_value=None):
+        assert handle_curvestage_buy(_cs_event(), 150.0, "copy_x_curvestage", "s1") is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_curvestage_dedupe_existing_open():
+    from copytrade.curvestage_engine import handle_curvestage_buy
+    from copytrade.models import CopytradePosition
+
+    CopytradePosition.objects.create(
+        cohort_id="copy_x_curvestage", mint="Mdup", trigger_wallet="W0",
+        status=CopytradePosition.STATUS_OPEN, mode=CopytradePosition.MODE_OBSERVE,
+    )
+    # No Birdeye mock needed: dedupe short-circuits before the fetch.
+    assert handle_curvestage_buy(_cs_event(mint="Mdup"), 150.0, "copy_x_curvestage", "s1") is None
+
+
+def test_graduation_bt_reads_token():
+    from copytrade.curvestage_engine import _graduation_bt
+
+    with mock.patch("core.models.Token.objects") as objs:
+        objs.filter.return_value.values.return_value.first.return_value = {"graduated_block_time": 1782000000}
+        assert _graduation_bt("Mg") == 1782000000
+        objs.filter.return_value.values.return_value.first.return_value = None
+        assert _graduation_bt("Mnotexist") is None
+
+
+def test_fetch_token_tape_urlerror_exhausts():
+    import urllib.error
+
+    from copytrade.birdeye_tape import fetch_token_tape
+
+    with mock.patch("time.sleep"), \
+         mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("down")):
+        assert fetch_token_tape("M", 0, 100, api_key="k") == []
+
+
+def test_get_pgrad_classifier_singleton_and_props():
+    import copytrade.pgrad_classifier as pc
+
+    fake = mock.Mock()
+    fake.threshold = 0.2
+    fake.meta = {"k": "v"}
+    with mock.patch.object(pc, "_singleton", fake):
+        got = pc.get_pgrad_classifier()
+    assert got is fake and got.threshold == 0.2 and got.meta == {"k": "v"}
