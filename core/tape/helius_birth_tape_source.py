@@ -57,6 +57,7 @@ import hashlib
 import json
 import logging
 import struct
+import time
 import urllib.error
 import urllib.request
 from typing import Any, AsyncGenerator
@@ -298,82 +299,94 @@ def resolve_spl_mint(
         return None
 
     url = f"{endpoint}/?api-key={api_key}"
+    _SPL_PROGRAMS = {_SPL_TOKEN_PROGRAM, _SPL_TOKEN_2022_PROGRAM}
+    _EXCLUDED_MINTS = {WSOL_MINT, _USDC_MINT}
+
+    # COMMITMENT (critical, found live 2026-06-22): a migrate notification arrives
+    # at "confirmed".  getMultipleAccounts defaults to "finalized", which lags
+    # ~13s behind and reads freshly-confirmed accounts as null — the mint is then
+    # missed and the graduation wrongly skipped (observed: ~94% of live grads
+    # skipped at finalized vs resolved at confirmed; the offline 147/149 passed
+    # only because those frames were long-finalized).  Query at "confirmed" to
+    # match the notification level.  Retry ONCE after a short delay to absorb
+    # confirmed-slot propagation lag across RPC nodes (this runs in a worker
+    # thread via asyncio.to_thread, so time.sleep does not block the event loop).
     payload = json.dumps({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "getMultipleAccounts",
         "params": [
             account_keys,
-            {"encoding": "jsonParsed"},
+            {"encoding": "jsonParsed", "commitment": "confirmed"},
         ],
     }).encode()
 
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            body = resp.read().decode()
-        data = json.loads(body)
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError, TypeError) as exc:
-        logger.warning("[FIREHOSE] resolve_spl_mint: RPC error (%s) — returning None.", exc)
-        return None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[FIREHOSE] resolve_spl_mint: unexpected error (%s) — returning None.", exc)
-        return None
-
-    try:
-        values = data["result"]["value"]
-    except (KeyError, TypeError):
-        logger.warning("[FIREHOSE] resolve_spl_mint: unexpected RPC response shape — returning None.")
-        return None
-
-    if not isinstance(values, list):
-        return None
-
-    _SPL_PROGRAMS = {_SPL_TOKEN_PROGRAM, _SPL_TOKEN_2022_PROGRAM}
-    _EXCLUDED_MINTS = {WSOL_MINT, _USDC_MINT}
-
-    mints_found: list[str] = []
-    for i, entry in enumerate(values):
-        if not isinstance(entry, dict):
-            continue
-        owner = entry.get("owner")
-        if owner not in _SPL_PROGRAMS:
-            continue
-        # Must parse as a "mint" type
+    for attempt in range(2):
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         try:
-            parsed_type = entry["data"]["parsed"]["type"]
-        except (KeyError, TypeError):
-            continue
-        if parsed_type != "mint":
-            continue
-        # Map back to the pubkey (parallel with account_keys list)
-        if i >= len(account_keys):
-            continue
-        pubkey = account_keys[i]
-        if pubkey in _EXCLUDED_MINTS:
-            continue
-        mints_found.append(pubkey)
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                body = resp.read().decode()
+            data = json.loads(body)
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError, TypeError) as exc:
+            logger.warning("[FIREHOSE] resolve_spl_mint: RPC error (%s) — returning None.", exc)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[FIREHOSE] resolve_spl_mint: unexpected error (%s) — returning None.", exc)
+            return None
 
-    if len(mints_found) == 1:
-        return mints_found[0]
-    if len(mints_found) == 0:
+        try:
+            values = data["result"]["value"]
+        except (KeyError, TypeError):
+            logger.warning("[FIREHOSE] resolve_spl_mint: unexpected RPC response shape — returning None.")
+            return None
+        if not isinstance(values, list):
+            return None
+
+        mints_found: list[str] = []
+        for i, entry in enumerate(values):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("owner") not in _SPL_PROGRAMS:
+                continue
+            try:
+                parsed_type = entry["data"]["parsed"]["type"]
+            except (KeyError, TypeError):
+                continue
+            if parsed_type != "mint":
+                continue
+            if i >= len(account_keys):
+                continue
+            pubkey = account_keys[i]
+            if pubkey in _EXCLUDED_MINTS:
+                continue
+            mints_found.append(pubkey)
+
+        if len(mints_found) == 1:
+            return mints_found[0]
+        if len(mints_found) > 1:
+            logger.warning(
+                "[FIREHOSE] resolve_spl_mint: ambiguous — %d SPL mints found (%s) — returning None.",
+                len(mints_found),
+                mints_found[:3],
+            )
+            return None
+        # Zero mints found.  Retry once after a short delay (confirmed-slot
+        # propagation lag); only give up after the retry.
+        if attempt == 0:
+            time.sleep(1.5)
+            continue
         logger.warning(
-            "[FIREHOSE] resolve_spl_mint: no SPL mint found among %d candidates — returning None.",
+            "[FIREHOSE] resolve_spl_mint: no SPL mint found among %d candidates "
+            "(after retry) — returning None.",
             len(account_keys),
         )
         return None
-    # Multiple mints — should not happen; log and skip
-    logger.warning(
-        "[FIREHOSE] resolve_spl_mint: ambiguous — %d SPL mints found (%s) — returning None.",
-        len(mints_found),
-        mints_found[:3],
-    )
+
     return None
 
 
