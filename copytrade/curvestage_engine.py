@@ -81,6 +81,21 @@ def handle_curvestage_buy(
     ).exists():
         return None
 
+    # Gate 1b — authoritative POST-grad reject via the RECORDER's graduation time.
+    # is_on_bonding_curve() above defaults to True when the Helius wallet event
+    # carries no `program` field (these events never do), so a POST-grad buy slips
+    # the cheap gate and would settle as a spurious loss (proven live: position
+    # DoeeM6LF — the watched buy was 66s AFTER graduation).  The recorder's
+    # graduated_block_time is the reliable signal: if the token had already
+    # graduated at/before the buy, this is not a curve-stage entry — skip.
+    gts = _graduation_bt(mint)
+    if gts is not None and gts <= buy_ts:
+        logger.info(
+            "[curvestage] mint=%.8s POST-grad buy (grad_bt=%d <= buy_ts=%d) — skip (not on curve).",
+            mint, gts, buy_ts,
+        )
+        return None
+
     # Fetch the token's pre-grad tape from Birdeye (same basis as training).
     items = fetch_token_tape(mint, buy_ts - _PREGRAD_LOOKBACK_S, buy_ts)
     if not items:

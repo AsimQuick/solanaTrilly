@@ -295,6 +295,26 @@ def test_handle_curvestage_dedupe_existing_open():
     assert handle_curvestage_buy(_cs_event(mint="Mdup"), 150.0, "copy_x_curvestage", "s1") is None
 
 
+@pytest.mark.django_db(transaction=True)
+def test_handle_curvestage_post_grad_buy_skipped_via_recorder_graduation():
+    """Bug fix: a buy AFTER graduation (per the recorder's graduated_block_time) is
+    rejected even though the Helius wallet event carries no `program` field (so the
+    cheap is_on_bonding_curve gate defaults to on-curve).  The buy_ts is 1000 and
+    the token graduated at 934 (66s earlier — mirrors the live DoeeM6LF miss): no
+    position is booked and the Birdeye tape fetch is never reached.
+    """
+    from copytrade.curvestage_engine import handle_curvestage_buy
+    from copytrade.models import CopytradePosition
+
+    fetch = mock.Mock()
+    with mock.patch("copytrade.curvestage_engine._graduation_bt", return_value=934), \
+         mock.patch("copytrade.curvestage_engine.fetch_token_tape", fetch):
+        out = handle_curvestage_buy(_cs_event(mint="Mpostgrad"), 150.0, "copy_x_curvestage", "s1")
+    assert out is None, "a post-grad buy must be skipped, not booked as a spurious loss"
+    fetch.assert_not_called()  # gate 1b short-circuits before any Birdeye spend
+    assert not CopytradePosition.objects.filter(mint="Mpostgrad").exists()
+
+
 def test_graduation_bt_reads_token():
     from copytrade.curvestage_engine import _graduation_bt
 
