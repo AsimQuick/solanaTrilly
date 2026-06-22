@@ -64,6 +64,7 @@ from copytrade.curve_price import (
     simulate_buy,
     simulate_sell,
 )
+from copytrade.curvestage_engine import handle_curvestage_buy, is_curvestage_cohort
 from copytrade.exits import (
     EXIT_TIMER,
     evaluate_mirror_exit,
@@ -315,6 +316,13 @@ def handle_event(
     min_usd = float(getattr(settings, "min_trigger_buy_usd", 250.0))
     if not should_copy_buy_v2(event, min_trigger_buy_usd=min_usd, sol_usd=sol_usd):
         return None
+
+    # 1b. CURVE-STAGE cohort — a self-contained gate (on-curve + curve_frac<=0.6 +
+    #     P(grad) top-25%) + honest-PnL-settled observe path.  Bypasses the existing
+    #     curve-fill machinery below (its lifecycle lives in the DB + the settler).
+    if is_curvestage_cohort(cohort_id):
+        strategy_id = state.wallet_to_strategy.get(event.wallet, "")
+        return handle_curvestage_buy(event, sol_usd, cohort_id, strategy_id)
 
     # 2. Multiplicity controls
     mult_cfg = _MultiplicityConfigShim(

@@ -11,6 +11,65 @@
 from celery import shared_task
 
 
+@shared_task(name="copytrade.tasks.settle_curvestage_positions", bind=False)
+def settle_curvestage_positions() -> dict:
+    """Settle due curve-stage observe positions with honest, parity-true PnL.
+
+    Beat-scheduled (~every 60s).  For the ACTIVE curvestage cohort, settles any open
+    position whose token graduated OR whose outcome window elapsed, reconstructing
+    the honest entry + 30s-post-grad-VWAP exit from Birdeye via
+    ``curvestage_engine.settle_due_curvestage_positions`` (EPIC-copy-curvestage-integration).
+    No-op when the active cohort is not curvestage.  Never crashes the worker.
+    """
+    import logging
+    from datetime import datetime, timezone
+
+    logger = logging.getLogger("copytrade")
+    try:
+        from copytrade.curvestage_engine import (
+            is_curvestage_cohort,
+            settle_due_curvestage_positions,
+        )
+        from copytrade.models import CopyTradeSettings
+
+        cohort_id = CopyTradeSettings.get().active_cohort_id or ""
+        if not is_curvestage_cohort(cohort_id):
+            return {"settled": 0, "skipped": "not a curvestage cohort"}
+        now = datetime.now(tz=timezone.utc)
+        closed = settle_due_curvestage_positions(now, cohort_id=cohort_id)
+        if closed:
+            logger.info("[copytrade:curvestage-settle] settled %d positions", len(closed))
+        return {"settled": len(closed), "cohort_id": cohort_id}
+    except Exception as exc:  # noqa: BLE001 — task must never crash the worker
+        logger.error("[copytrade:curvestage-settle] error: %s", exc)
+        return {"settled": 0, "error": str(exc)}
+
+
+@shared_task(name="copytrade.tasks.retrain_curvestage_classifier", bind=False)
+def retrain_curvestage_classifier() -> dict:
+    """Weekly retrain of the curvestage P(grad) classifier from the recorder lake.
+
+    Beat-scheduled weekly.  Rebuilds the prior-week ON-CURVE entries from the lake
+    (pool-wallet >=$250 first-buys), computes features via the SOLE shared
+    ``copytrade.entry_features`` path (train/serve parity), retrains the LGBM, and
+    sets the frozen threshold from a HELD-OUT fold (tester A3-2).  Guards on
+    >=7 days of lake history, else keeps the seed.  See
+    copytrade/curvestage_train.py.  No-op until the lake reaches a full week.
+    """
+    import logging
+
+    logger = logging.getLogger("copytrade")
+    try:
+        from copytrade.curvestage_train import retrain_from_lake
+
+        result = retrain_from_lake()
+        logger.info("[copytrade:curvestage-retrain] %s", result)
+        return result
+    except Exception as exc:  # noqa: BLE001 — task must never crash the worker
+        logger.error("[copytrade:curvestage-retrain] error: %s", exc)
+        return {"retrained": False, "error": str(exc)}
+
+
 @shared_task(name="copytrade.tasks.reprice_copy_fill", bind=False)
 def reprice_copy_fill(position_pk: int, lake_base_dir: str = "lake/firehose") -> dict:
     """Retrospectively reprice a closed copy-trade position from the firehose lake.

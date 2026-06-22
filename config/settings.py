@@ -141,6 +141,18 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.sweep_vps_lake_partitions",
         "schedule": 86400.0,  # once per day
     },
+    # Curve-stage copy cohort: settle due observe positions with honest PnL (no-op
+    # unless the active cohort is curvestage). EPIC-copy-curvestage-integration.
+    "curvestage-settle": {
+        "task": "copytrade.tasks.settle_curvestage_positions",
+        "schedule": 60.0,  # every 60s
+    },
+    # Weekly retrain of the curvestage P(grad) classifier from the recorder lake
+    # (no-op until the lake has >=7 days; keeps the lab seed until then).
+    "curvestage-retrain": {
+        "task": "copytrade.tasks.retrain_curvestage_classifier",
+        "schedule": 604800.0,  # weekly (7 days)
+    },
 }
 
 # ---------------------------------------------------------------------------
