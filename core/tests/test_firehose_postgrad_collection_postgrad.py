@@ -467,29 +467,16 @@ def test_paper_trade_refuses_when_trading_enabled_true():
 
 
 # ---------------------------------------------------------------------------
-# §4 — deferral: gate passes but EMPTY post-grad tape -> no position, logged, no crash
+# §4 — deferral: gate passes but the outcome window has NOT yet closed -> the
+#       gate-passer is registered for a deferred (window-close) settle, no Position
+#       is booked, the deferral is logged, no crash.
 # ---------------------------------------------------------------------------
 
 
-def test_postgrad_enterable_defers_on_empty_tape():
-    """The pre-check returns False for an empty / insufficient post-grad tape."""
-    entry_ts = 1060.0
-    scoring = {"gate": "adaptive_topk", "score_at_elapsed_s": 60}
-    # Empty -> defer.
-    assert FirehoseDaemon._postgrad_enterable([], entry_ts, scoring) is False
-    # Only a quote, no fill -> defer.
-    quote_only = [_postgrad_event_to_swap(_raw_birdeye_swap("M", 1055, "q", "buy", 0.001, 2.0), "M", 1000)]
-    assert FirehoseDaemon._postgrad_enterable(quote_only, entry_ts, scoring) is False
-    # Quote + fill -> enterable.
-    full = quote_only + [
-        _postgrad_event_to_swap(_raw_birdeye_swap("M", 1062, "f", "buy", 0.001, 2.0), "M", 1000)
-    ]
-    assert FirehoseDaemon._postgrad_enterable(full, entry_ts, scoring) is True
-
-
 @pytest.mark.django_db(transaction=True)
-def test_score_tick_defers_paper_when_postgrad_tape_empty(caplog):
-    """gate passes but the post-grad tape is empty -> no Position, 'awaiting' logged, no crash."""
+def test_score_tick_defers_paper_until_outcome_window_closes(caplog):
+    """gate passes but wall-clock is still inside the outcome window -> register for
+    a deferred settle, book NO Position, log the deferral, do not mark SCORED."""
     import logging
     import unittest.mock as mock
 
@@ -544,7 +531,9 @@ def test_score_tick_defers_paper_when_postgrad_tape_empty(caplog):
             return self.score_pool([f])[0]
 
     trading_cfg = TradingSettings.get().to_schema()
-    daemon = FirehoseDaemon(clock=VirtualClock(datetime(2026, 6, 19, tzinfo=timezone.utc)))
+    # Wall-clock is INSIDE the outcome window (entry=grad+60=1060, window=180 ->
+    # close at 1240); now=1200 < 1240 so the paper leg defers rather than firing.
+    daemon = FirehoseDaemon(clock=VirtualClock(datetime.fromtimestamp(1200, tz=timezone.utc)))
     daemon._tape.add(mint, pre_tape[0])
     for s in pre_tape[1:]:
         daemon._tape.add(mint, s)
@@ -569,11 +558,12 @@ def test_score_tick_defers_paper_when_postgrad_tape_empty(caplog):
     asyncio.run(_drive())
     after = Position.objects.count()
 
-    assert after == before, "no position may be booked while the post-grad tape is empty"
-    assert any("awaiting post-grad swaps" in r.getMessage() for r in caplog.records), (
-        "the deferral must be logged"
-    )
-    # Deferred -> NOT marked scored -> retried on a later tick.
+    assert after == before, "no position may be booked before the outcome window closes"
+    assert any(
+        "deferring settle to outcome-window close" in r.getMessage() for r in caplog.records
+    ), "the deferral must be logged"
+    # Registered for a deferred settle, NOT marked scored -> settles at window close.
+    assert mint in daemon._pending_settle, "the gate-passer is queued for window-close settle"
     assert mint not in daemon._scored_mints
 
 

@@ -10,7 +10,9 @@
 """Tape settler: simulate_tape_exit — the SOLE paper/observe settler (Principle #5).
 
 Ports solanatrills/analysis/wallet_strategy/tape_resettle.py resettle() VERBATIM
-(PRD §10.2 / AC-66.2).
+(PRD §10.2 / AC-66.2), with ONE deliberate correctness deviation: the impact
+haircut (1 - cost) is floored at 0 so a thin-tape position can never settle below
+-100% (a long's worst case).  See the floor note at the pnl computation.
 
 Honest-fill conventions (from tape_resettle.py / birdeye_tape_label_conf.py):
     entry quote  = last swap in [entry−30, entry]
@@ -210,7 +212,16 @@ def _resettle(
     exitp = after[0] if after else post[-1][1]
     flow = sum(u for t, _, u in trades if entry - _GAP <= t <= entry + _GAP)
     cost = 2 * size / (size + flow) if flow > 0 else 0.20
-    pnl = ((exitp / fill) * (1 - _FEE) * (1 - cost) - 1) * 100
+    # Floor the depth/impact haircut at a TOTAL loss.  On a thin tape the impact
+    # cost 2·size/(size+flow) can exceed 1, which drives (1 - cost) NEGATIVE and
+    # yields impossible sub-(-100%) PnL with a negative effective exit price
+    # (observed live: model paper trades at -108% / -120%).  A long can lose AT
+    # MOST 100%; clamp (1 - cost) at 0.  This is the ONE deliberate deviation from
+    # the verbatim tape_resettle.py port — the same honest-fill floor used by the
+    # copy curvestage settle_grad.  (Flag to the lab to floor the oracle
+    # identically so offline == live on pathological thin tapes.)
+    impact_factor = max(1.0 - cost, 0.0)
+    pnl = ((exitp / fill) * (1 - _FEE) * impact_factor - 1) * 100
     return dict(
         enterable=True,
         pnl=pnl,

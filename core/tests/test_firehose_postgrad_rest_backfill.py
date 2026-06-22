@@ -7,18 +7,19 @@
 # dependencies: pytest, pytest-django, asyncio, unittest.mock,
 #               core.backfill.birdeye_backfill, core.management.commands.run_firehose
 # ---
-"""Tests for the POST-grad ENTRY-tape Birdeye REST recovery (Option A).
+"""Tests for the POST-grad paper settle over the Birdeye REST window.
 
-THE BUG (root-caused live 2026-06-22): the paper entry needs a post-grad swap in
-the quote window [entry-30, entry] (entry = grad + score_at_elapsed_s = grad+120s),
-but the LIVE Birdeye WS post-grad subscription routinely starts AFTER that window
-closed (median ~75s subscribe latency, gate-passers in the slow tail), so
-`_postgrad_enterable` is structurally False and the paper leg defers forever
-despite hundreds of later swaps → ZERO paper trades.
+THE BUG (root-caused live 2026-06-22): the paper leg was settled at score time
+(~grad+120s) over whatever post-grad tape had arrived, but at that instant Birdeye
+has only indexed swaps up to ~now — a few seconds past entry.  The settler's
+AUTO_SELL_TIMER fallback then booked at the last available swap (held ~3-14s) and
+silently missed the real later TAKE_PROFIT / RUG_PULL that plays out over the
+outcome window (proven live: 8 of 9 trades mis-settled).
 
-THE FIX: recover the entry window HISTORICALLY via Birdeye REST seek_by_time
-(`BirdeyeBackfiller.run_for_window`), wired into the `_score_tick` paper-entry
-deferral as a fire-and-forget, retrying, concurrency-capped task.
+THE FIX: DEFER the settle until wall-clock passes entry + outcome_window_s, then
+settle ONCE over a single fresh full-window Birdeye REST fetch
+(`BirdeyeBackfiller.run_for_window`, fully indexed by then).  Restart-safe: the
+token stays DETECTED until the settle actually fires.
 
 TESTING PHILOSOPHY (solanaBilly testing-philosophy-2026-05-31): every shipped
 production bug lived at a MOCKED boundary — a mock encodes our ASSUMPTION of the
@@ -27,9 +28,9 @@ seek_by_time items carry NO top-level volume_usd; the SOL notional is on the
 quote leg). Therefore the mapper / run_for_window tests below run against a
 VERBATIM CAPTURED real Birdeye payload (live read-only probe of mint
 G3vNQa…pump's post-grad window, 2026-06-22), NOT invented dicts. The
-fetch-task orchestration tests (retry on indexing-lag, restart-safety) mock our
-OWN run_for_window return value — that boundary is our control flow, not the
-external payload shape.
+deferred-settle orchestration tests (window-close gate, full-window settle,
+error-retry) mock our OWN run_for_window return value / settle seam — that
+boundary is our control flow, not the external payload shape.
 """
 from __future__ import annotations
 
@@ -41,7 +42,6 @@ import pytest
 
 from core.backfill.birdeye_backfill import _map_rest_item_window
 from core.clock import VirtualClock
-from core.management.commands import run_firehose as rf
 from core.management.commands.run_firehose import FirehoseDaemon
 
 # ---------------------------------------------------------------------------
@@ -165,8 +165,10 @@ def test_run_for_window_missing_api_key_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# §3 — fetch-task orchestration (OUR control flow): indexing-lag retry,
-#       restart-safety. Mocks our OWN run_for_window return value.
+# §3 — deferred-settle orchestration (OUR control flow): settle at window close
+#       over the FULL fetched tape, the wall-clock deferral gate, and error-retry
+#       safety. Mocks our OWN run_for_window return value / settle seam — never the
+#       external Birdeye payload shape (which §1/§2 pin against captured reality).
 # ---------------------------------------------------------------------------
 
 
@@ -174,61 +176,64 @@ def _daemon():
     return FirehoseDaemon(clock=VirtualClock(datetime(2026, 6, 19, tzinfo=timezone.utc)))
 
 
-def test_postgrad_rest_fetch_task_retries_on_empty_then_loads():
-    """Birdeye indexing lag: empty on attempts 1-2, real swaps on attempt 3.
-
-    The task must retry and, on the eventual hit, load the post-grad tape so the
-    paper leg becomes enterable on a later tick.
-    """
-    # Align grad_bt with the clock (production epochs): entry_ts == now, so the
-    # task's window-elapsed early-stop (clock >= entry+outcome_window) does NOT
-    # fire and all retries run.  (A synthetic grad_bt=1000 vs a 2026 clock would
-    # look like the window had closed.)
-    clock_dt = datetime(2026, 6, 22, 12, 0, 0, tzinfo=timezone.utc)
-    clock_epoch = int(clock_dt.timestamp())
-    daemon = FirehoseDaemon(clock=VirtualClock(clock_dt))
-    mint = "MintLag"
-    grad_bt = clock_epoch - 120
-    entry_ts = float(grad_bt + 120)  # == clock_epoch
-    real_swaps = [
-        {"block_time": grad_bt + 95, "slot": 1, "signature": "a", "side": "buy",
-         "price": 0.001, "rel": 95.0, "vol": 1.0, "vol_sol": 1.0, "vol_usd": 75.0, "owner": "o1"},
-        {"block_time": grad_bt + 125, "slot": 2, "signature": "b", "side": "sell",
-         "price": 0.0011, "rel": 125.0, "vol": 1.0, "vol_sol": 1.0, "vol_usd": 75.0, "owner": "o2"},
-    ]
-    calls = {"n": 0}
-
-    def _fake_run_for_window(*a, **k):
-        calls["n"] += 1
-        return [] if calls["n"] < 3 else list(real_swaps)
-
-    daemon._postgrad_rest_pending.add(mint)  # as the dispatcher would
-
-    async def _drive():
-        with mock.patch("core.backfill.birdeye_backfill.BirdeyeBackfiller.run_for_window",
-                        side_effect=_fake_run_for_window), \
-             mock.patch.object(rf, "_POSTGRAD_REST_RETRY_S", 0.0):  # no real sleeps
-            await daemon._postgrad_rest_fetch_task(mint, grad_bt, entry_ts, 1800.0, 75.0)
-
-    asyncio.run(_drive())
-
-    assert calls["n"] == 3, "must retry through the indexing-lag empties"
-    assert len(daemon._postgrad_tape.get(mint)) == 2, "the hit loads the post-grad tape"
-    assert mint not in daemon._postgrad_rest_pending, "dedup guard cleared in finally"
-
-
 @pytest.mark.django_db(transaction=True)
-def test_postgrad_rest_fetch_task_persistent_empty_keeps_token_detected():
-    """Indexing lag never resolves / token illiquid: DO NOT mark SCORED/SKIPPED.
+def test_settle_pending_task_settles_full_window_then_marks_terminal():
+    """At window close the deferred settle fetches the FULL window ONCE and books
+    the paper leg over the COMPLETE tape, then marks the token terminal (SCORED)
+    and clears it from the pending / in-flight sets.
 
-    Restart-safety: the token must stay DETECTED so a later tick re-dispatches
-    while the outcome window is still open (the whole point of not permanently
-    skipping a token whose post-grad swaps simply have not indexed yet).
+    Reality-anchored: run_for_window returns swaps mapped from the VERBATIM captured
+    Birdeye payload (_REAL_ITEMS) via the real mapper; we mock only our OWN control
+    flow (the settle seam) — never the external payload shape.
     """
     from core.models import Token
 
-    grad_bt = 1000
-    mint = "MintStillEmpty"
+    Token.objects.create(
+        mint=_MINT, pool_address="pool_" + _MINT,
+        graduated_at=datetime(2026, 6, 19, tzinfo=timezone.utc),
+        graduated_block_time=_GRAD_BT, dex_source="pumpswap",
+        raw_graduation={"mint": _MINT}, status="DETECTED",
+    )
+    real_swaps = [
+        m for m in (
+            _map_rest_item_window(it, _MINT, _ENTRY_TS - 30, _ENTRY_TS + 1800, _GRAD_BT, 140.0)
+            for it in _REAL_ITEMS
+        ) if m
+    ]
+    daemon = _daemon()
+    daemon._pending_settle[_MINT] = (float(_ENTRY_TS), 0.83, _GRAD_BT)
+    daemon._settle_inflight.add(_MINT)  # as _settle_due_pending would have
+    captured = {}
+
+    def _fake_paper_trade_sync(m, score, trades, e_ts, *a, **k):
+        captured.update(mint=m, trades=trades, entry_ts=e_ts)
+
+    async def _drive():
+        with mock.patch("core.backfill.birdeye_backfill.BirdeyeBackfiller.run_for_window",
+                        return_value=real_swaps), \
+             mock.patch.object(daemon, "_paper_trade_sync", side_effect=_fake_paper_trade_sync):
+            await daemon._settle_pending_task(
+                _MINT, float(_ENTRY_TS), 0.83, _GRAD_BT, 1800.0, object(), 0.1, 140.0, False,
+            )
+
+    asyncio.run(_drive())
+
+    assert captured["mint"] == _MINT
+    assert len(captured["trades"]) == 3, "settles over the FULL fetched window"
+    assert Token.objects.get(mint=_MINT).status == "SCORED", "terminal after settle"
+    assert _MINT in daemon._scored_mints
+    assert _MINT not in daemon._pending_settle, "popped after a successful settle"
+    assert _MINT not in daemon._settle_inflight, "in-flight guard cleared in finally"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_settle_pending_task_transient_error_keeps_mint_queued_for_retry():
+    """A transient fetch/settle error must NOT lose the trade: the mint stays in
+    _pending_settle (re-tried next tick), is NOT marked SCORED, and the in-flight
+    guard is cleared so the retry can dispatch."""
+    from core.models import Token
+
+    grad_bt, mint = 1000, "MintBoom"
     Token.objects.create(
         mint=mint, pool_address="pool_" + mint,
         graduated_at=datetime(2026, 6, 19, tzinfo=timezone.utc),
@@ -236,18 +241,102 @@ def test_postgrad_rest_fetch_task_persistent_empty_keeps_token_detected():
         raw_graduation={"mint": mint}, status="DETECTED",
     )
     daemon = _daemon()
-    daemon._postgrad_rest_pending.add(mint)
+    entry_ts = float(grad_bt + 120)
+    daemon._pending_settle[mint] = (entry_ts, 0.9, grad_bt)
+    daemon._settle_inflight.add(mint)
 
     async def _drive():
         with mock.patch("core.backfill.birdeye_backfill.BirdeyeBackfiller.run_for_window",
-                        return_value=[]), \
-             mock.patch.object(rf, "_POSTGRAD_REST_RETRY_S", 0.0):
-            await daemon._postgrad_rest_fetch_task(mint, grad_bt, float(grad_bt + 120), 1800.0, 75.0)
+                        side_effect=RuntimeError("birdeye 500")):
+            await daemon._settle_pending_task(
+                mint, entry_ts, 0.9, grad_bt, 1800.0, object(), 0.1, 140.0, False,
+            )
 
     asyncio.run(_drive())
 
-    tok = Token.objects.get(mint=mint)
-    assert tok.status == "DETECTED", "persistent empty must NOT mark SCORED/SKIPPED"
+    assert Token.objects.get(mint=mint).status == "DETECTED", "transient error stays DETECTED"
     assert mint not in daemon._scored_mints
-    assert not daemon._postgrad_tape.get(mint)
-    assert mint not in daemon._postgrad_rest_pending, "dedup guard cleared for re-dispatch"
+    assert mint in daemon._pending_settle, "stays queued for a later-tick retry"
+    assert mint not in daemon._settle_inflight, "in-flight cleared so the retry can dispatch"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_settle_due_pending_gates_on_wallclock_window_close():
+    """The settle fires on WALL-CLOCK (entry + outcome_window_s), NOT on the tape's
+    own last swap — so a token that went dead post-grad still settles on schedule.
+    Before the window closes nothing dispatches; after, the mint is taken in-flight.
+    """
+    grad_bt, mint = 1782200000, "MintWait"
+    entry_ts = float(grad_bt + 120)
+    window_s = 1800.0
+    scoring = {"outcome_window_s": window_s}
+
+    before = datetime.fromtimestamp(entry_ts + 100, tz=timezone.utc)
+    d1 = FirehoseDaemon(clock=VirtualClock(before))
+    d1._pending_settle[mint] = (entry_ts, 0.9, grad_bt)
+    d1._settle_due_pending(object(), 0.1, 140.0, scoring, False)
+    assert mint not in d1._settle_inflight, "must NOT settle before the window closes"
+    assert mint in d1._pending_settle
+
+    after = datetime.fromtimestamp(entry_ts + window_s + 5, tz=timezone.utc)
+    d2 = FirehoseDaemon(clock=VirtualClock(after))
+    d2._pending_settle[mint] = (entry_ts, 0.9, grad_bt)
+
+    async def _drive_after():
+        with mock.patch("core.backfill.birdeye_backfill.BirdeyeBackfiller.run_for_window",
+                        return_value=[]), \
+             mock.patch.object(d2, "_paper_trade_sync"):
+            d2._settle_due_pending(object(), 0.1, 140.0, scoring, False)
+            assert mint in d2._settle_inflight, "taken in-flight once the window closed"
+            await asyncio.sleep(0)  # let the dispatched task run + clean up
+
+    asyncio.run(_drive_after())
+
+
+@pytest.mark.django_db
+def test_truncated_tape_mislabels_timer_full_tape_recovers_real_trigger():
+    """The truncation bug at the SETTLER boundary: a tape that ENDS a few seconds
+    past entry yields a false AUTO_SELL_TIMER at the last print; the SAME settler
+    over the full window sees the REAL take-profit.  This is exactly why score-time
+    settling was wrong and window-close settling is right (live: 8/9 mis-settled).
+    """
+    from trading.models import TradingSettings
+    from trading.tape_settler import simulate_tape_exit
+
+    cfg = TradingSettings.get().to_schema()  # tp12tr15_t1200 (tp=12, timer=1200, sl=None)
+    entry = 1060.0
+    quote = (entry - 5, 0.0010, 50.0)
+    fill = (entry + 2, 0.0010, 50.0)
+    truncated = [quote, fill, (entry + 5, 0.0010, 50.0)]          # ends ~5s past entry
+    full = truncated + [(entry + 60, 0.00108, 50.0),
+                        (entry + 140, 0.00120, 50.0)]             # +20% -> TP(+12%) fires
+    r_trunc = simulate_tape_exit(truncated, entry, cfg, 0.1, 140.0)
+    r_full = simulate_tape_exit(full, entry, cfg, 0.1, 140.0)
+
+    assert r_trunc["enterable"] and r_full["enterable"]
+    assert r_trunc["trigger"] == "AUTO_SELL_TIMER", "truncated tape -> false timer at last print"
+    assert r_trunc["held"] <= 10, "the 'timer' actually fired seconds past entry (ran out of tape)"
+    assert r_full["trigger"] == "TAKE_PROFIT_PCT", "the full window sees the real take-profit"
+    assert r_full["pnl"] > r_trunc["pnl"] + 5, "the real outcome is materially different"
+
+
+@pytest.mark.django_db
+def test_thin_tape_impact_haircut_floors_pnl_at_minus_100():
+    """Thin-tape guard (bug 1): when the depth/impact cost 2S/(S+flow) exceeds 1,
+    PnL must floor at -100% (a long loses AT MOST 100%) — never the impossible
+    sub-(-100%) / negative-exit-price values the unfloored haircut produced live
+    (e.g. -108% / -120%).
+    """
+    from trading.models import TradingSettings
+    from trading.tape_settler import simulate_tape_exit
+
+    cfg = TradingSettings.get().to_schema()
+    entry = 1060.0
+    # Large position vs a tiny flow (thin tape): size_usd = 10*140 = 1400; flow ~ $1.5
+    # -> cost = 2*1400/(1400+1.5) ~ 1.998 -> unfloored (1-cost) ~ -0.998 -> sub-(-100%).
+    quote = (entry - 5, 0.0010, 0.5)
+    fill = (entry + 2, 0.0010, 0.5)
+    drop = (entry + 30, 0.0005, 0.5)  # price halves -> a real loss on top of the haircut
+    r = simulate_tape_exit([quote, fill, drop], entry, cfg, 10.0, 140.0)
+    assert r["enterable"]
+    assert r["pnl"] >= -100.0, "a long position can never settle worse than a total loss"
