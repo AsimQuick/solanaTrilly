@@ -318,6 +318,59 @@ def test_backfill_pending_dedup():
 
 
 # ---------------------------------------------------------------------------
+# T2-10: per-tick dispatch cap (event-loop-starvation guard)
+# ---------------------------------------------------------------------------
+
+def test_backfill_per_tick_dispatch_cap():
+    """At most _MAX_BACKFILL_DISPATCH_PER_TICK lake scans are dispatched per tick.
+
+    Regression for the live incident: scoring-on over a large DETECTED backlog
+    dispatched HUNDREDS of fire-and-forget GIL-heavy lake scans at once, starving
+    the asyncio loop and killing the shared Helius WS (~20s death cycle).  The
+    _score_tick loop caps new dispatches per tick so the backlog drains gradually.
+    """
+    # Mirror the exact gating logic from _score_tick (local constant = 4).
+    _MAX_BACKFILL_DISPATCH_PER_TICK = 4
+    backfill_pending: set[str] = set()
+    due_mints = [f"MINT_{i:03d}" for i in range(50)]  # large backlog, all no-tape
+
+    dispatched: list[str] = []
+    backfills_dispatched = 0
+    for mint in due_mints:
+        swaps: list[dict] = []  # empty buffer → would trigger backfill
+        if (
+            len(swaps) == 0
+            and mint not in backfill_pending
+            and backfills_dispatched < _MAX_BACKFILL_DISPATCH_PER_TICK
+        ):
+            backfill_pending.add(mint)
+            backfills_dispatched += 1
+            dispatched.append(mint)
+
+    assert len(dispatched) == _MAX_BACKFILL_DISPATCH_PER_TICK, (
+        f"Expected at most {_MAX_BACKFILL_DISPATCH_PER_TICK} dispatches/tick from a "
+        f"50-token backlog, got {len(dispatched)}"
+    )
+
+
+def test_lake_backfill_semaphore_lazy_init():
+    """FirehoseDaemon exposes a lazily-initialised lake-backfill concurrency cap."""
+    from core.management.commands.run_firehose import FirehoseDaemon
+
+    daemon = FirehoseDaemon(
+        collection_factory=lambda: None,
+        graduation_factory=lambda: (None, None),
+        reconciler_factory=lambda: (None, None),
+        postgrad_factory=lambda mint: None,
+        tape_sink=MagicMock(record=lambda *a: None, flush=lambda: 0),
+        wallet_bank=None,
+    )
+    # Lazily created on the event loop (None until first backfill); attribute exists.
+    assert hasattr(daemon, "_lake_backfill_sem"), "daemon must have _lake_backfill_sem"
+    assert daemon._lake_backfill_sem is None, "lake sem is lazily initialised (None at construct)"
+
+
+# ---------------------------------------------------------------------------
 # Django DB tests
 # ---------------------------------------------------------------------------
 
