@@ -790,6 +790,50 @@ def test_resolve_spl_mint_uses_confirmed_commitment() -> None:
     )
 
 
+def test_resolve_spl_mint_disambiguates_token_from_lp_mint() -> None:
+    """When token + pool LP mint are both visible (at 'confirmed'), pick the token.
+
+    pump.fun token mints have a RENOUNCED (null) mintAuthority; the freshly-created
+    PumpSwap LP mint has a non-null authority (the pool) and supply 0.  Found live
+    2026-06-22: confirmed-commitment makes the LP mint visible too, so without this
+    disambiguation ~13% of graduations skip as ambiguous.
+    """
+    from unittest.mock import MagicMock
+
+    from core.tape.helius_birth_tape_source import resolve_spl_mint
+
+    token = "DoMza6BcwHeWy5TMjjAsiUqxdCyo4AdprJmfN9y1pump"  # renounced authority
+    lp = "HXRDSS3d7Sgj2NpinKzo9CAckX9CpHvcM5k14RbRHxHC"     # pool-owned authority
+    candidates = [lp, token]
+
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_resp.read.return_value = json.dumps({
+        "result": {"value": [
+            # LP mint — non-null mintAuthority, supply 0
+            {"owner": _SPL_TOKEN_PROGRAM, "data": {"parsed": {
+                "type": "mint",
+                "info": {
+                    "mintAuthority": "8sWRutJTP3id6rToRxsQQNW4rvKjnTyKbPzSj3mLNA4K",
+                    "supply": "0", "decimals": 9,
+                },
+            }}},
+            # token mint — renounced (null) authority
+            {"owner": _SPL_TOKEN_PROGRAM, "data": {"parsed": {
+                "type": "mint",
+                "info": {"mintAuthority": None, "supply": "1000000000000000", "decimals": 6},
+            }}},
+        ]},
+        "id": 1,
+    }).encode()
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        result = resolve_spl_mint(candidates, "test-api-key")
+
+    assert result == token, f"Expected the renounced token mint {token!r}, got {result!r}"
+
+
 # ---------------------------------------------------------------------------
 # Test 17: resolve_spl_mint — zero mints → None
 # ---------------------------------------------------------------------------
