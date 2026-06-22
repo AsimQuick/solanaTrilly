@@ -753,6 +753,43 @@ def test_resolve_spl_mint_returns_mint_on_success() -> None:
     )
 
 
+def test_resolve_spl_mint_uses_confirmed_commitment() -> None:
+    """Regression: getMultipleAccounts MUST query at commitment='confirmed'.
+
+    A migrate notification arrives at 'confirmed'; the RPC default 'finalized' lags
+    ~13s and reads the just-confirmed mint account as null, so the mint is missed
+    and the graduation wrongly skipped (found live 2026-06-22: ~94% of live grads
+    skipped at finalized vs resolved at confirmed).
+    """
+    from unittest.mock import MagicMock
+
+    from core.tape.helius_birth_tape_source import resolve_spl_mint
+
+    captured: dict = {}
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_resp.read.return_value = json.dumps({
+        "result": {"value": [
+            {"owner": _SPL_TOKEN_PROGRAM, "data": {"parsed": {"type": "mint"}}},
+        ]},
+        "id": 1,
+    }).encode()
+
+    def _capture(req, *a, **k):
+        captured["body"] = req.data
+        return mock_resp
+
+    with patch("urllib.request.urlopen", side_effect=_capture):
+        result = resolve_spl_mint([REAL_FRAME_MINT], "test-api-key")
+
+    assert result == REAL_FRAME_MINT
+    cfg = json.loads(captured["body"].decode())["params"][1]
+    assert cfg.get("commitment") == "confirmed", (
+        f"getMultipleAccounts must use commitment='confirmed', got {cfg!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test 17: resolve_spl_mint — zero mints → None
 # ---------------------------------------------------------------------------
