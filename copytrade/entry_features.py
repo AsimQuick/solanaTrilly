@@ -66,6 +66,12 @@ def birdeye_items_to_owner_tape(items: list[dict]) -> list[tuple]:
     for it in items:
         if not isinstance(it, dict):
             continue
+        # Lab parity (load_owner_tape line 57): swaps only.  Birdeye's per-mint
+        # seek_by_time returns swaps, but guard defensively against any non-swap
+        # frame (a transfer with a price would otherwise pollute the tallies).
+        txtype = it.get("txType")
+        if txtype is not None and txtype != "swap":
+            continue
         t = it.get("blockUnixTime")
         bp = it.get("basePrice")
         qp = it.get("quotePrice")
@@ -89,15 +95,25 @@ def birdeye_items_to_owner_tape(items: list[dict]) -> list[tuple]:
     return out
 
 
-def entry_features(otr: list[tuple], buy_ts: int, gts: Optional[int] = None) -> Optional[dict]:
+def entry_features(
+    otr: list[tuple], buy_ts: int, gts: Optional[int] = None, *, wallet_buy_usd: float = 0.0,
+) -> Optional[dict]:
     """Non-leaky features from the tape prefix strictly at/before ``buy_ts``.
 
     BYTE-FAITHFUL PORT of entry_select_build.py::entry_features (lines 70-125).
     ``otr`` is a sorted list of ``(t, price_usd, usd, side, owner, sol)`` tuples
     (from ``birdeye_items_to_owner_tape``).  ``gts`` is the graduation epoch — at
     the LIVE buy instant pass ``None`` (token not graduated → curve_ok=True for all,
-    exactly the lab's on-curve scoring path).  Returns the 20-feature dict (incl
-    ``curve_frac``), or None if the tape has no usable prefix.
+    exactly the lab's on-curve scoring path).
+
+    ``wallet_buy_usd`` — the WATCHED WALLET'S OWN buy size in USD (= sol_amount ×
+    sol_usd).  This is NOT tape-derived: the lab injects it from the firstbuys row
+    (entry_select_build.py:176), and it is FEATS[1] (a high-importance model input).
+    The live wiring MUST pass the trigger buy's USD value here — defaulting it to
+    0.0 silently puts every live score out-of-distribution (tester finding A1-1).
+
+    Returns the 20-feature dict (incl ``curve_frac`` and ``wallet_buy_usd``), or
+    None if the tape has no usable prefix.
     """
     if not otr:
         return None
@@ -143,6 +159,8 @@ def entry_features(otr: list[tuple], buy_ts: int, gts: Optional[int] = None) -> 
     hhi = sum((v / bu) ** 2 for v in shares) if bu > 0 else 0.0
     return {
         "top1_buyer_share": top1, "top5_buyer_share": top5, "buy_hhi": hhi,
+        # FEATS[1] — caller-supplied (the watched buy's USD), NOT tape-derived (A1-1).
+        "wallet_buy_usd": float(wallet_buy_usd),
         "tok_age_s": buy_ts - t0,
         "price_at_entry": price,
         "fdv_proxy": price * 1e9,
