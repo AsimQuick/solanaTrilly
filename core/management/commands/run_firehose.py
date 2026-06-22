@@ -1,10 +1,11 @@
 # ---
 # module: core.management.commands.run_firehose
 # sprint: epic-tape-sourcing-escalation
-# story: EPIC-tape-sourcing-escalation Tier 2 + Tier 3, hotfix-single-connection-fanout
-# status: refactored
+# story: EPIC-tape-sourcing-escalation Tier 2 + Tier 3,
+#        hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-21
+# last-updated: 2026-06-22
 # dependencies: django, asyncio, logging, signal, asgiref,
 #               core.tape.birdeye_graduation_source, core.tape.birdeye_swap_source,
 #               core.tape.birdeye_swap_mapper, core.tape.helius_birth_tape_source,
@@ -1009,8 +1010,20 @@ class FirehoseDaemon:
             from core.detection.consumer import DetectionConsumer
             from core.resolver import get_active_config
 
+            # Resolve HELIUS_API_KEY for the RPC mint resolver.
+            # resolve_spl_mint() calls getMultipleAccounts via the HTTPS RPC and
+            # requires a real key.  "fanout" was fine before (no WS opened) but
+            # now the resolver needs it for each graduation.
+            _helius_api_key = getattr(settings, "HELIUS_API_KEY", None) or ""
+            if not _helius_api_key:
+                logger.warning(
+                    "%s helius: HELIUS_API_KEY missing — SPL mint resolution will fail "
+                    "(all graduations skipped). Set HELIUS_API_KEY in settings.",
+                    LOG_PREFIX,
+                )
+
             migrate_source_obj = HeliusMigrateSource(
-                api_key="fanout",  # not used — no WS opened; events_from_queue drives it
+                api_key=_helius_api_key,  # needed by resolve_spl_mint RPC calls
                 event_source=event_source,
                 clock=self._clock,
             )
