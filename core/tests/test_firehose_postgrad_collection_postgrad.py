@@ -42,7 +42,7 @@ from typing import Any, AsyncGenerator
 
 import pytest
 
-from core.clock import Clock, VirtualClock
+from core.clock import Clock, VirtualClock, WallClock
 from core.datasource import DataSource
 from core.management.commands.run_firehose import (
     FirehoseDaemon,
@@ -137,6 +137,33 @@ class _ReplaySwapSource(DataSource):
             await asyncio.sleep(0)
         self.streamed_all.set()
         await self._hold.wait()
+
+
+class _SilentSwapSource(DataSource):
+    """A post-grad source that CONNECTS but never yields a frame, then holds open.
+
+    Emulates the live failure mode the TTL-bound fix targets: a graduated token
+    that goes silent immediately (pump tokens rug/die fast), so its WS delivers
+    no further swaps.  Pre-fix, the consumer's ``async for`` blocked here forever
+    and never freed its capacity slot.  Post-fix, the per-frame TTL bound must
+    tear the subscription down at the deadline regardless.
+    """
+
+    def __init__(self) -> None:
+        self.connected = False
+        self.disconnected = False
+        self._hold = asyncio.Event()  # never set -> truly silent stream
+
+    async def connect(self) -> None:
+        self.connected = True
+
+    async def disconnect(self) -> None:
+        self.disconnected = True
+
+    async def events(self) -> AsyncGenerator[dict[str, Any], None]:
+        await self._hold.wait()  # blocks forever: no frame is ever yielded
+        return
+        yield  # pragma: no cover - makes this an async generator
 
 
 class _AdvancingClock(Clock):
@@ -235,6 +262,39 @@ def test_postgrad_subscription_cancellation_disconnects_source():
         return source.disconnected
 
     assert asyncio.run(_drive()) is True
+
+
+def test_silent_postgrad_stream_terminates_at_ttl_and_frees_slot():
+    """A SILENT post-grad stream (zero frames) must still tear down at TTL.
+
+    Regression for the live capacity-starvation bug: 5 post-grad subscriptions
+    held their slots 75+ min past a 32-min TTL with 0 ``ttl-expired`` because the
+    consumer's ``async for`` blocked on a frame that never arrived, so the
+    deadline check never ran and the slot was never reaped → no new mint could
+    subscribe → zero paper trades.  With a real WallClock and a 0.2s TTL the
+    subscription MUST return within a few hundred ms (pre-fix it hangs and the
+    outer wait_for raises TimeoutError, failing the test).
+    """
+    mint = "MintSilent"
+    source = _SilentSwapSource()
+    daemon = FirehoseDaemon(
+        postgrad_factory=lambda m: source,
+        clock=WallClock(),  # real elapsed time so the TTL bound fires
+    )
+
+    async def _drive():
+        task = asyncio.create_task(
+            daemon._postgrad_subscription(mint, 1000, ttl_s=0.2)
+        )
+        # Pre-fix this NEVER returns; the timeout asserts the slot is freed.
+        await asyncio.wait_for(task, timeout=5.0)
+        return source.connected, source.disconnected
+
+    connected, disconnected = asyncio.run(_drive())
+
+    assert connected is True
+    assert disconnected is True, "silent stream must disconnect in finally (slot freed)"
+    assert source._hold.is_set() is False, "the hold event was never set — stream was silent"
 
 
 # ---------------------------------------------------------------------------

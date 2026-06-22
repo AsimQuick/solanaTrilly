@@ -1423,11 +1423,32 @@ class FirehoseDaemon:
         self._postgrad_sources[mint] = source
         count = 0
         deadline = self._clock.now() + timedelta(seconds=ttl_s)
+        # Manual iteration (NOT `async for ... in source.events()`): a post-grad
+        # token routinely goes SILENT seconds after graduation (pump tokens rug /
+        # die fast), so the source WS yields no further frames.  With a bare
+        # `async for`, the loop blocks on the next frame FOREVER and the deadline
+        # check below never runs — the task never completes, its capacity slot is
+        # never reaped (_postgrad_tick reaps only `task.done()`), and once every
+        # slot is held by a dead-silent stream NO new mint can subscribe → no
+        # post-grad tape → zero paper trades.  This is the live bug: 5 slots stuck
+        # 75+ min past a 32-min TTL with 0 `ttl-expired`.  Bounding each next-frame
+        # await by the REMAINING TTL enforces the wall-clock stop even on a stream
+        # that never emits again, so the slot is always freed at the deadline.
+        events = source.events()
         try:
             await source.connect()
-            async for event in source.events():
-                if self._stop.is_set() or self._clock.now() >= deadline:
-                    break
+            while not self._stop.is_set():
+                remaining = (deadline - self._clock.now()).total_seconds()
+                if remaining <= 0:
+                    break  # TTL reached — free the slot.
+                try:
+                    event = await asyncio.wait_for(
+                        events.__anext__(), timeout=remaining
+                    )
+                except asyncio.TimeoutError:
+                    break  # TTL reached with no further frames (silent stream).
+                except StopAsyncIteration:
+                    break  # upstream stream ended.
                 swap = _postgrad_event_to_swap(event, mint, graduated_block_time)
                 if swap is None:
                     continue
@@ -1440,13 +1461,15 @@ class FirehoseDaemon:
                 logger.info(
                     "%s postgrad: swap mint=%s (count=%d)", LOG_PREFIX, mint, count,
                 )
-                if self._clock.now() >= deadline:
-                    break
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - one mint's stream must not kill others
             logger.warning("%s postgrad: stream error mint=%s (%s).", LOG_PREFIX, mint, exc)
         finally:
+            try:
+                await events.aclose()
+            except Exception:  # noqa: BLE001 - best-effort generator cleanup
+                logger.debug("%s postgrad: events.aclose raised mint=%s (ignored).", LOG_PREFIX, mint)
             try:
                 await source.disconnect()
             except Exception:  # noqa: BLE001 - best-effort cleanup
