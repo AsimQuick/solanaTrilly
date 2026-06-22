@@ -1,13 +1,13 @@
 # ---
 # module: core.tests.test_helius_single_connection_fanout
 # sprint: hotfix-single-connection-fanout
-# story: hotfix-single-connection-fanout
-# status: implemented
+# story: hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-21
+# last-updated: 2026-06-22
 # dependencies: core.tape.helius_birth_tape_source, core.management.commands.run_firehose,
 #               core.detection.consumer, core.firehose.live_pregrad_buffer,
-#               core.clock, core.datasource, asyncio, json, pathlib, pytest
+#               core.clock, core.datasource, asyncio, json, pathlib, pytest, unittest.mock
 # ---
 """Single-connection fan-out + no-data watchdog tests.
 
@@ -61,6 +61,7 @@ import struct
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator
+from unittest.mock import patch
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -266,7 +267,11 @@ def test_fanout_trade_frames_reach_collection_buffer() -> None:
 
 
 def test_fanout_migrate_frame_yields_one_graduation() -> None:
-    """migrate frame → migrate_q → HeliusMigrateSource.events_from_queue → 1 graduation."""
+    """migrate frame → migrate_q → HeliusMigrateSource.events_from_queue → 1 graduation.
+
+    resolve_spl_mint is mocked so the test is fully offline.  The resolved mint
+    must equal REAL_FRAME_MINT (what the mock returns).
+    """
     from core.clock import VirtualClock
     from core.tape.helius_birth_tape_source import HeliusMigrateSource
 
@@ -287,8 +292,12 @@ def test_fanout_migrate_frame_yields_one_graduation() -> None:
     events_collected: list[dict] = []
 
     async def _run() -> None:
-        async for ev in src.events_from_queue(migrate_q):
-            events_collected.append(ev)
+        with patch(
+            "core.tape.helius_birth_tape_source.resolve_spl_mint",
+            return_value=REAL_FRAME_MINT,
+        ):
+            async for ev in src.events_from_queue(migrate_q):
+                events_collected.append(ev)
 
     asyncio.run(_run())
 
@@ -471,12 +480,15 @@ def test_queue_data_source_yields_from_queue() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 7: _decode_and_dedupe returns event on first call
+# Test 7: _decode_and_dedupe returns event on first call (async + mocked resolver)
 # ---------------------------------------------------------------------------
 
 
 def test_migrate_source_decode_and_dedupe_new_mint() -> None:
-    """HeliusMigrateSource._decode_and_dedupe returns an event on first call for a new mint."""
+    """HeliusMigrateSource._decode_and_dedupe returns an event on first call for a new mint.
+
+    _decode_and_dedupe is async; resolve_spl_mint is mocked so no network calls.
+    """
     from core.clock import VirtualClock
     from core.tape.helius_birth_tape_source import HeliusMigrateSource
 
@@ -484,7 +496,12 @@ def test_migrate_source_decode_and_dedupe_new_mint() -> None:
     src = HeliusMigrateSource(api_key="test", event_source="pump_dot_fun", clock=clock)
 
     migrate = _load_real_migrate_fixture()
-    event = src._decode_and_dedupe(migrate)
+
+    with patch(
+        "core.tape.helius_birth_tape_source.resolve_spl_mint",
+        return_value=REAL_FRAME_MINT,
+    ):
+        event = asyncio.run(src._decode_and_dedupe(migrate))
 
     assert event is not None, "_decode_and_dedupe should return an event for a new mint"
     assert event["type"] == "MEME_DATA"
@@ -505,17 +522,22 @@ def test_migrate_source_decode_and_dedupe_dedupes_second_call() -> None:
     src = HeliusMigrateSource(api_key="test", event_source="pump_dot_fun", clock=clock)
 
     migrate = _load_real_migrate_fixture()
-    first = src._decode_and_dedupe(migrate)
-    assert first is not None, "First call should return an event"
 
-    second = src._decode_and_dedupe(migrate)
+    with patch(
+        "core.tape.helius_birth_tape_source.resolve_spl_mint",
+        return_value=REAL_FRAME_MINT,
+    ):
+        first = asyncio.run(src._decode_and_dedupe(migrate))
+        assert first is not None, "First call should return an event"
+        second = asyncio.run(src._decode_and_dedupe(migrate))
+
     assert second is None, (
         "_decode_and_dedupe should return None on second call (same mint, per-session dedupe)"
     )
 
 
 # ---------------------------------------------------------------------------
-# Test 9: events_from_queue uses decode_and_dedupe
+# Test 9: events_from_queue uses decode_and_dedupe (mocked resolver)
 # ---------------------------------------------------------------------------
 
 
@@ -539,8 +561,12 @@ def test_migrate_source_events_from_queue_uses_decode_and_dedupe() -> None:
     collected: list[dict] = []
 
     async def _run() -> None:
-        async for ev in src.events_from_queue(q):
-            collected.append(ev)
+        with patch(
+            "core.tape.helius_birth_tape_source.resolve_spl_mint",
+            return_value=REAL_FRAME_MINT,
+        ):
+            async for ev in src.events_from_queue(q):
+                collected.append(ev)
 
     asyncio.run(_run())
 

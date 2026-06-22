@@ -1,11 +1,13 @@
 # ---
 # module: core.tape.helius_birth_tape_source
 # sprint: sprint-8
-# story: US-34 AC-34.1, EPIC-graduation-migrate-detection, hotfix-single-connection-fanout
-# status: refactored
+# story: US-34 AC-34.1, EPIC-graduation-migrate-detection,
+#        hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-21
-# dependencies: core.datasource, core.clock, base64, hashlib, struct, json, logging, typing, asyncio
+# last-updated: 2026-06-22
+# dependencies: core.datasource, core.clock, base64, hashlib, struct, json,
+#               logging, typing, asyncio, urllib.request, urllib.error
 # ---
 """HeliusBirthTapeSource — program-wide Helius transactionSubscribe DataSource.
 
@@ -27,18 +29,22 @@ Borsh TradeEvent layout (pump.fun / Anchor):
   disc(8) + mint(32) + sol_amount(u64) + token_amount(u64) + is_buy(1)
   + user(32) + timestamp(i64) + vsol(u64) + vtok(u64)  = 113 bytes minimum
 
-MIGRATE DETECTION (EPIC-graduation-migrate-detection)
-=====================================================
-decode_helius_migrate_event() is a pure mapper for the pump.fun 'migrate'
-instruction.  A migrate transaction contains the log line
-"Instruction: Migrate" and has NO Borsh event log to decode.  The SPL mint
-is extracted from the 6EF8 CPI in innerInstructions (the CPI with the most
-accounts — consistently 13 in real frames — has the mint at accounts[2]).
+MIGRATE DETECTION (hotfix-migrate-mint-rpc-resolution)
+=======================================================
+decode_helius_migrate_event() is a PURE detector for the pump.fun 'migrate'
+instruction.  It detects the migrate event and extracts ALL transaction
+accountKeys as candidate_accounts, but does NOT resolve the SPL mint — the
+old innerInstructions heuristic (accounts[2] of the largest 6EF8 CPI) was
+returning bonding-curve/fee PDAs ~98% of the time, not real SPL mints.
 
-Verified against 3 real transactionNotification frames captured 2026-06-21
-(slots 427956147, 427956654, and one additional).  Account indices confirmed:
-  innerInstructions: 6EF8 CPI with 13 accounts → accounts[2] = SPL mint
-  Pool: not reliably extractable from this tx structure; emitted as "".
+SPL mint resolution is performed by resolve_spl_mint(), a sync function that
+calls getMultipleAccounts via the Helius HTTPS RPC and identifies the unique
+SPL-Token-program-owned account whose type is "mint" (excluding WSOL and USDC).
+Validated on 6/6 failing frames including non-"pump"-suffix mints.
+
+HeliusMigrateSource._decode_and_dedupe() is async: it runs the pure decode
+then dispatches resolve_spl_mint() via asyncio.to_thread() so the blocking
+HTTP call never stalls the event loop.
 
 HeliusMigrateSource is a separate DataSource (not a fan-out of
 HeliusBirthTapeSource) using the IDENTICAL subscription parameters.  It
@@ -51,6 +57,8 @@ import hashlib
 import json
 import logging
 import struct
+import urllib.error
+import urllib.request
 from typing import Any, AsyncGenerator
 
 from core.clock import Clock, WallClock
@@ -78,6 +86,19 @@ HELIUS_WS_URL: str = "wss://mainnet.helius-rpc.com"
 #: Wrapped SOL mint — quote currency for all pump.fun swaps
 WSOL_MINT: str = "So11111111111111111111111111111111111111112"
 
+#: Helius mainnet HTTPS RPC endpoint for getMultipleAccounts calls.
+#: Distinct from HELIUS_WS_URL (which is the WebSocket endpoint).
+HELIUS_RPC_URL: str = "https://mainnet.helius-rpc.com"
+
+#: SPL Token program address — owns real SPL mints.
+_SPL_TOKEN_PROGRAM: str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+#: SPL Token-2022 program address — owns Token-2022 mints.
+_SPL_TOKEN_2022_PROGRAM: str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+
+#: USDC mint — excluded from SPL mint candidates (stablecoin, not the graduated token).
+_USDC_MINT: str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
 #: Anchor event discriminator = sha256("event:TradeEvent")[:8]
 #: Verified bit-exact against real pump.fun trades.
 TRADE_EVENT_DISCRIMINATOR: bytes = hashlib.sha256(b"event:TradeEvent").digest()[:8]
@@ -94,7 +115,7 @@ _PROGRAM_DATA_PREFIX: str = "Program data: "
 SOURCE_TAG: str = "helius_live"
 
 # ---------------------------------------------------------------------------
-# Migrate-detection constants (EPIC-graduation-migrate-detection)
+# Migrate-detection constants (EPIC-graduation-migrate-detection / hotfix-migrate-mint-rpc-resolution)
 # ---------------------------------------------------------------------------
 
 #: PumpSwap AMM program address (the sole pump.fun graduation destination).
@@ -105,15 +126,6 @@ _MIGRATE_LOG_MARKER: str = "Instruction: Migrate"
 
 #: dex_source stamp for migrate-detected graduation events.
 MIGRATE_DEX_SOURCE: str = "helius_migrate"
-
-#: Minimum number of accounts in the 6EF8 CPI that carries the migrate instruction.
-#: Verified on 3 real frames: the migrate CPI consistently has 13 accounts.
-#: The CPI with fewer accounts (5) is MigrateBondingCurveCreator, not migrate.
-_MIGRATE_CPI_MIN_ACCOUNTS: int = 8  # conservative lower bound; real frames have 13
-
-#: Account index for the SPL mint within the 6EF8 migrate CPI accounts list.
-#: Verified against pump.fun IDL (accounts[2]=mint) and 3 real frames.
-_MIGRATE_CPI_MINT_INDEX: int = 2
 
 # ---------------------------------------------------------------------------
 # Base58 encoding — standalone implementation (solders NOT in requirements.txt)
@@ -207,41 +219,162 @@ def _is_migrate_log(log_messages: list[str]) -> bool:
     return False
 
 
-def _extract_migrate_mint(inner_instructions: list[dict]) -> str | None:
-    """Extract the graduated SPL mint from innerInstructions of a migrate tx.
+def extract_migrate_account_candidates(data: dict) -> list[str]:
+    """Extract all account pubkeys from a migrate transactionNotification result.
 
-    Walks all inner instruction groups and finds the CPI to the pump.fun
-    6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P program that has the most
-    accounts (consistently 13 in real frames).  The mint is at accounts[2]
-    of that CPI, matching the pump.fun IDL 'migrate' instruction layout and
-    verified against 3 real frames captured 2026-06-21.
+    Returns the flat list of pubkey strings from
+    transaction.transaction.message.accountKeys (the full account list for the
+    migrate transaction).  These are the candidates passed to resolve_spl_mint()
+    via getMultipleAccounts to identify the real SPL mint.
+
+    Pure function — no I/O, no time, no randomness.  Handles both dict-form
+    accountKeys (jsonParsed encoding, each element is {"pubkey": "...", ...})
+    and string-form accountKeys (legacy encoding, each element is a pubkey string).
 
     Args:
-        inner_instructions: meta.innerInstructions from the transaction result.
+        data: Raw dict from the Helius WebSocket frame (already JSON-parsed).
+              Expected to be a transactionNotification result dict (i.e., already
+              navigated to params.result or the full frame — the function looks
+              for both shapes).
 
     Returns:
-        The SPL mint pubkey string, or None if extraction fails.
+        List of pubkey strings (may be empty if structure not found).
     """
-    best_cpi: dict | None = None
-    best_count: int = 0
+    # Accept both the full frame (with params.result) and a bare result dict.
+    result = _result_envelope(data)
+    if result is None:
+        # Try treating data itself as the result (bare result dict in tests).
+        result = data
 
-    for group in inner_instructions:
-        for ix in group.get("instructions") or []:
-            if ix.get("programId") != PUMP_FUN_PROGRAM:
-                continue
-            accounts: list[str] = ix.get("accounts") or []
-            if len(accounts) > best_count:
-                best_count = len(accounts)
-                best_cpi = ix
+    try:
+        account_keys = result["transaction"]["transaction"]["message"]["accountKeys"]
+    except (KeyError, TypeError):
+        return []
 
-    if best_cpi is None or best_count < _MIGRATE_CPI_MIN_ACCOUNTS:
+    if not isinstance(account_keys, list):
+        return []
+
+    pubkeys: list[str] = []
+    for entry in account_keys:
+        if isinstance(entry, str):
+            pubkeys.append(entry)
+        elif isinstance(entry, dict):
+            pk = entry.get("pubkey")
+            if isinstance(pk, str) and pk:
+                pubkeys.append(pk)
+    return pubkeys
+
+
+def resolve_spl_mint(
+    account_keys: list[str],
+    api_key: str,
+    *,
+    endpoint: str = HELIUS_RPC_URL,
+    timeout_s: float = 15.0,
+) -> "str | None":
+    """Resolve the real SPL mint from a migrate transaction's account keys.
+
+    Calls getMultipleAccounts (ONE RPC call) over the migrate transaction's
+    account key list and identifies the single account owned by the SPL Token
+    program (or Token-2022) whose parsed type is "mint", excluding WSOL and USDC.
+
+    Uses urllib.request (NOT requests — not in the prod image).  Mirrors the
+    pattern of core/pricing/sol_usd.py and core/backfill/birdeye_backfill.py.
+
+    Args:
+        account_keys: All pubkey strings from the migrate transaction's
+                      message.accountKeys (from extract_migrate_account_candidates).
+        api_key:      Helius API key (appended as ?api-key= query param).
+        endpoint:     Helius HTTPS RPC base URL (default: HELIUS_RPC_URL).
+        timeout_s:    HTTP timeout in seconds (default 15.0).
+
+    Returns:
+        The single SPL mint pubkey string if exactly one is found, or None:
+          - Zero matches: logs a warning and returns None.
+          - Multiple matches: logs a warning and returns None (ambiguous).
+          - RPC error / HTTP error / JSON decode error: returns None (safe).
+    """
+    if not account_keys or not api_key:
         return None
 
-    accounts = best_cpi.get("accounts") or []
-    if len(accounts) <= _MIGRATE_CPI_MINT_INDEX:
+    url = f"{endpoint}/?api-key={api_key}"
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getMultipleAccounts",
+        "params": [
+            account_keys,
+            {"encoding": "jsonParsed"},
+        ],
+    }).encode()
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            body = resp.read().decode()
+        data = json.loads(body)
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError, TypeError) as exc:
+        logger.warning("[FIREHOSE] resolve_spl_mint: RPC error (%s) — returning None.", exc)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[FIREHOSE] resolve_spl_mint: unexpected error (%s) — returning None.", exc)
         return None
 
-    return accounts[_MIGRATE_CPI_MINT_INDEX] or None
+    try:
+        values = data["result"]["value"]
+    except (KeyError, TypeError):
+        logger.warning("[FIREHOSE] resolve_spl_mint: unexpected RPC response shape — returning None.")
+        return None
+
+    if not isinstance(values, list):
+        return None
+
+    _SPL_PROGRAMS = {_SPL_TOKEN_PROGRAM, _SPL_TOKEN_2022_PROGRAM}
+    _EXCLUDED_MINTS = {WSOL_MINT, _USDC_MINT}
+
+    mints_found: list[str] = []
+    for i, entry in enumerate(values):
+        if not isinstance(entry, dict):
+            continue
+        owner = entry.get("owner")
+        if owner not in _SPL_PROGRAMS:
+            continue
+        # Must parse as a "mint" type
+        try:
+            parsed_type = entry["data"]["parsed"]["type"]
+        except (KeyError, TypeError):
+            continue
+        if parsed_type != "mint":
+            continue
+        # Map back to the pubkey (parallel with account_keys list)
+        if i >= len(account_keys):
+            continue
+        pubkey = account_keys[i]
+        if pubkey in _EXCLUDED_MINTS:
+            continue
+        mints_found.append(pubkey)
+
+    if len(mints_found) == 1:
+        return mints_found[0]
+    if len(mints_found) == 0:
+        logger.warning(
+            "[FIREHOSE] resolve_spl_mint: no SPL mint found among %d candidates — returning None.",
+            len(account_keys),
+        )
+        return None
+    # Multiple mints — should not happen; log and skip
+    logger.warning(
+        "[FIREHOSE] resolve_spl_mint: ambiguous — %d SPL mints found (%s) — returning None.",
+        len(mints_found),
+        mints_found[:3],
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -398,44 +531,38 @@ def decode_helius_migrate_event(
     event_source: str = "pump_dot_fun",
     fallback_epoch: int = 0,
 ) -> dict | None:
-    """Map a raw Helius transactionNotification dict to a MEME_DATA graduation event.
+    """Detect a pump.fun migrate and return a PARTIALLY-resolved MEME_DATA event.
 
-    Returns a graduation event dict in the EXACT shape DetectionConsumer expects
-    (same as map_new_pair_frame in birdeye_graduation_source.py), or None for
-    non-migrate frames.
+    This function is now a PURE DETECTOR: it detects the migrate transaction and
+    extracts all transaction accountKeys as candidate_accounts, but does NOT
+    resolve the SPL mint.  The old innerInstructions heuristic (accounts[2] of
+    the largest 6EF8 CPI) was returning bonding-curve/fee PDAs ~98% of the time.
+
+    SPL mint resolution is delegated to resolve_spl_mint(), called by
+    HeliusMigrateSource._decode_and_dedupe() via asyncio.to_thread().
 
     Detection criteria:
       - method == "transactionNotification"
       - meta.err is None (landed transactions only)
       - meta.logMessages contains "Instruction: Migrate"
 
-    Mint extraction:
-      Walk meta.innerInstructions for the 6EF8rrecthR5… CPI with the most
-      accounts (≥8); take accounts[2] as the SPL mint.  Verified against
-      pump.fun IDL (accounts[2]=mint) and 3 real frames (2026-06-21).
-
-    Pool address:
-      Not reliably extractable from this transaction structure (the pAMM
-      create_pool CPI accounts in innerInstructions don't expose the pool PDA
-      directly via the jsonParsed encoding; the pfee wrapper obscures the full
-      account list).  Emitted as "" so DetectionConsumer's coerce logic
-      (poolAddress=None → "") persists cleanly.
-
     Emitted event shape (matches DetectionConsumer._is_graduation_event checks):
       {
         "type":                 "MEME_DATA",
         "graduated":            True,
-        "address":              <SPL mint>,
-        "source":               <event_source>,   # default "pump_dot_fun"
-        "poolAddress":          "",               # not extractable; fallback
-        "blockTime":            <fallback_epoch>, # event-arrival Unix epoch (NOT slot)
-        "graduated_block_time": <fallback_epoch>, # same as blockTime; real epoch seconds
+        "address":              "",                  # UNRESOLVED — set by caller
+        "candidate_accounts":   [<pubkey>, ...],     # for resolve_spl_mint()
+        "source":               <event_source>,
+        "poolAddress":          "",
+        "blockTime":            <fallback_epoch>,
+        "graduated_block_time": <fallback_epoch>,
         "creation_time":        0,
         "progress_percent":     0.0,
         "decimals":             None,
         "raw":                  <transaction result dict>,
         "dex_source":           "helius_migrate",
-        "slot":                 <slot int>,       # real slot for audit/ordering
+        "slot":                 <slot int>,
+        "signature":            <sig str>,
       }
 
     Args:
@@ -445,11 +572,11 @@ def decode_helius_migrate_event(
         fallback_epoch: Unix epoch seconds to use for blockTime and graduated_block_time.
                         A migrate notification arrives within ~1 s of the block, so the
                         caller-supplied wall-clock arrival time is second-accurate.
-                        This mirrors map_new_pair_frame's fallback_epoch pattern exactly.
-                        The real slot is preserved in the "slot" field for audit use.
 
     Returns:
-        A MEME_DATA graduation event dict, or None if this frame is not a migrate.
+        A partially-resolved MEME_DATA event dict (address="", candidate_accounts=[...]),
+        or None if this frame is not a migrate.  The caller MUST resolve address via
+        resolve_spl_mint(event["candidate_accounts"], api_key) before using the event.
     """
     # Only process transactionNotification frames
     if not isinstance(data, dict) or data.get("method") != "transactionNotification":
@@ -467,49 +594,34 @@ def decode_helius_migrate_event(
     if not logs or not _is_migrate_log(logs):
         return None
 
-    # Extract mint from innerInstructions
-    try:
-        inner = result["transaction"]["meta"].get("innerInstructions") or []
-    except (KeyError, TypeError, AttributeError):
-        inner = []
-
-    mint = _extract_migrate_mint(inner)
-    if not mint:
-        logger.warning(
-            "[FIREHOSE] migrate: could not extract mint from innerInstructions "
-            "(sig=%s) — skipping",
-            _signature(result) or "unknown",
-        )
-        return None
-
-    # Real slot for audit/ordering (kept as-is — it is NOT used as a timestamp).
-    # blockTime and graduated_block_time are set to fallback_epoch (the caller's
-    # wall-clock arrival time), which is a real Unix epoch second — identical in
-    # intent to map_new_pair_frame's fallback_epoch pattern.  A migrate
-    # notification arrives within ~1 s of the block, so arrival-time gives a
-    # second-accurate anchor.  Using the slot as the epoch was a bug: slot
-    # ~427_972_941 interpreted as Unix seconds = 1983-07-25, which poisons
-    # graduated_block_time and breaks all rel = swap_time − grad_time scoring.
+    # Real slot for audit/ordering (NOT used as a timestamp — the 1983 bug set
+    # blockTime to the slot number, producing 1983-07-25 in the DB).
     slot_raw = result.get("slot")
     slot: int = int(slot_raw) if slot_raw is not None else 0
 
     sig = _signature(result) or ""
 
+    # Extract all accountKeys as candidates for RPC-based SPL mint resolution.
+    # The caller (HeliusMigrateSource._decode_and_dedupe) will call
+    # resolve_spl_mint(candidate_accounts, api_key) to find the real mint.
+    candidate_accounts = extract_migrate_account_candidates(data)
+
     event: dict[str, Any] = {
         "type": "MEME_DATA",
         "graduated": True,
-        "address": mint,
+        "address": "",               # UNRESOLVED — set by _decode_and_dedupe after RPC call
+        "candidate_accounts": candidate_accounts,  # for resolve_spl_mint()
         "source": event_source,
-        "poolAddress": "",          # not extractable from this tx — fallback
-        "blockTime": fallback_epoch,           # real Unix epoch (arrival time)
+        "poolAddress": "",           # not extractable from this tx — fallback
+        "blockTime": fallback_epoch,             # real Unix epoch (arrival time)
         "graduated_block_time": fallback_epoch,  # canonical field; real epoch seconds
         "creation_time": 0,
         "progress_percent": 0.0,
         "decimals": None,
-        "raw": result,              # verbatim transaction result for audit
+        "raw": result,               # verbatim transaction result for audit
         "dex_source": MIGRATE_DEX_SOURCE,
         "signature": sig,
-        "slot": slot,               # real slot for audit/ordering (NOT a timestamp)
+        "slot": slot,                # real slot for audit/ordering (NOT a timestamp)
     }
     return event
 
@@ -764,19 +876,23 @@ class HeliusMigrateSource(DataSource):
             await self._ws.close()
             self._ws = None
 
-    def _decode_and_dedupe(self, raw_frame: dict) -> "dict | None":
-        """Decode a raw transactionNotification frame and apply per-session mint dedupe.
+    async def _decode_and_dedupe(self, raw_frame: dict) -> "dict | None":
+        """Decode a raw transactionNotification frame, resolve the SPL mint, and dedupe.
+
+        ASYNC: runs the pure detect (decode_helius_migrate_event) inline, then
+        dispatches the blocking RPC call (resolve_spl_mint) via asyncio.to_thread
+        so it never stalls the event loop.
 
         Used by BOTH the WS-backed events() path AND the queue-backed fan-out path
-        (_QueueDataSource).  Runs decode_helius_migrate_event with the injected clock
-        for fallback_epoch, applies the per-session _seen_mints dedupe set, and logs.
+        (events_from_queue).
 
         Args:
             raw_frame: A JSON-parsed dict from the Helius WebSocket stream.
 
         Returns:
-            A MEME_DATA graduation event dict if this is a new-mint migrate frame,
-            or None if the frame is not a migrate, failed, or already seen this session.
+            A MEME_DATA graduation event dict (with address= resolved SPL mint)
+            if this is a new-mint migrate frame, or None if the frame is not a
+            migrate, mint resolution failed, or the mint was already seen this session.
         """
         fallback_epoch = int(self._clock.now().timestamp())
         event = decode_helius_migrate_event(
@@ -787,7 +903,25 @@ class HeliusMigrateSource(DataSource):
         if event is None:
             return None
 
-        mint: str = event["address"]
+        # Resolve the real SPL mint via getMultipleAccounts (ONE blocking RPC call).
+        # asyncio.to_thread dispatches to the thread pool so the event loop stays free.
+        candidate_accounts: list[str] = event.get("candidate_accounts") or []
+        mint: str | None = await asyncio.to_thread(
+            resolve_spl_mint,
+            candidate_accounts,
+            self._api_key,
+            endpoint=HELIUS_RPC_URL,
+        )
+
+        if mint is None:
+            logger.warning(
+                "[FIREHOSE] migrate: could not resolve SPL mint (sig=%s) — skipping",
+                event.get("signature", "unknown"),
+            )
+            return None
+
+        # Set the resolved mint on the event before deduplication.
+        event["address"] = mint
 
         # Deduplicate: emit at most once per mint per session
         if mint in self._seen_mints:
@@ -812,8 +946,8 @@ class HeliusMigrateSource(DataSource):
 
         For each inbound Helius transactionNotification:
           1. JSON-parse.
-          2. Decode+dedupe via _decode_and_dedupe — skip non-migrate/already-seen frames.
-          3. Yield the graduation event.
+          2. Detect+resolve+dedupe via _decode_and_dedupe (async — RPC call via to_thread).
+          3. Yield the graduation event (with address= resolved SPL mint).
 
         Yields nothing if the connection was never opened (self._ws is None).
         """
@@ -829,7 +963,7 @@ class HeliusMigrateSource(DataSource):
             if not isinstance(parsed, dict):
                 continue
 
-            event = self._decode_and_dedupe(parsed)
+            event = await self._decode_and_dedupe(parsed)
             if event is None:
                 continue
 
@@ -842,8 +976,8 @@ class HeliusMigrateSource(DataSource):
 
         Alternative to events() for the fan-out path where a single physical
         WebSocket (HeliusBirthTapeSource) fans raw frames into a queue.  Drains
-        the queue until the None sentinel (put by the pump teardown), decoding and
-        deduping each frame via _decode_and_dedupe.
+        the queue until the None sentinel (put by the pump teardown), decoding,
+        resolving, and deduping each frame via _decode_and_dedupe (async).
 
         This method is used by _helius_loop in run_firehose to serve graduation
         detection off the shared collection socket rather than a second WS.
@@ -862,7 +996,7 @@ class HeliusMigrateSource(DataSource):
             if not isinstance(item, dict):
                 continue
 
-            event = self._decode_and_dedupe(item)
+            event = await self._decode_and_dedupe(item)
             if event is None:
                 continue
 
