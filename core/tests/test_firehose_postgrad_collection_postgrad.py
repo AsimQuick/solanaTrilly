@@ -557,7 +557,8 @@ def test_score_tick_defers_paper_when_postgrad_tape_empty(caplog):
              mock.patch.object(
                  FirehoseDaemon, "_build_scoring_context_sync",
                  lambda self: (_StubScorer(), None,
-                               {"gate": "adaptive_topk", "score_at_elapsed_s": score_at},
+                               {"gate": "adaptive_topk", "score_at_elapsed_s": score_at,
+                                "outcome_window_s": 180},
                                trading_cfg, 0.1, 140.0, 0.8),
              ):
             with _propagate("core.management.commands.run_firehose", caplog), \

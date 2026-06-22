@@ -278,6 +278,103 @@ def _map_rest_item(
     }
 
 
+def _map_rest_item_window(
+    item: dict[str, Any],
+    mint: str,
+    t_from: int,
+    t_to: int,
+    graduated_block_time: int,
+    sol_usd_spot: Optional[float],
+) -> Optional[dict[str, Any]]:
+    """Map one Birdeye seek_by_time item to the POST-grad settler swap dict.
+
+    Same field extraction as ``_map_rest_item``, but for an arbitrary INCLUSIVE
+    ``[t_from, t_to]`` window (NOT the pre-grad grad-anchored window).  Two extra
+    fields the post-grad paper leg needs:
+
+      - ``rel`` = ``block_time - graduated_block_time`` — the post-grad tape /
+        ``_postgrad_enterable`` / the settler anchor on this (the pre-grad mapper
+        omits it because the pre-grad feature path recomputes rel itself).
+      - ``vol`` = ``vol_sol`` — the alias ``_swaps_to_trade_tuples`` falls back to.
+
+    Used by ``run_for_window`` to recover the post-grad ENTRY quote window
+    historically when the live WS subscription started too late to capture it.
+
+    Returns None when the item cannot be mapped cleanly (missing/zero/invalid
+    required fields; block_time outside ``[t_from, t_to]``).
+    """
+    if not isinstance(item, dict):
+        return None
+
+    signature = item.get("txHash")
+    block_time_raw = item.get("blockUnixTime")
+    side = item.get("side")
+    owner = item.get("owner")
+
+    if not signature or block_time_raw is None or side not in ("buy", "sell"):
+        return None
+
+    try:
+        block_time = int(block_time_raw)
+    except (TypeError, ValueError):
+        return None
+
+    # Inclusive window filter (belt-and-suspenders; the scan also bounds pages).
+    if block_time < t_from or block_time > t_to:
+        return None
+
+    base = item.get("base") or {}
+    base_address = base.get("address")
+    if base_address and base_address != mint:
+        return None
+
+    try:
+        price = float(base.get("price") or 0.0)
+    except (TypeError, ValueError):
+        price = 0.0
+    if price <= 0:
+        return None
+
+    quote = item.get("quote") or {}
+    try:
+        vol_sol = abs(float(quote.get("uiChangeAmount") or quote.get("uiAmount") or 0.0))
+    except (TypeError, ValueError):
+        vol_sol = 0.0
+    if vol_sol <= 0:
+        return None
+
+    if sol_usd_spot is not None and sol_usd_spot > 0:
+        sol_usd = sol_usd_spot
+    else:
+        try:
+            sol_usd = float(quote.get("price") or 0.0)
+        except (TypeError, ValueError):
+            sol_usd = 0.0
+    vol_usd = vol_sol * sol_usd if sol_usd > 0 else 0.0
+
+    slot = int(item.get("blockNumber") or 0)
+    _WSOL = "So11111111111111111111111111111111111111112"
+
+    return {
+        "mint": str(mint),
+        "block_time": block_time,
+        "slot": slot,
+        "signature": str(signature),
+        "side": str(side),
+        "price": price,
+        "rel": float(block_time - graduated_block_time),
+        "vol": vol_sol,
+        "vol_sol": abs(vol_sol),
+        "vol_usd": vol_usd,
+        "sol_usd": sol_usd,
+        "owner": owner,
+        "base_reserve": None,
+        "quote_reserve": None,
+        "quote_mint": _WSOL,
+        "failed": False,
+    }
+
+
 class BirdeyeBackfiller:
     """Synchronous worker that fetches a mint's pre-grad swaps from Birdeye REST.
 
@@ -446,5 +543,144 @@ class BirdeyeBackfiller:
 
         # Sort ascending by canonical (block_time, slot, signature) — parity
         # requirement to match the live path's canonical ordering.
+        results.sort(key=lambda s: (s["block_time"], s["slot"], s["signature"]))
+        return results
+
+    def run_for_window(
+        self,
+        mint: str,
+        t_from: int,
+        t_to: int,
+        graduated_block_time: int,
+        *,
+        sol_usd_spot: Optional[float] = None,
+    ) -> list[dict]:
+        """Fetch *mint*'s swaps in an arbitrary INCLUSIVE ``[t_from, t_to]`` window.
+
+        Unlike ``run_for_mint`` (pre-grad only, ``[grad-3600, grad)``), this serves
+        the POST-grad entry tape: the live BirdeyeSwapSource WS subscription often
+        starts AFTER the ``grad + score_at_elapsed_s`` entry quote window has closed
+        (measured live: median ~75 s subscribe latency vs a 120 s entry; gate-passers
+        skew to the slow tail), so ``_postgrad_enterable`` is structurally False and
+        the paper leg defers forever.  This recovers the entry window HISTORICALLY so
+        the paper entry is correct regardless of subscribe timing.
+
+        The returned swaps carry ``rel`` (anchored to ``graduated_block_time``) so
+        they drop into ``self._postgrad_tape`` (which keeps rel>=0 post-grad swaps)
+        and feed the settler unchanged.
+
+        Args:
+            mint:                  The Solana SPL mint address.
+            t_from:                Window start epoch (inclusive) — typically
+                                   ``entry_ts - 30`` (the quote-window floor).
+            t_to:                  Window end epoch (inclusive) — typically
+                                   ``entry_ts + outcome.window_s`` (the exit horizon).
+            graduated_block_time:  Graduation epoch — anchors the ``rel`` field.
+            sol_usd_spot:          Cached SOL/USD spot from the scorer's shared
+                                   oracle (threaded through for price consistency;
+                                   no fresh fetch — avoids the stale-spot bug).
+
+        Returns:
+            List of post-grad swap dicts (same shape the live WS post-grad path and
+            the settler consume), sorted ascending by ``(block_time, slot,
+            signature)``.  Empty list on missing key / no rows / HTTP exhaustion.
+        """
+        api_key = self._api_key_override
+        if api_key is None:
+            api_key = _get_api_key()
+
+        if not api_key:
+            logger.warning(
+                "[BIRDEYE_BACKFILL] mint=%s BIRDEYE_API_KEY not set — "
+                "post-grad backfill skipped (graceful no-op).",
+                mint,
+            )
+            return []
+
+        t_from = int(t_from)
+        t_to = int(t_to)
+
+        results: list[dict] = []
+        offset = 0
+        after_time = t_from
+        iters = 0
+
+        logger.info(
+            "[BIRDEYE_BACKFILL] mint=%s post-grad window=[%d, %d] — starting REST fetch.",
+            mint,
+            t_from,
+            t_to,
+        )
+
+        while iters < _MAX_ITERS:
+            iters += 1
+            params: dict[str, Any] = {
+                "address": mint,
+                "after_time": after_time,
+                "offset": offset,
+                "limit": 100,
+                "tx_type": "swap",
+            }
+            body = _be_get(params, api_key)
+
+            if "_err" in body:
+                logger.warning(
+                    "[BIRDEYE_BACKFILL] mint=%s HTTP error %s at iter=%d — "
+                    "returning %d post-grad items collected so far.",
+                    mint,
+                    body["_err"],
+                    iters,
+                    len(results),
+                )
+                break
+
+            data = body.get("data") or {}
+            items: list[dict] = data.get("items") or []
+
+            if not items:
+                break
+
+            last_bt: int = t_from
+            for it in items:
+                bt_raw = it.get("blockUnixTime")
+                if bt_raw is None:
+                    continue
+                try:
+                    bt = int(bt_raw)
+                except (TypeError, ValueError):
+                    continue
+
+                last_bt = bt
+
+                # Stop consuming once we pass the window end (inclusive upper bound).
+                if bt > t_to:
+                    break
+
+                mapped = _map_rest_item_window(
+                    it, mint, t_from, t_to, graduated_block_time, sol_usd_spot
+                )
+                if mapped is not None:
+                    results.append(mapped)
+
+            # Pagination termination: stop when the last item is past t_to or
+            # the page was short (fewer than 100 items = last page).
+            if last_bt > t_to or len(items) < 100:
+                break
+
+            offset += len(items)
+            if offset >= _OFFSET_RESET_THRESHOLD:
+                after_time = last_bt
+                offset = 0
+
+        logger.info(
+            "[BIRDEYE_BACKFILL] mint=%s post-grad iters=%d fetched=%d items.",
+            mint,
+            iters,
+            len(results),
+        )
+
+        if not results:
+            return []
+
         results.sort(key=lambda s: (s["block_time"], s["slot"], s["signature"]))
         return results

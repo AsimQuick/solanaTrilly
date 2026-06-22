@@ -117,6 +117,18 @@ DEFAULT_POSTGRAD_TICK_S = 5.0
 DEFAULT_TAPE_FLUSH_INTERVAL_S = 10.0
 DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
 
+#: Post-grad ENTRY-tape Birdeye REST recovery (fallback when the live WS sub
+#: started after the entry quote window closed).  The quote-window floor offset
+#: mirrors _postgrad_enterable's gap_s (entry-30).  Birdeye may not have indexed
+#: the just-confirmed post-grad swaps at ~grad+120s, so retry a bounded number of
+#: times before giving up (the token stays DETECTED for a later re-dispatch).
+_POSTGRAD_REST_QUOTE_GAP_S = 30
+_POSTGRAD_REST_MAX_ATTEMPTS = 3
+_POSTGRAD_REST_RETRY_S = 45.0
+#: Per-tick dispatch cap on post-grad REST fetches (gate-passers are rare, so this
+#: is rarely binding; bounds the worst case the same way _MAX_BACKFILL_DISPATCH does).
+_MAX_POSTGRAD_REST_DISPATCH_PER_TICK = 2
+
 
 # ---------------------------------------------------------------------------
 # US-76 P1.1 -- configuration guard (blocks the pool-of-1 silent-pass path)
@@ -565,6 +577,14 @@ class FirehoseDaemon:
         self._postgrad_tasks: dict[str, asyncio.Task] = {}
         self._postgrad_seen: set[str] = set()
         self._postgrad_sources: dict[str, object] = {}
+        # Post-grad ENTRY-tape Birdeye REST recovery: dedup set (mirrors
+        # _backfill_pending) so one fetch runs per mint at a time, and a lazily
+        # created concurrency cap (the live WS sub frequently starts after the
+        # entry quote window closed, so we recover that window historically).
+        # Ephemeral per-process; restart-safety comes from Token.status (a token
+        # is only marked SCORED once its paper leg actually fires).
+        self._postgrad_rest_pending: set[str] = set()
+        self._postgrad_rest_sem: asyncio.Semaphore | None = None
         # v4 REP+recurrence: WalletBankLookup singleton (~44s build, ~27 MB).
         # Loaded ONCE here, NEVER per-tick.  Injectable via wallet_bank= for tests.
         # When the active model is v3.2 (20 features), this is unused.
@@ -1568,6 +1588,8 @@ class FirehoseDaemon:
         # the backlog drains gradually; remaining tokens are re-tried next tick.
         _MAX_BACKFILL_DISPATCH_PER_TICK = 4
         backfills_dispatched = 0
+        # Per-tick cap on post-grad ENTRY-tape REST recovery dispatches (below).
+        postgrad_rest_dispatched = 0
 
         for mint, graduated_block_time in due:
             swaps = self._tape.get(mint)
@@ -1661,8 +1683,31 @@ class FirehoseDaemon:
                     "(have %d post-grad swaps).",
                     LOG_PREFIX, mint, len(postgrad_swaps),
                 )
-                # Do NOT mark scored: retry the paper leg on a later tick while the
-                # post-grad subscription is still filling its TTL window.
+                # Post-grad ENTRY-tape recovery: the live WS post-grad sub often
+                # starts AFTER the [entry-30, entry] quote window has closed (it
+                # can only capture from subscribe-time forward), so has_quote is
+                # structurally False and the paper leg defers forever despite
+                # hundreds of later swaps.  Fire-and-forget a Birdeye REST fetch of
+                # the entry+exit window so the entry is recovered HISTORICALLY.
+                # Gated to gate-PASSERS only (we are past `if not passed`), deduped,
+                # per-tick capped, and skipped once the outcome window has elapsed.
+                outcome_window_s = float(scoring["outcome_window_s"])
+                if (
+                    mint not in self._postgrad_rest_pending
+                    and postgrad_rest_dispatched < _MAX_POSTGRAD_REST_DISPATCH_PER_TICK
+                    and self._clock.now().timestamp() < entry_ts_epoch + outcome_window_s
+                ):
+                    self._postgrad_rest_pending.add(mint)
+                    postgrad_rest_dispatched += 1
+                    asyncio.create_task(
+                        self._postgrad_rest_fetch_task(
+                            mint, graduated_block_time, entry_ts_epoch,
+                            outcome_window_s, sol_usd,
+                        ),
+                        name=f"firehose-postgrad-rest-{mint[:8]}",
+                    )
+                # Do NOT mark scored: retry the paper leg on a later tick once the
+                # post-grad subscription OR the REST recovery fills the entry window.
                 continue
 
             self._scored_mints.add(mint)
@@ -1830,6 +1875,91 @@ class FirehoseDaemon:
                 LOG_PREFIX, mint,
             )
 
+    async def _postgrad_rest_fetch_task(
+        self,
+        mint: str,
+        graduated_block_time: int,
+        entry_ts_epoch: float,
+        outcome_window_s: float,
+        sol_usd: float,
+    ) -> None:
+        """Recover the POST-grad ENTRY tape for *mint* via Birdeye REST.
+
+        Fire-and-forget fallback dispatched from _score_tick when a gate-PASSING
+        token is not yet ``_postgrad_enterable``.  The live BirdeyeSwapSource WS
+        subscription frequently starts AFTER the [entry-30, entry] quote window has
+        closed (it can only capture from subscribe-time forward; measured median
+        ~75 s subscribe latency vs a 120 s entry, with gate-passers in the slow
+        tail), so the entry quote window can ONLY be recovered historically.
+
+        Fetches ``[entry-30, entry+outcome_window_s]`` via
+        ``BirdeyeBackfiller.run_for_window`` and loads the swaps into
+        ``self._postgrad_tape`` (whose on_add sink banks them to the lake); the
+        paper leg then fires on a later scoring tick.
+
+        Birdeye INDEXING LAG: at ~grad+120 s the just-confirmed post-grad swaps may
+        not be indexed yet → the first fetch can return empty.  Retry a bounded
+        number of times (releasing the concurrency slot between attempts).  On a
+        persistent miss we DO NOT mark the token SCORED/SKIPPED — it stays DETECTED
+        so a later tick re-dispatches while the outcome window is still open
+        (restart-safety + lets the live WS or a later index catch up).
+
+        Concurrency- and credit-capped by ``self._postgrad_rest_sem`` (lazily
+        created; the blocking urllib fetch runs in the shared thread pool so it
+        never stalls the event loop — the #377 loop-starvation lesson).
+        """
+        if self._postgrad_rest_sem is None:
+            self._postgrad_rest_sem = asyncio.Semaphore(3)
+
+        from core.backfill.birdeye_backfill import BirdeyeBackfiller  # noqa: PLC0415
+
+        t_from = int(entry_ts_epoch - _POSTGRAD_REST_QUOTE_GAP_S)
+        t_to = int(entry_ts_epoch + outcome_window_s)
+        backfiller = BirdeyeBackfiller()
+        try:
+            swaps: list[dict] = []
+            for attempt in range(_POSTGRAD_REST_MAX_ATTEMPTS):
+                async with self._postgrad_rest_sem:
+                    swaps = await sync_to_async(
+                        backfiller.run_for_window, thread_sensitive=False
+                    )(mint, t_from, t_to, graduated_block_time, sol_usd_spot=sol_usd)
+                if swaps:
+                    break
+                # Stop retrying once the entry+exit window has fully elapsed.
+                if self._clock.now().timestamp() >= t_to:
+                    break
+                if attempt + 1 < _POSTGRAD_REST_MAX_ATTEMPTS:
+                    await asyncio.sleep(_POSTGRAD_REST_RETRY_S)
+
+            if swaps:
+                added = 0
+                for s in swaps:
+                    # Post-grad only (the window is already post-grad; defensive).
+                    if float(s.get("rel", 0.0)) < 0:
+                        continue
+                    self._postgrad_tape.add(mint, s)
+                    added += 1
+                logger.info(
+                    "%s postgrad-rest: mint=%s loaded %d post-grad swaps from "
+                    "Birdeye REST → paper leg retries next tick.",
+                    LOG_PREFIX, mint, added,
+                )
+            else:
+                logger.info(
+                    "%s postgrad-rest: mint=%s no post-grad swaps from Birdeye REST "
+                    "(indexing lag / illiquid) — token stays DETECTED for retry.",
+                    LOG_PREFIX, mint,
+                )
+        except Exception as exc:  # noqa: BLE001 - never let one fetch kill the loop
+            logger.warning(
+                "%s postgrad-rest: mint=%s REST fetch failed (%s) — "
+                "will retry on a later tick.",
+                LOG_PREFIX, mint, exc,
+            )
+        finally:
+            # Always clear the dedup guard so a later tick can re-dispatch.
+            self._postgrad_rest_pending.discard(mint)
+
     @staticmethod
     def _postgrad_enterable(
         postgrad_swaps: list[dict], entry_ts_epoch: float, scoring: dict
@@ -1941,6 +2071,9 @@ class FirehoseDaemon:
         scoring = {
             "gate": config.scoring.gate,
             "score_at_elapsed_s": config.scoring.score_at_elapsed_s,
+            # Exit horizon — the upper bound of the post-grad entry+exit window the
+            # paper leg (and the post-grad REST entry-tape recovery) operates over.
+            "outcome_window_s": config.outcome.window_s,
         }
         # Trading knobs come from the shared TradingSettings singleton (P8).
         trading_cfg = TradingSettings.get().to_schema()
