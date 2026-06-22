@@ -117,17 +117,15 @@ DEFAULT_POSTGRAD_TICK_S = 5.0
 DEFAULT_TAPE_FLUSH_INTERVAL_S = 10.0
 DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
 
-#: Post-grad ENTRY-tape Birdeye REST recovery (fallback when the live WS sub
-#: started after the entry quote window closed).  The quote-window floor offset
-#: mirrors _postgrad_enterable's gap_s (entry-30).  Birdeye may not have indexed
-#: the just-confirmed post-grad swaps at ~grad+120s, so retry a bounded number of
-#: times before giving up (the token stays DETECTED for a later re-dispatch).
+#: Post-grad paper-settle window-close recovery.  A gate-passing token's paper leg
+#: is DEFERRED until the full outcome window has elapsed (wall-clock), then settled
+#: over a SINGLE fresh Birdeye REST fetch of the whole [entry-gap,
+#: entry+outcome_window_s] window (fully indexed by then).  Settling at score time
+#: (~grad+120s) walks a TRUNCATED tape — Birdeye has only indexed swaps up to ~now,
+#: so the settler's AUTO_SELL_TIMER fallback books at the last available swap (a few
+#: seconds past entry) and silently misses the real later TAKE_PROFIT / RUG_PULL.
+#: The quote-window floor offset (entry-30) matches the settler's pre-entry quote.
 _POSTGRAD_REST_QUOTE_GAP_S = 30
-_POSTGRAD_REST_MAX_ATTEMPTS = 3
-_POSTGRAD_REST_RETRY_S = 45.0
-#: Per-tick dispatch cap on post-grad REST fetches (gate-passers are rare, so this
-#: is rarely binding; bounds the worst case the same way _MAX_BACKFILL_DISPATCH does).
-_MAX_POSTGRAD_REST_DISPATCH_PER_TICK = 2
 
 
 # ---------------------------------------------------------------------------
@@ -577,13 +575,16 @@ class FirehoseDaemon:
         self._postgrad_tasks: dict[str, asyncio.Task] = {}
         self._postgrad_seen: set[str] = set()
         self._postgrad_sources: dict[str, object] = {}
-        # Post-grad ENTRY-tape Birdeye REST recovery: dedup set (mirrors
-        # _backfill_pending) so one fetch runs per mint at a time, and a lazily
-        # created concurrency cap (the live WS sub frequently starts after the
-        # entry quote window closed, so we recover that window historically).
-        # Ephemeral per-process; restart-safety comes from Token.status (a token
-        # is only marked SCORED once its paper leg actually fires).
-        self._postgrad_rest_pending: set[str] = set()
+        # Deferred paper settle: gate-passers whose outcome window has not yet
+        # closed wait here (mint -> (entry_ts_epoch, score, grad_bt)).  Once
+        # wall-clock passes entry+outcome_window_s the paper leg settles over a
+        # fresh full-window Birdeye REST fetch (see _settle_due_pending).
+        # _settle_inflight dedups the in-flight fetch+settle so two ticks never
+        # double-book.  Both are ephemeral per-process; restart-safety comes from
+        # Token.status (a token stays DETECTED until its paper leg actually fires,
+        # so a restart re-queues it).  The Semaphore caps concurrent REST fetches.
+        self._pending_settle: dict[str, tuple[float, float, int]] = {}
+        self._settle_inflight: set[str] = set()
         self._postgrad_rest_sem: asyncio.Semaphore | None = None
         # v4 REP+recurrence: WalletBankLookup singleton (~44s build, ~27 MB).
         # Loaded ONCE here, NEVER per-tick.  Injectable via wallet_bank= for tests.
@@ -1588,10 +1589,15 @@ class FirehoseDaemon:
         # the backlog drains gradually; remaining tokens are re-tried next tick.
         _MAX_BACKFILL_DISPATCH_PER_TICK = 4
         backfills_dispatched = 0
-        # Per-tick cap on post-grad ENTRY-tape REST recovery dispatches (below).
-        postgrad_rest_dispatched = 0
 
         for mint, graduated_block_time in due:
+            # Gate already passed this session → the paper leg is time-deferred to
+            # the outcome-window close (handled in _settle_due_pending after this
+            # loop).  Skip the expensive re-score: the token stays DETECTED for
+            # restart-safety but must NOT re-assemble features + re-invoke the
+            # scorer on every tick for the full ~30-min window (#377 starvation).
+            if mint in self._pending_settle:
+                continue
             swaps = self._tape.get(mint)
             # US-76 BREAK-1: serve in USD via ONE SOL/USD spot (the shared cached
             # spot resolved in the scoring context).  vol = vol_sol × spot inside
@@ -1674,51 +1680,35 @@ class FirehoseDaemon:
                 )(mint, "SCORED")
                 continue
 
-            # --- Task d: PAPER TRADE over the POST-grad tape (gated) ---
-            postgrad_swaps = self._postgrad_tape.get(mint)
+            # --- Task d: PAPER TRADE — DEFERRED to outcome-window close ---
+            # The paper leg must walk the FULL post-grad outcome window
+            # [entry, entry+timer].  Settling at score time (~grad+120s) walks a
+            # TRUNCATED tape: Birdeye has only indexed swaps up to ~now, so the
+            # settler's AUTO_SELL_TIMER fallback books at the last available swap (a
+            # few seconds past entry) and silently misses the real later TAKE_PROFIT
+            # / RUG_PULL (proven live: 8/9 trades mis-settled).  Register the
+            # gate-passer and DEFER — _settle_due_pending (after this loop) settles
+            # once wall-clock passes entry+outcome_window_s, over a single fresh
+            # full-window Birdeye REST fetch.  The token stays DETECTED (NOT marked
+            # SCORED) until the settle actually fires, so a restart just re-queues
+            # it — restart-safe by construction.
             entry_ts_epoch = float(graduated_block_time + scoring["score_at_elapsed_s"])
-            if not self._postgrad_enterable(postgrad_swaps, entry_ts_epoch, scoring):
-                logger.info(
-                    "%s paper: mint=%s awaiting post-grad swaps — deferring "
-                    "(have %d post-grad swaps).",
-                    LOG_PREFIX, mint, len(postgrad_swaps),
+            if mint not in self._pending_settle:
+                self._pending_settle[mint] = (
+                    entry_ts_epoch, blend, int(graduated_block_time),
                 )
-                # Post-grad ENTRY-tape recovery: the live WS post-grad sub often
-                # starts AFTER the [entry-30, entry] quote window has closed (it
-                # can only capture from subscribe-time forward), so has_quote is
-                # structurally False and the paper leg defers forever despite
-                # hundreds of later swaps.  Fire-and-forget a Birdeye REST fetch of
-                # the entry+exit window so the entry is recovered HISTORICALLY.
-                # Gated to gate-PASSERS only (we are past `if not passed`), deduped,
-                # per-tick capped, and skipped once the outcome window has elapsed.
-                outcome_window_s = float(scoring["outcome_window_s"])
-                if (
-                    mint not in self._postgrad_rest_pending
-                    and postgrad_rest_dispatched < _MAX_POSTGRAD_REST_DISPATCH_PER_TICK
-                    and self._clock.now().timestamp() < entry_ts_epoch + outcome_window_s
-                ):
-                    self._postgrad_rest_pending.add(mint)
-                    postgrad_rest_dispatched += 1
-                    asyncio.create_task(
-                        self._postgrad_rest_fetch_task(
-                            mint, graduated_block_time, entry_ts_epoch,
-                            outcome_window_s, sol_usd,
-                        ),
-                        name=f"firehose-postgrad-rest-{mint[:8]}",
-                    )
-                # Do NOT mark scored: retry the paper leg on a later tick once the
-                # post-grad subscription OR the REST recovery fills the entry window.
-                continue
+                logger.info(
+                    "%s paper: mint=%s gate=PASS — deferring settle to outcome-window "
+                    "close (entry+%.0fs).",
+                    LOG_PREFIX, mint, float(scoring["outcome_window_s"]),
+                )
 
-            self._scored_mints.add(mint)
-            # Tier-2: write status=SCORED so a restart skips this token.
-            await sync_to_async(
-                self._set_token_status_sync, thread_sensitive=True
-            )(mint, "SCORED")
-            trades = _swaps_to_trade_tuples(postgrad_swaps)
-            await sync_to_async(self._paper_trade_sync, thread_sensitive=True)(
-                mint, blend, trades, entry_ts_epoch, trading_cfg, size_sol, sol_usd, trading_enabled,
-            )
+        # Settle every gate-passer whose outcome window has now fully elapsed: one
+        # fresh full-window Birdeye REST fetch (indexed by now) → honest-fill over
+        # the COMPLETE post-grad tape.  Bounded fire-and-forget per mint.
+        self._settle_due_pending(
+            trading_cfg, size_sol, sol_usd, scoring, trading_enabled,
+        )
 
     @staticmethod
     def _set_token_status_sync(mint: str, status: str) -> None:
@@ -1875,38 +1865,57 @@ class FirehoseDaemon:
                 LOG_PREFIX, mint,
             )
 
-    async def _postgrad_rest_fetch_task(
-        self,
-        mint: str,
-        graduated_block_time: int,
-        entry_ts_epoch: float,
-        outcome_window_s: float,
-        sol_usd: float,
+    def _settle_due_pending(
+        self, trading_cfg, size_sol, sol_usd, scoring, trading_enabled,
     ) -> None:
-        """Recover the POST-grad ENTRY tape for *mint* via Birdeye REST.
+        """Dispatch the deferred paper settle for gate-passers whose window closed.
 
-        Fire-and-forget fallback dispatched from _score_tick when a gate-PASSING
-        token is not yet ``_postgrad_enterable``.  The live BirdeyeSwapSource WS
-        subscription frequently starts AFTER the [entry-30, entry] quote window has
-        closed (it can only capture from subscribe-time forward; measured median
-        ~75 s subscribe latency vs a 120 s entry, with gate-passers in the slow
-        tail), so the entry quote window can ONLY be recovered historically.
+        A gate-passer registered in ``self._pending_settle`` is settled only once
+        wall-clock has passed ``entry + outcome_window_s`` — by then Birdeye has
+        indexed the WHOLE post-grad window, so a single fresh ``run_for_window``
+        fetch yields the complete tape and the settler walks the real
+        ``[entry, entry+timer]`` outcome (not the truncated few-seconds tape a
+        score-time settle would see).  Each due mint is settled by a bounded
+        fire-and-forget task; ``self._settle_inflight`` dedups so two ticks never
+        double-book the same mint.  Gating is on WALL-CLOCK (not the tape's own
+        last-swap time) so a token that went dead post-grad still settles on
+        schedule rather than deferring forever.
+        """
+        window_s = float(scoring["outcome_window_s"])
+        now_epoch = self._clock.now().timestamp()
+        for mint, (entry_ts_epoch, score, grad_bt) in list(self._pending_settle.items()):
+            if mint in self._settle_inflight:
+                continue
+            if now_epoch < entry_ts_epoch + window_s:
+                continue
+            self._settle_inflight.add(mint)
+            asyncio.create_task(
+                self._settle_pending_task(
+                    mint, entry_ts_epoch, score, grad_bt,
+                    window_s, trading_cfg, size_sol, sol_usd, trading_enabled,
+                ),
+                name=f"firehose-settle-{mint[:8]}",
+            )
 
-        Fetches ``[entry-30, entry+outcome_window_s]`` via
-        ``BirdeyeBackfiller.run_for_window`` and loads the swaps into
-        ``self._postgrad_tape`` (whose on_add sink banks them to the lake); the
-        paper leg then fires on a later scoring tick.
+    async def _settle_pending_task(
+        self, mint, entry_ts_epoch, score, grad_bt,
+        window_s, trading_cfg, size_sol, sol_usd, trading_enabled,
+    ) -> None:
+        """Fetch the full post-grad window once and settle the PAPER leg.
 
-        Birdeye INDEXING LAG: at ~grad+120 s the just-confirmed post-grad swaps may
-        not be indexed yet → the first fetch can return empty.  Retry a bounded
-        number of times (releasing the concurrency slot between attempts).  On a
-        persistent miss we DO NOT mark the token SCORED/SKIPPED — it stays DETECTED
-        so a later tick re-dispatches while the outcome window is still open
-        (restart-safety + lets the live WS or a later index catch up).
+        OBSERVE/PAPER only (settle_paper_trade asserts trading_enabled is False).
+        Fetches ``[entry-30, entry+window_s]`` via ``BirdeyeBackfiller.run_for_window``
+        (fully indexed by now → the complete tape), converts to settler tuples, and
+        books+settles via the SOLE paper settler.  Un-enterable rows (dead / no
+        quote / slip-miss) are NOT booked (settle_paper_trade returns None), but the
+        token is still marked terminal — the window has closed, so there is nothing
+        more to wait for.  The blocking urllib fetch runs in the shared thread pool
+        (never stalls the event loop — the #377 lesson) and is concurrency-capped by
+        ``self._postgrad_rest_sem``.
 
-        Concurrency- and credit-capped by ``self._postgrad_rest_sem`` (lazily
-        created; the blocking urllib fetch runs in the shared thread pool so it
-        never stalls the event loop — the #377 loop-starvation lesson).
+        On a transient fetch/settle error the mint is LEFT in ``self._pending_settle``
+        so a later tick retries; on success it is removed and marked SCORED so a
+        restart skips it.
         """
         if self._postgrad_rest_sem is None:
             self._postgrad_rest_sem = asyncio.Semaphore(3)
@@ -1914,71 +1923,36 @@ class FirehoseDaemon:
         from core.backfill.birdeye_backfill import BirdeyeBackfiller  # noqa: PLC0415
 
         t_from = int(entry_ts_epoch - _POSTGRAD_REST_QUOTE_GAP_S)
-        t_to = int(entry_ts_epoch + outcome_window_s)
+        t_to = int(entry_ts_epoch + window_s)
         backfiller = BirdeyeBackfiller()
         try:
-            swaps: list[dict] = []
-            for attempt in range(_POSTGRAD_REST_MAX_ATTEMPTS):
-                async with self._postgrad_rest_sem:
-                    swaps = await sync_to_async(
-                        backfiller.run_for_window, thread_sensitive=False
-                    )(mint, t_from, t_to, graduated_block_time, sol_usd_spot=sol_usd)
-                if swaps:
-                    break
-                # Stop retrying once the entry+exit window has fully elapsed.
-                if self._clock.now().timestamp() >= t_to:
-                    break
-                if attempt + 1 < _POSTGRAD_REST_MAX_ATTEMPTS:
-                    await asyncio.sleep(_POSTGRAD_REST_RETRY_S)
-
-            if swaps:
-                added = 0
-                for s in swaps:
-                    # Post-grad only (the window is already post-grad; defensive).
-                    if float(s.get("rel", 0.0)) < 0:
-                        continue
-                    self._postgrad_tape.add(mint, s)
-                    added += 1
-                logger.info(
-                    "%s postgrad-rest: mint=%s loaded %d post-grad swaps from "
-                    "Birdeye REST → paper leg retries next tick.",
-                    LOG_PREFIX, mint, added,
-                )
-            else:
-                logger.info(
-                    "%s postgrad-rest: mint=%s no post-grad swaps from Birdeye REST "
-                    "(indexing lag / illiquid) — token stays DETECTED for retry.",
-                    LOG_PREFIX, mint,
-                )
-        except Exception as exc:  # noqa: BLE001 - never let one fetch kill the loop
+            async with self._postgrad_rest_sem:
+                swaps = await sync_to_async(
+                    backfiller.run_for_window, thread_sensitive=False
+                )(mint, t_from, t_to, grad_bt, sol_usd_spot=sol_usd)
+            trades = _swaps_to_trade_tuples(swaps)
+            await sync_to_async(self._paper_trade_sync, thread_sensitive=True)(
+                mint, score, trades, float(entry_ts_epoch),
+                trading_cfg, size_sol, sol_usd, trading_enabled,
+            )
+            # Terminal: window closed + settled (or settler deemed un-enterable).
+            self._scored_mints.add(mint)
+            await sync_to_async(
+                self._set_token_status_sync, thread_sensitive=True
+            )(mint, "SCORED")
+            self._pending_settle.pop(mint, None)
+            logger.info(
+                "%s paper: mint=%s settled at window close over %d post-grad swaps.",
+                LOG_PREFIX, mint, len(trades),
+            )
+        except Exception as exc:  # noqa: BLE001 - one settle must not kill the loop
             logger.warning(
-                "%s postgrad-rest: mint=%s REST fetch failed (%s) — "
-                "will retry on a later tick.",
+                "%s paper: mint=%s deferred settle failed (%s) — staying queued for "
+                "retry on a later tick.",
                 LOG_PREFIX, mint, exc,
             )
         finally:
-            # Always clear the dedup guard so a later tick can re-dispatch.
-            self._postgrad_rest_pending.discard(mint)
-
-    @staticmethod
-    def _postgrad_enterable(
-        postgrad_swaps: list[dict], entry_ts_epoch: float, scoring: dict
-    ) -> bool:
-        """Cheap pre-check: is there enough post-grad tape to attempt a settle?
-
-        The settler needs at least one swap in the pre-entry quote window
-        [entry-30, entry] AND at least one swap at/after entry+2 (the fill).  This
-        mirrors the settler's own 'dead' guard so we DEFER (retry) rather than
-        book nothing when the post-grad stream simply hasn't arrived yet.
-        """
-        if not postgrad_swaps:
-            return False
-        gap_s = 30
-        lat_s = 2
-        bts = [float(s.get("block_time", 0)) for s in postgrad_swaps]
-        has_quote = any(entry_ts_epoch - gap_s <= t <= entry_ts_epoch for t in bts)
-        has_fill = any(t >= entry_ts_epoch + lat_s for t in bts)
-        return has_quote and has_fill
+            self._settle_inflight.discard(mint)
 
     # ------------------------------------------------------------------
     # Sync ORM/scoring helpers (run via sync_to_async)
