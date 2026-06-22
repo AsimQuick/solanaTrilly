@@ -347,32 +347,42 @@ def resolve_spl_mint(
         if not isinstance(values, list):
             return None
 
-        mints_found: list[str] = []
+        mints_found: list[tuple[str, object]] = []  # (pubkey, mintAuthority)
         for i, entry in enumerate(values):
             if not isinstance(entry, dict):
                 continue
             if entry.get("owner") not in _SPL_PROGRAMS:
                 continue
             try:
-                parsed_type = entry["data"]["parsed"]["type"]
-            except (KeyError, TypeError):
-                continue
-            if parsed_type != "mint":
+                parsed = entry["data"]["parsed"]
+                if parsed.get("type") != "mint":
+                    continue
+                authority = (parsed.get("info") or {}).get("mintAuthority")
+            except (KeyError, TypeError, AttributeError):
                 continue
             if i >= len(account_keys):
                 continue
             pubkey = account_keys[i]
             if pubkey in _EXCLUDED_MINTS:
                 continue
-            mints_found.append(pubkey)
+            mints_found.append((pubkey, authority))
 
         if len(mints_found) == 1:
-            return mints_found[0]
+            return mints_found[0][0]
         if len(mints_found) > 1:
+            # Disambiguate the pump.fun TOKEN mint from the freshly-created
+            # PumpSwap pool LP mint (both visible at "confirmed").  The token mint
+            # has a RENOUNCED (null) mint authority; the LP mint has a non-null
+            # authority (the pool) and supply 0.  Prefer the renounced mint.
+            # Without this, ~13% of grads skip as "ambiguous" (found live 2026-06-22).
+            renounced = [pk for pk, auth in mints_found if auth is None]
+            if len(renounced) == 1:
+                return renounced[0]
             logger.warning(
-                "[FIREHOSE] resolve_spl_mint: ambiguous — %d SPL mints found (%s) — returning None.",
+                "[FIREHOSE] resolve_spl_mint: ambiguous — %d SPL mints (%d renounced) (%s) — returning None.",
                 len(mints_found),
-                mints_found[:3],
+                len(renounced),
+                [pk for pk, _ in mints_found][:3],
             )
             return None
         # Zero mints found.  Retry once after a short delay (confirmed-slot
