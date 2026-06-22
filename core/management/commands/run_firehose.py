@@ -551,6 +551,13 @@ class FirehoseDaemon:
         # DETECTED backlog).  Initialised lazily in _lake_backfill_task (the
         # event loop must be running when asyncio.Semaphore is first created).
         self._birdeye_backfill_sem: asyncio.Semaphore | None = None
+        # Tier-2 lake backfill: concurrency cap on the GIL-heavy parquet scans.
+        # WITHOUT this, scoring-on over the DETECTED backlog dispatches hundreds of
+        # fire-and-forget lake scans (each reads ~1.7M rows) that saturate the
+        # thread pool + GIL, STARVE the asyncio event loop, and kill the shared
+        # Helius WS keepalive (observed: WS dies every ~20s).  Cap concurrent scans
+        # so the loop keeps servicing the WS ping.  Lazily initialised (event loop).
+        self._lake_backfill_sem: asyncio.Semaphore | None = None
         self._stop = asyncio.Event()
         self._active_sources: list = []
         # POST-grad subscription bookkeeping.
@@ -1518,6 +1525,14 @@ class FirehoseDaemon:
         _scorer_feature_list = getattr(scorer, "feature_list", [])
         _is_v4_model = len(_scorer_feature_list) == 53
 
+        # Per-tick backfill dispatch cap.  The DETECTED backlog can be hundreds of
+        # tokens; dispatching a fire-and-forget lake scan for ALL of them at once
+        # saturates the thread pool with GIL-heavy parquet reads and starves the
+        # event loop (kills the shared Helius WS).  Cap new dispatches per tick so
+        # the backlog drains gradually; remaining tokens are re-tried next tick.
+        _MAX_BACKFILL_DISPATCH_PER_TICK = 4
+        backfills_dispatched = 0
+
         for mint, graduated_block_time in due:
             swaps = self._tape.get(mint)
             # US-76 BREAK-1: serve in USD via ONE SOL/USD spot (the shared cached
@@ -1546,8 +1561,13 @@ class FirehoseDaemon:
                 # fire-and-forget a task that reads the firehose lake and
                 # populates the buffer.  The mint re-enters via the normal loop
                 # on a later tick after the fill lands.
-                if len(swaps) == 0 and mint not in self._backfill_pending:
+                if (
+                    len(swaps) == 0
+                    and mint not in self._backfill_pending
+                    and backfills_dispatched < _MAX_BACKFILL_DISPATCH_PER_TICK
+                ):
                     self._backfill_pending.add(mint)
+                    backfills_dispatched += 1
                     asyncio.create_task(
                         self._lake_backfill_task(mint, graduated_block_time),
                         name=f"firehose-lake-backfill-{mint[:8]}",
@@ -1666,13 +1686,24 @@ class FirehoseDaemon:
         """
         from core.backfill.lake_backfill import LakeBackfiller  # noqa: PLC0415
 
+        # Concurrency cap on the GIL-heavy parquet scan.  sync_to_async(
+        # thread_sensitive=False) runs each scan in the shared thread pool; without
+        # a cap, the backlog dispatches saturate it and the GIL contention starves
+        # the event loop → the shared Helius WS keepalive misses its ping and the
+        # connection dies (~20s death cycle).  Capping concurrent scans keeps the
+        # loop responsive.  Lazily created (event loop must be running).
+        if self._lake_backfill_sem is None:
+            self._lake_backfill_sem = asyncio.Semaphore(2)
+
         try:
             backfiller = LakeBackfiller()
             # sync_to_async wraps the blocking file I/O so it does not block
-            # the event loop during the partition scan.
-            swaps = await sync_to_async(
-                backfiller.run_for_mint, thread_sensitive=False
-            )(mint, graduated_block_time)
+            # the event loop during the partition scan; the semaphore bounds how
+            # many such scans run concurrently (GIL/loop-starvation guard).
+            async with self._lake_backfill_sem:
+                swaps = await sync_to_async(
+                    backfiller.run_for_mint, thread_sensitive=False
+                )(mint, graduated_block_time)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "%s lake-backfill: mint=%s failed (%s) — will retry on next tick.",
