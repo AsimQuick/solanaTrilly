@@ -4,7 +4,8 @@
 # status: implemented
 # created-by: claude (live-run operator)
 # last-updated: 2026-06-22
-# dependencies: copytrade.{entry_features,pgrad_classifier,birdeye_tape,curvestage_settle,buy_trigger,models}
+# dependencies: copytrade.entry_features, pgrad_classifier, pgrad_live_percentile,
+#               birdeye_tape, curvestage_settle, buy_trigger, models
 # ---
 """Curve-stage cohort gate + honest-PnL settler (self-contained, observe-only).
 
@@ -40,6 +41,7 @@ from copytrade.curvestage_settle import settle_grad
 from copytrade.entry_features import birdeye_items_to_owner_tape, entry_features
 from copytrade.models import CopytradePosition
 from copytrade.pgrad_classifier import get_pgrad_classifier
+from copytrade.pgrad_live_percentile import get_live_percentile_threshold, record_score
 
 logger = logging.getLogger(__name__)
 
@@ -111,13 +113,25 @@ def handle_curvestage_buy(
     if feats["curve_frac"] > 0.60:
         return None
 
-    # Gate 3 — P(graduate) top-25% surrogate (frozen threshold).
+    # Gate 3 — P(graduate) top-25% surrogate.
+    # THRESHOLD PRIORITY (US-82 live-percentile):
+    #   1. Live p75 from rolling Redis window (>= 50 scores) — non-trivially selective
+    #      regardless of train/serve skew; activates once the soak warms up.
+    #   2. pgrad_threshold_recalibrated (0.0956) from pgrad_meta.json — fixed lab p75.
+    #   3. pgrad_threshold_frozen (0.153) — seed threshold.
     clf = get_pgrad_classifier()
-    passed, pgrad = clf.passes(feats)
+    pgrad = clf.predict(feats)
+    # Always record the raw score (unbiased distribution for live-percentile window).
+    record_score(pgrad)
+    # Resolve effective threshold.
+    live_threshold = get_live_percentile_threshold()
+    effective_threshold = live_threshold if live_threshold is not None else clf.threshold
+    threshold_source = "live_p75" if live_threshold is not None else clf.threshold_source
+    passed = pgrad >= effective_threshold
     if not passed:
         logger.info(
-            "[curvestage] mint=%.8s gate3 fail pg=%.4f<thr=%.4f curve_frac=%.3f — skip.",
-            mint, pgrad, clf.threshold, feats["curve_frac"],
+            "[curvestage] mint=%.8s gate3 fail pg=%.4f<thr=%.4f(%s) curve_frac=%.3f — skip.",
+            mint, pgrad, effective_threshold, threshold_source, feats["curve_frac"],
         )
         return None
 
@@ -131,8 +145,8 @@ def handle_curvestage_buy(
         entry_ts=entry_ts, size_usd=size_usd, sol_in=sol_in,
     )
     logger.info(
-        "[curvestage] OPEN observe mint=%.8s wallet=%.8s pg=%.4f curve_frac=%.3f trigger_usd=%.0f",
-        mint, event.wallet, pgrad, feats["curve_frac"], trigger_usd,
+        "[curvestage] OPEN observe mint=%.8s wallet=%.8s pg=%.4f thr=%.4f(%s) curve_frac=%.3f trigger_usd=%.0f",
+        mint, event.wallet, pgrad, effective_threshold, threshold_source, feats["curve_frac"], trigger_usd,
     )
     return pos
 

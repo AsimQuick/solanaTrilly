@@ -142,9 +142,12 @@ def test_handle_curvestage_buy_passes_books_observe():
     with mock.patch("copytrade.curvestage_engine.fetch_token_tape", return_value=[{"x": 1}]), \
          mock.patch("copytrade.curvestage_engine.birdeye_items_to_owner_tape", return_value=otr), \
          mock.patch("copytrade.curvestage_engine.entry_features", return_value=feats), \
-         mock.patch("copytrade.curvestage_engine.get_pgrad_classifier") as gpc:
-        gpc.return_value.passes.return_value = (True, 0.42)
+         mock.patch("copytrade.curvestage_engine.get_pgrad_classifier") as gpc, \
+         mock.patch("copytrade.curvestage_engine.record_score"), \
+         mock.patch("copytrade.curvestage_engine.get_live_percentile_threshold", return_value=None):
+        gpc.return_value.predict.return_value = 0.42
         gpc.return_value.threshold = 0.15
+        gpc.return_value.threshold_source = "frozen_seed"
         pos = handle_curvestage_buy(_event(), sol_usd=150.0, cohort_id="copy_x_curvestage", strategy_id="s1")
     assert pos is not None and pos.status == "open" and pos.mode == "observe"
     assert pos.size_usd == 25.0
@@ -157,9 +160,12 @@ def test_handle_curvestage_buy_gate3_blocks():
     with mock.patch("copytrade.curvestage_engine.fetch_token_tape", return_value=[{"x": 1}]), \
          mock.patch("copytrade.curvestage_engine.birdeye_items_to_owner_tape", return_value=otr), \
          mock.patch("copytrade.curvestage_engine.entry_features", return_value=feats), \
-         mock.patch("copytrade.curvestage_engine.get_pgrad_classifier") as gpc:
-        gpc.return_value.passes.return_value = (False, 0.05)  # below threshold
+         mock.patch("copytrade.curvestage_engine.get_pgrad_classifier") as gpc, \
+         mock.patch("copytrade.curvestage_engine.record_score"), \
+         mock.patch("copytrade.curvestage_engine.get_live_percentile_threshold", return_value=None):
+        gpc.return_value.predict.return_value = 0.05  # below threshold
         gpc.return_value.threshold = 0.15
+        gpc.return_value.threshold_source = "frozen_seed"
         pos = handle_curvestage_buy(_event(), sol_usd=150.0, cohort_id="copy_x_curvestage", strategy_id="s1")
     assert pos is None
 
