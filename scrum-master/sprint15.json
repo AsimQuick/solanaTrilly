@@ -1,0 +1,502 @@
+{
+  "sprint": "sprint-15",
+  "phase": "A-in-progress",
+  "last-updated": "2026-06-23",
+  "last-updated-by": "dev-team",
+  "goal": "CLEAN RESET — replace the failed hotfix-PR style (half-applied fixes, untraceable landings, fake/inflated dashboard PnL) with structured user stories + a tester quality gate + a dev-team loop, then fix-validate-LOCALLY-then-PURGE the VPS and deploy ONLY two artifacts (model `models/trilly_pregrad_v6`, copy formula `models/copy_2026-06-22_curvestage`) observe-only, $25, trading_enabled=FALSE (never flipped). LOCKED SEQUENCE = fix-validate-then-purge: (Phase A) salvage the VPS-only judge/diagnostic probes BEFORE any purge + stand up a LOCAL validation harness over the Jun 20-23 firehose tapes; (Phase B) develop+PROVE every COPY and MODEL fix LOCALLY against those tapes FIRST; (Phase C) ONE clean VPS purge of all old models/formulas/positions/half-applied fixes, then deploy the two artifacts with fixes already baked in, with a FRESH HONEST dashboard; (Phase D) observe soak, judged EXCLUSIVELY by firehose-reconstructed real fills via fill_repricing.py — NEVER the dashboard number. NO CREDITS: Helius/Birdeye/Dune are OFF for the ENTIRE sprint; all testing uses the LOCAL Jun 20-23 tapes only (already pulled to /Users/asim/NoIcloud/solanatrills/lake/firehose/dt=2026-06-2{0,1,2,3}/part-0.jsonl.gz, byte-exact vs VPS). FREE GRADUATION LABELS: the firehose is bonding-curve-only (phase ~100% 'pre'); graduation = cumulative buy vol_sol >= ~85 SOL — zero-credit full-population ground truth for the whole window. DOLLAR BASIS: vol_usd is ALL ZERO — every dollar quantity (curve_frac, the $250 filter, fill_repricing) MUST derive from vol_sol x SOL_price (~$84/SOL this window or a pinned per-day series), NEVER vol_usd. BAD LINES: ~2-10%/day are unparseable partial writes -> skip-and-count-and-flag, never fatal. MODEL TRACK = OBSERVE + PARITY-ONLY: ship v6 observe-only and validate ONLY its feature/scoring PARITY locally (live entry_features vs lab parquets); v6 post-grad PnL is OUT OF SCOPE (a separate Birdeye backtest agent owns it, already done Jun 20-21; the live recorder confirms later). SAFETY GATE (non-negotiable): trading_enabled DEFAULT False, NEVER flipped this sprint; ZERO real orders / ZERO capital; the live RPC/Sender send boundary present but NEVER invoked (AST-guarded); SS5 copy-trade isolation PRESERVED; solanaBilly UNTOUCHED on 8001, every docker op scoped -p solanatrilly. ANTI-HOTFIX MECHANISM: every story's DoD includes a REPRODUCIBLE LOCAL validation (against the Jun 20-23 tapes or a golden/regression fixture) that PROVES the fix landed — no story is 'done' on 'works locally' hand-waving; the local-proof gate is what UNBLOCKS the Phase-C purge.",
+  "reference_docs": [
+    "scrum-master/prd.md",
+    "scrum-master/solanatrilly_copytrade_SPEC.md",
+    "scrum-master/retrospective.md",
+    "scrum-master/scrum-master.md",
+    "scrum-master/EPIC-copy-curvestage-integration.md",
+    "scrum-master/EPIC-copy-paper-fill-repricing.md",
+    "scrum-master/EPIC-copy-capital-path-wiring.md",
+    "scrum-master/EPIC-graduation-migrate-detection.md",
+    "scrum-master/EPIC-graduation-mint-extraction-fix.md",
+    "scrum-master/EPIC-model-track-deploy.md",
+    "scrum-master/EPIC-model-paper-pnl-truncation-floor.md",
+    "scrum-master/EPIC-tape-sourcing-escalation.md",
+    "CLAUDE.md",
+    "ops/firehose_activation_log.md",
+    "/Users/asim/NoIcloud/solanatrills/lake/firehose/MANIFEST.md",
+    "/Users/asim/NoIcloud/solanatrills/models/trilly_pregrad_v6/MODEL_HANDOFF.md",
+    "/Users/asim/NoIcloud/solanatrills/models/copy_2026-06-22_curvestage/HANDOFF.md"
+  ],
+  "definition_of_done": [
+    "ANTI-HOTFIX LOCAL-PROOF GATE (the sprint's core mechanism): every Phase-A/B story ships a REPRODUCIBLE, COMMITTED local validation (a pytest test, a script with pinned expected output, or a golden/regression fixture) that runs against the Jun 20-23 firehose tapes (or a derived fixture) and PROVES the specific fix landed. 'Works locally' hand-waving is NOT done. The local-proof for every Phase-B story must be GREEN before the Phase-C purge is authorized.",
+    "All ACs verified by CI / Tester.",
+    "No critical defects (and no major defects open at sprint close).",
+    "Coverage threshold met (>=80%).",
+    "Code file headers include metadata front matter (project convention) on ALL new backend AND frontend source files.",
+    "NO CREDITS THIS SPRINT: Helius, Birdeye, and Dune are OFF for the entire sprint; the firehose budget (6 Birdeye + 6 Helius remaining) is UNTOUCHED. Any task that appears to 'need Birdeye/Dune' is re-designed to use the LOCAL Jun 20-23 tapes + the free cum-vol_sol>=85 graduation label, or is explicitly DEFERRED. No new firehose-activation-log entries this sprint.",
+    "HARD NO-CREDITS (REAFFIRMED across ALL stories): Helius, Birdeye, AND Dune are OFF for the ENTIRE sprint (Dune is 402/out-of-credits on both keys). EVERY acceptance criterion that would imply a credit spend is redesigned around the LOCAL Jun 20-23 tapes + the local fixtures already on hand (lake/golden/*, seed_recent.csv, recorder logs/frames), or is explicitly DEFERRED. No detector scoring, no parity table, no backfill, no settler re-pulls tx/swap data from any vendor. The firehose budget (6 Birdeye + 6 Helius) is UNTOUCHED; no new activation-log entries. Escalation to a vendor requires explicit operator re-authorization and is out of scope by default.",
+    "DOLLAR-BASIS DISCIPLINE: every dollar quantity (curve_frac dollarization, the $250 watched-buy filter, fill_repricing cap math) derives from vol_sol x SOL_price; vol_usd (all-zero in these tapes) is NEVER read for a dollar value. The SOL price is pinned (a per-day constant or series, default ~$84/SOL for this window) in ONE place, config-driven, never a scattered literal.",
+    "FREE-LABEL DISCIPLINE: the offline graduation ground truth is cumulative buy vol_sol >= ~85 SOL computed from the tapes (zero credit, full population). The exact SOL threshold is a single named constant; any deviation is documented with its rationale.",
+    "BAD-LINE DISCIPLINE: the tape parser skips-and-counts-and-flags unparseable partial-write lines (~2-10%/day) and reports the count; a malformed line is NEVER fatal and NEVER silently dropped without a counter.",
+    "All services run in Docker (no host installs — Docker Rules). Any new/changed service is defined in BOTH docker-compose.yml and docker-compose.staging.yml; any image change is followed by an in-container rebuild; Node/Vite run INSIDE the frontend container, NEVER on the host; every docker command is scoped with -p solanatrilly.",
+    "CD pipeline LIVE and GREEN for the Phase-C/D deploy: the clean deploy is carried by the GitHub Actions -> GHCR -> VPS pipeline (the VPS is NEVER hand-edited) and smoke-tested on the solanatrilly staging stack (-p solanatrilly, web 8002 / dashboard 8003). 'Works locally' is NOT done for the deploy stories (PRD SS15.2/SS16); the local-proof gate is what unblocks Phase A/B.",
+    "VPS verification IN THE LOOP and gates 'done' for Phase C/D: the Tester confirms from an ACTUAL green deploy run that the stack answers HTTP 200 on 8002, the dashboard answers on 8003, ONLY v6 + curvestage are present (no old models/formulas/positions), the engine containers are Up, and solanaBilly is UNTOUCHED on 8001.",
+    "OBSERVE-ONLY SAFETY GATE (non-negotiable): trading_enabled DEFAULT False and NEVER flipped this sprint; both tracks run observe/paper at $25; ZERO real orders / ZERO capital; the live RPC/Sender send boundary present but NEVER invoked (AST-guarded, the US-11 no-auto-start pattern stays GREEN — no boot/resolver/upload/ON/purge/deploy path flips trading_enabled True).",
+    "SS5 COPY-TRADE ISOLATION PRESERVED: copy-trade keeps its OWN engine/config/ON-OFF; only the execution+settlement CHASSIS is shared; the copytrade isolation guards (sprint-12) stay GREEN; no shared mutable state with the firehose/model pipeline.",
+    "Hard isolation from live solanaBilly preserved: every docker command scoped with -p solanatrilly; solanaBilly on 8001 untouched; the purge (US-89) uses ONLY -p solanatrilly-scoped operations — NO unscoped down / up --force-recreate / prune / volume-removal; solanaBilly at /root/solanaBilly is NEVER touched.",
+    "JUDGE BY FILL_REPRICING.PY, NEVER THE DASHBOARD: all PnL / edge judgment (copy soak, model parity sanity) is grounded in firehose-reconstructed real fills via copytrade/fill_repricing.py (the canonical judge); the old fake/inflated settler number is NEVER the arbiter; the fresh dashboard's PnL cell is WIRED to fill_repricing.py output (a prettier version of the old lie is a sprint FAILURE).",
+    "Config-driven (Principle #1): any new knob (SOL-price basis, grad threshold, recalibrated classifier threshold, kill-switch bounds) is read from the appropriate config store — NEVER literals scattered in code.",
+    "Parity by construction (Principle #2/#5): the copy classifier and the v6 stack score the SAME feature pipeline live as the lab parquets validate offline; the dashboard reads EXISTING repriced/Position rows — NO new PnL/price/candle math, NO second source, NO re-implemented score.",
+    "Status integrity enforced programmatically (US-13 guard stays GREEN on sprint15.json); phase-promotion is mechanical (tools/promote_sprint_phase.py) before any sprint-end deploy.",
+    "retrospective.md updated for sprint-15 (named owner: Tester / scrum facilitator), including a Change Requests log entry recording this clean-reset decision; after updating any /scrum-master/ doc, re-index via mcp__devrag__reindex_document (project convention)."
+  ],
+  "stories": [
+    {
+      "id": "US-80",
+      "title": "PHASE A — SALVAGE the VPS-only judge + diagnostic probes into the repo BEFORE any purge (gate_fidelity.py, resettle.py) + confirm fill_repricing.py is in-repo and canonical",
+      "status": "draft",
+      "priority": "critical",
+      "phase": "A-salvage",
+      "dependencies": [],
+      "acceptance_criteria": [
+        {
+          "id": "80.1",
+          "text": "The two banked diagnostic probes that currently live ONLY on the VPS at /tmp/gate_fidelity.py and /tmp/resettle.py are pulled into the repo as durable, version-controlled tools (e.g. under tools/ or copytrade/diagnostics/) WITH metadata front matter and a short header documenting what each one judges. These are the gate-fidelity diagnostic and the true-graduation re-settle tool; they are VPS-/tmp-only and UNRECOVERABLE once the purge runs, so this MUST land before any Phase-C operation. Verified: both files exist in the repo at a committed path, import without error, and a test asserts their presence + that they are NOT under /tmp.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "80.2",
+          "text": "fill_repricing.py is CONFIRMED in-repo (copytrade/fill_repricing.py) and CANONICAL — it is the single source of truth for firehose-reconstructed real fills and the ONLY PnL arbiter this sprint. A test pins its key public surface (find_next_trade_price + reprice_position or the current equivalents) and the load-bearing WINDOW RULE constants (block-offset / window) so a later refactor cannot silently change the judge. No second repricing implementation exists or is introduced.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "80.3",
+          "text": "The salvaged probes are RE-POINTED at the local Jun 20-23 tapes (US-81 harness) so they run with ZERO credits offline: gate_fidelity reads the local lake, resettle uses the free cum-vol_sol>=85 graduation label (NOT a Birdeye REST poll — that was a diagnostic correction, not the production design; see US-83). LOCAL-PROOF: a committed test/script runs each salvaged probe end-to-end over a small fixture slice of the local tapes and asserts a deterministic, pinned output (e.g. gate_fidelity reproduces the known gate-firing counts; resettle reproduces the established curvestage diagnostic of 24 observe trades -> honest re-settle -$172.72, 25% grad-rate, 21% win, within a documented tolerance). Zero firehose; bad lines skipped-and-counted.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "in-progress",
+      "dev_notes": "PHASE A COMPLETE (2026-06-23).\n\nAC-80.1: VPS /tmp/gate_fidelity.py and /tmp/resettle.py were NOT found — VPS /tmp was cleared (reboots wipe /tmp). Both probes RECONSTRUCTED from documented behavior in sprint15.json + EPIC-copy-curvestage-integration.md + sprint15.md. Clearly marked as RECONSTRUCTED in module docstrings. Landing:\n  - copytrade/diagnostics/gate_fidelity.py — recompute all 3 copy gates per pick at buy_ts from local tapes\n  - copytrade/diagnostics/resettle.py — offline re-settle using cum-vol_sol>=85 graduation label\n  - copytrade/diagnostics/__init__.py\nTests assert both exist in-repo (not under /tmp), import cleanly, and expose correct public API.\n\nAC-80.2: fill_repricing.py CONFIRMED in-repo at copytrade/fill_repricing.py. No changes needed — already canonical. Tests pin: REPRICE_BLOCK_OFFSET=1, REPRICE_WINDOW_S=10, REPRICE_SLIP_CAP=0.15, find_next_trade_price + reprice_position callable. No second repricing implementation found.\n\nAC-80.3: Both probes re-pointed to local tapes via firehose_harness (US-81). gate_fidelity reads lake via parse(); resettle uses free cum-vol_sol>=85 label. DOCUMENTED_NET_PNL_USD=-172.72, DOCUMENTED_GRAD_RATE=0.25, DOCUMENTED_WIN_RATE=0.21, DOCUMENTED_N_TRADES=24 pinned as module-level constants (regression anchors). End-to-end fixture tests GREEN.\n\nblocker-type: none",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-81",
+      "title": "PHASE A — Stand up the LOCAL validation harness over the Jun 20-23 firehose tapes: a skip-and-count parser, a FREE graduation labeler (cum buy vol_sol >= ~85 SOL), and a vol_sol x SOL_price dollar basis — the foundation every other story's DoD references",
+      "status": "draft",
+      "priority": "critical",
+      "phase": "A-salvage",
+      "dependencies": [],
+      "acceptance_criteria": [
+        {
+          "id": "81.1",
+          "text": "A firehose tape PARSER reads the local Jun 20-23 lake (/Users/asim/NoIcloud/solanatrills/lake/firehose/dt=2026-06-2{0,1,2,3}/part-0.jsonl.gz, or a copy vendored into the repo's test-data path) and yields the documented row schema (mint, block_time unix-s, slot, signature, price SOL/token, side, vol, vol_sol, vol_usd, owner, phase). It SKIPS-AND-COUNTS-AND-FLAGS unparseable partial-write lines (~2-10%/day) — a malformed line is never fatal and never silently dropped; the parser returns/logs the bad-line count. Verified: a test over a fixture slice (incl. deliberately-planted malformed lines) asserts the good rows parse, the bad-line counter equals the planted count, and no exception escapes.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "81.2",
+          "text": "A FREE graduation LABELER computes, per mint, cumulative BUY vol_sol and labels a mint GRADUATED at the block_time where cumulative buy vol_sol first crosses the threshold (~85 SOL, a single named constant). This is the zero-credit, full-population ground truth for the whole window (the firehose is bonding-curve-only; phase ~100% 'pre'; post-grad is not captured, so graduation OUTCOME comes from this label, not from a post-grad tape). Verified: a test over a fixture asserts (a) a mint whose cumulative buy vol_sol reaches the threshold is labeled graduated at the correct crossing block_time, (b) a mint that never reaches it is labeled not-graduated, and (c) the labeler reports a plausible window-level grad count (sanity-checked against the MANIFEST note of ~13 grads on Jun-22 only-day-with-post — the label must NOT depend on the post rows).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "81.3",
+          "text": "A DOLLAR-BASIS helper converts SOL quantities to USD as vol_sol x SOL_price, with the SOL price pinned in ONE config-driven place (a per-day constant or series; default ~$84/SOL for this window per the MANIFEST). vol_usd (all-zero in these tapes) is NEVER read for a dollar value anywhere in the harness or any consumer. Verified: a test asserts the helper dollarizes a known vol_sol correctly at the pinned price, and a repo-wide guard/test asserts no harness-or-consumer code path reads vol_usd for a dollar quantity (e.g. an AST/grep guard flags `vol_usd` reads in the dollar-deriving modules). The harness exposes a clean API (parse / label_graduations / to_usd) that US-80 and every Phase-B story imports — it is the single referenced foundation. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "in-progress",
+      "dev_notes": "PHASE A COMPLETE (2026-06-23).\n\nModule: copytrade/firehose_harness.py — the single foundation all Sprint-15 stories import.\nPublic API: parse(date_str, lake_base_dir) -> (list[TapeRow], bad_count) | label_graduations(rows) -> dict[mint, GradLabel] | to_usd(vol_sol, date_str) | sol_price_for_date(date_str) | parse_window(date_strs) | iter_parse(date_str) (streaming)\nImport for Phase-B stories: from copytrade.firehose_harness import parse, label_graduations, to_usd, GRAD_SOL_THRESHOLD, SOL_PRICE_BY_DATE\n\nAC-81.1 PARSER — per-day measured anchors (Docker, 2026-06-23):\n  2026-06-20: good=779,300  bad=87,634  (bad_pct=10.1%) — rows missing 'mint' (post-grad no-mint schema)\n  2026-06-21: good=861,943  bad=36,183  (bad_pct=4.0%)\n  2026-06-22: good=1,520,021 bad=35,423 (bad_pct=2.3%)\n  2026-06-23: good=208,460  bad=35,514  (bad_pct=14.6%) — partial day\nNote: 'bad lines' are rows with valid JSON but missing the 'mint' field (post-grad rows use 'rel' instead). These match the MANIFEST percentages exactly.\n\nAC-81.2 GRADUATION LABELER — cum buy vol_sol >= GRAD_SOL_THRESHOLD (85 SOL):\n  2026-06-20: 380 graduates / 11,707 distinct mints\n  2026-06-21: 372 graduates / 11,353 distinct mints\n  2026-06-22: 825 graduates / 22,256 distinct mints (highest-volume day)\n  2026-06-23: 104 graduates / 3,388 distinct mints (partial day)\n  TOTAL 4-day window: 1,681 graduates (~420/day avg). Order-of-magnitude consistent with Dune's ~190/day real signal (the difference is expected: Dune counts unique graduation events while the cum-vol label counts any mint crossing 85 SOL, which may include some noise and multi-day accumulation).\n\nAC-81.3 DOLLAR BASIS: to_usd() uses SOL_PRICE_BY_DATE (all four days $84/SOL). vol_usd confirmed all-zero. Tests assert the wrong path (vol_usd) gives $0 and the right path (to_usd) gives correct value.\n\nTests: 58 passed (with lake mount), 9 skipped (macOS-path markers, covered by real-lake test file). All pinned counts are deterministic and committed.\n\nblocker-type: none",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-82",
+      "title": "PHASE B (COPY, THE EDGE) — Classifier calibration / train-serve parity: run a G2 parity table (live entry_features vs lab parquets), find the P(grad) inflation source, and recalibrate the gate-3 threshold to the LIVE top-25% so the selection gate is actually selective on the local tapes",
+      "status": "draft",
+      "priority": "critical",
+      "phase": "B-copy",
+      "dependencies": [
+        "US-81"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "82.1",
+          "text": "A G2 TRAIN/SERVE PARITY TABLE is produced: live-computed entry_features (the curvestage feature port over the LOCAL recorder tapes via the US-81 harness) are diffed distribution-by-distribution (per-feature median + quantiles) against the lab Birdeye parquets that trained the seed classifier. The prime suspects price_at_entry and fdv_proxy (USD-basis features — Helius price is a SOL/token ratio; the lab's is USD/token) are called out explicitly and the table identifies WHERE the live distribution diverges from the lab. Verified by a committed parity-table artifact + a test asserting the table is generated from the local tapes (zero firehose) and that the basis-sensitive features are computed on the vol_sol x SOL_price USD basis (US-81.3), never vol_usd.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "82.2",
+          "text": "The P(grad) INFLATION SOURCE is identified and the fix documented: the seed classifier (trained on lab parquets) currently predicts median P(grad) ~0.71 but the live realized grad-rate is ~25% (over-confident ~3x), and the frozen lab threshold 0.153 sits far below the live score mass so it admits ~every trigger (a no-op gate ~= the on-curve base rate ~24%). The story pins the cause to the parity break (e.g. the price_at_entry/fdv_proxy basis) and either (a) corrects the live feature computation to restore parity, or (b) recalibrates, with the choice documented. Verified by a test/artifact showing the corrected live P(grad) distribution and the documented decision.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "82.3",
+          "text": "LOCAL-PROOF — the gate is RECALIBRATED to the LIVE top-25% and PROVEN SELECTIVE on the local tapes: the new threshold is computed from the live score mass (top-~25% among on-curve+curve_frac<=0.6 gated candidates), is config-driven (a single named constant, not a scattered literal), and a committed test asserts that on the Jun 20-23 tapes the SELECTED-cohort graduation rate (using the US-81 free cum-vol_sol>=85 label) is STRICTLY GREATER than the on-curve base rate (~24%) — i.e. the gate actually selects, it is no longer a no-op. HONEST CAVEAT recorded in the story notes: even recalibrated, live ranking is weak (grad picks median pgrad ~0.84 vs non-grad ~0.68, heavy overlap) — this fix gets curvestage to 'properly tested', NOT 'proven'. Zero firehose; dollars via vol_sol x SOL_price.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-83",
+      "title": "PHASE B (COPY) — Settler honesty: switch curvestage graduation detection from the blind recorder tokens table to GROUND TRUTH (live = the corrected on-chain detector US-86; offline re-settle = cum-vol_sol>=85) so graduated tokens stop riding to false TIMER/-100%",
+      "status": "draft",
+      "priority": "high",
+      "phase": "B-copy",
+      "dependencies": [
+        "US-81",
+        "US-86"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "83.1",
+          "text": "ROOT CAUSE pinned + reconciled: curvestage_engine._graduation_bt reads graduation ONLY from the recorder `tokens` table, which is blind to ~18/24 grads, so graduated tokens ride to a false AUTO_SELL_TIMER / -100% settle (this is why the dashboard shows -$265 while the honest re-settle is -$172.72). The story explicitly RECONCILES the production design vs the diagnostic: for LIVE/production the settler reads graduation from the CORRECTED ON-CHAIN detector (US-86, MigrateV2 + PumpSwap CreatePool — free, push, authoritative), NOT a Birdeye REST poll (that was a one-off diagnostic correction, NOT the production design). For OFFLINE re-settle, graduation comes from the US-81 free cum-vol_sol>=85 label. Verified by a test asserting the engine no longer treats a known-graduated mint as a TIMER/-100% exit.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "83.2",
+          "text": "The OFFLINE re-settle path (the salvaged resettle probe / settler) detects graduation via the US-81 cum-vol_sol>=85 label and settles a graduated position at the graduation/migration exit (the curvestage ride-to-grad exit), NOT a false -100% timer. Verified by a test over the local tapes asserting that the ~18 previously-mis-settled graduated tokens from the diagnostic cohort now settle as graduations (positive or graduation-priced exits), reproducing the honest re-settle figures (-$172.72 / 25% grad / 21% win) within a documented tolerance.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "83.3",
+          "text": "LOCAL-PROOF + isolation: a committed regression test pins the corrected settler behavior on a fixture slice (graduated mint -> graduation exit; non-graduated mint -> the existing TP/SL/curve/timer logic unchanged), the dollar basis is vol_sol x SOL_price (never vol_usd), and the change is SS5-isolated (touches only copytrade settlement, no shared mutable state with the firehose/model pipeline, copytrade isolation guards stay GREEN). Zero firehose. Honest exit price comes from the firehose tape (fill_repricing window rule), never a fake settler price.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-84",
+      "title": "PHASE B (COPY) — Wire the weekly retrain on the recorder's OWN on-curve tapes (date-gated no-op until the lake hits >=7 days; do NOT block on the date gate)",
+      "status": "draft",
+      "priority": "medium",
+      "phase": "B-copy",
+      "dependencies": [
+        "US-81",
+        "US-82"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "84.1",
+          "text": "The weekly-retrain job (retrain_curvestage_classifier celery-beat task) is WIRED to rebuild the P(grad) training set from the recorder's OWN prior-week on-curve entries in the firehose lake (pool-wallet >=$250 first-buys via vol_sol x SOL_price, the US-82 entry_features, and the US-81 cum-vol_sol>=85 graduation label), retrain the LGBM, and refresh the frozen threshold from a held-out fold. The $250 filter and all dollar quantities derive from vol_sol x SOL_price, never vol_usd. Verified by a test exercising the retrain over a local-tape fixture week (produces a model + a threshold).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "84.2",
+          "text": "The job is DATE-GATED and does NOT block the sprint: it is a documented no-op until the lake has >=7 days of on-curve entries (currently ~3-4 days locally), at which point it takes over from the lab seed; until then the US-82 recalibrated seed carries. Verified by a test asserting the job no-ops (and logs the date gate) when fed <7 days of data and runs when fed >=7 days. The story NOTES the date gate explicitly and is NOT blocked on lake maturity.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "84.3",
+          "text": "LOCAL-PROOF: a committed test drives the full retrain path over a synthetic-or-sliced >=7-day local-tape fixture and asserts it produces a model artifact + a held-out-derived threshold, with the new threshold computed on the live score mass (parity with US-82's top-25% methodology). The retrained-vs-seed threshold handoff is deterministic and logged. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-85",
+      "title": "PHASE B (COPY) — Re-soak validation harness + kill-switch definition: observe/paper only, judged by honest-fill re-settle (NEVER the dashboard), with the kill-switch = selected grad-rate < 40% over >=15 trades",
+      "status": "draft",
+      "priority": "high",
+      "phase": "B-copy",
+      "dependencies": [
+        "US-82",
+        "US-83"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "85.1",
+          "text": "A re-soak validation harness re-runs the recalibrated curvestage gate (US-82) + honest settler (US-83) over the LOCAL Jun 20-23 tapes in observe/paper mode (trading_enabled=false, $25 book) and reports the soak metrics judged by HONEST-FILL re-settle via fill_repricing.py (entry/exit priced from the firehose tape, NEVER the dashboard number): selected grad-rate, win-rate, net $/tr. Verified by a committed run + test asserting the metrics are computed from fill_repricing.py output over the local tapes, dollars via vol_sol x SOL_price, bad lines skipped-and-counted, zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "85.2",
+          "text": "The KILL-SWITCH is defined and implemented as a config-driven health monitor: kill the soak if the selected grad-rate (denominator counting ONLY real on-curve entries — NOT VOID/ENTRY_REJECTED rows; the curvestage_hc.sh denominator bug is fixed) drops below 40% over >=15 trades (offline was 60-69%). The grad-rate is the FAST leading health metric (converges before PnL). Verified by a test feeding a synthetic trade stream that trips the kill below 40%/>=15 and does NOT trip above it, with VOID/ENTRY_REJECTED rows correctly excluded from the denominator.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "85.3",
+          "text": "LOCAL-PROOF + HONEST CAVEAT recorded: the harness reproduces the documented honest-fill direction (the recalibrated gate's selected grad-rate exceeds the ~24% base rate per US-82; net is still break-even-to-negative on weak live ranking) and the story records the honest caveat that this gets curvestage to 'properly tested', NOT 'proven'. The soak judgment trinity is documented: (a) judge on firehose-reconstructed real fills, never the dashboard; (b) selected grad-rate vs ~39% breakeven is the leading kill metric; (c) net $/tr after honest fill. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-86",
+      "title": "PHASE B (MODEL, FOUNDATIONAL) — Decide the graduation detector by MATCH-RATE against the completeevent-derived ground truth (seed_recent.csv), NOT by doc precedence: score BOTH candidate detectors (Instruction:Migrate substring vs precise MigrateV2 + PumpSwap CreatePool) offline over local fixtures and ship the higher precision/recall — killing the near-zero post-grad tagging",
+      "status": "draft",
+      "priority": "critical",
+      "phase": "B-model",
+      "dependencies": [],
+      "acceptance_criteria": [
+        {
+          "id": "86.1",
+          "text": "DECIDE BY MATCH-RATE, NOT DOC PRECEDENCE. Score BOTH candidate detectors offline over a historical window and compare their detected graduations (tokens + timing) against the canonical completeevent-derived ground-truth grad set: (A) the deployed `Instruction: Migrate` substring matcher, vs (B) precise `MigrateV2` + PumpSwap `CreatePool` (pAMMBay...) instruction matching. GROUND TRUTH (FREE/local, NO CREDITS): `/Users/asim/NoIcloud/solanabilly3/data/graduated/seed_recent.csv` (Jun 13-21, ~1805 graduated mints with t0_unix, itself derived from Dune pump_evt_completeevent — Dune is 402/out-of-credits so this CSV is the stand-in). Do NOT use Birdeye pump_amm pool-creation as the stand-in (it costs credits; hard-no-credits sprint). Compute precision + recall (tokens matched, and timing within a documented tolerance) for each detector vs seed_recent. SHIP the detector with the better precision/recall. Verified by a committed scoring artifact + test reporting both detectors' precision/recall against seed_recent and asserting the shipped detector is the winner. Engineering LEAN (state as lean, confirm by match-rate): MigrateV2+CreatePool is structurally better (substring matching false-positives on unrelated instructions e.g. MigrateBondingCurveCreator, and silently breaks on protocol-version renames — the 'V2' implies exactly that happened, a plausible root cause of the near-zero post tagging).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "86.2",
+          "text": "SCORE OFFLINE WITHOUT RE-PULLING TX DATA (NO CREDITS — do NOT reach for Helius/Birdeye). Both detectors are run against LOCAL fixtures already on hand: the golden decoded-tx / helius_birth_tape samples (lake/golden/helius_decoded_txs/, lake/golden/helius_birth_tape/) and/or recorder logs/frames already captured — NEVER a fresh tx fetch. The corrected detector FIRES on a genuine MigrateV2 + CreatePool graduation frame and DOES NOT fire on a MigrateBondingCurveCreator fee-program frame or unrelated frames; the substring detector is shown to false-fire on the fee-program frame. Mint extraction is reconciled so the emitted mint equals the pre-grad TradeEvent SPL mint (the #366 getMultipleAccounts resolver path is RPC-gated -> mocked in tests this credit-free sprint, never called live). Verified by the offline test suite over the local fixtures; zero firehose / zero live RPC.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "86.3",
+          "text": "WHY THIS IS FOUNDATIONAL (fresh evidence) + LOCAL-PROOF. Operator pulled the firehose Jun 20-23: `phase=post` appears on only 13 swaps across 4 FULL days -> the deployed detector is missing ~ALL graduations, so the recorder cannot bank post-grad data. That blocks BOTH the copy ride-to-grad exit (US-83) AND the model's post-grad outcomes, and is why the backtest had to derive graduation from curve-SOL (the US-81 cum-vol_sol>=85 label). LOCAL-PROOF: a committed test/artifact cross-checks the shipped detector's firing rate against BOTH the seed_recent ground truth AND the free cum-vol_sol>=85 label on the local tapes — the shipped detector's grad count is in the realistic Dune order of magnitude (~190/day), NOT the ~2656/day false-positive rate of the old substring detector. The clean deploy (US-89) MUST ship the winning detector; live judging of the exit/model is impossible from day one without it. ALL prior scored tokens + model-edge reads taken before this fix are recorded INVALID. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-87",
+      "title": "PHASE B (MODEL, OBSERVE + PARITY-ONLY) — Confirm the v6 stack (v4 SELECTION x v5 EXIT x depth-gated SIZING) is actually wired + its banks loaded before promote, and PROVE feature/scoring PARITY locally (live entry_features vs lab parquets) — NOT post-grad PnL",
+      "status": "draft",
+      "priority": "high",
+      "phase": "B-model",
+      "dependencies": [
+        "US-81"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "87.1",
+          "text": "The v6 deployable stack is CONFIRMED wired per its MODEL_HANDOFF: v6 = v4 SELECTION (the 53-feature seed-bagged rank-blend incl. the v4 REP+recurrence builder + the WalletBankLookup bank singleton loaded ONCE at daemon init, never per-tick) x v5 EXIT (the at-entry structural exit router) x depth-gated SIZING (observe at $25 FLAT this sprint — the size ramp is soak-gated and OUT OF SCOPE). The prior degraded-model failure mode (v4's REP+recurrence builder never wired into run_firehose -> 33 features zeroed) is CONFIRMED CLOSED: a test asserts the v6 feature vector is fully populated (no silently-zeroed feature block) and the bank is loaded before promote. The v6 ARTIFACT is staged into the repo's models/ tree (it currently exists only in the lab at solanatrills/models/trilly_pregrad_v6) so the clean deploy can ship it. Verified by a test asserting the wired feature count + a non-zero feature block.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "87.2",
+          "text": "FEATURE/SCORING PARITY is PROVEN LOCALLY: live entry_features assembled over the LOCAL recorder tapes (US-81 harness) are byte-/tolerance-faithful to the lab parquets the v6 stack was built on, and the live score matches the offline score on the golden fixture (the existing golden-parity tests — test_golden_parity_v4 / v6 — stay GREEN, plus the live buyer-assembly parity gap flagged in EPIC-model-track-deploy AREA A is closed or its bounded impact documented). The es60 fallback xfails (~2.1%) are accepted-as-structured per the lab decision (do NOT request lab importance). Verified by the golden-parity test suite GREEN + a live-vs-lab feature-distribution table over the local tapes.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "87.3",
+          "text": "SCOPE FENCE + LOCAL-PROOF: this story validates ONLY feature/scoring parity, NOT v6 post-grad PnL (a separate Birdeye backtest agent owns that, already done Jun 20-21; the live recorder confirms later — explicitly OUT OF SCOPE here). A committed parity-proof test runs the v6 scoring path end-to-end on a local-tape fixture and asserts live==offline within tolerance, with the depth-gated sizing pinned at $25 flat (no size-up). trading_enabled stays False; the model never sends. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-88",
+      "title": "PHASE B (MODEL) — Carry-forward verification: PROVE the model PnL truncation+floor fix (#386) and the post-grad entry-tape recovery (#381/#382) survive INTACT into the clean deploy (not lost in the prune)",
+      "status": "draft",
+      "priority": "high",
+      "phase": "B-model",
+      "dependencies": [
+        "US-87"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "88.1",
+          "text": "The model paper-PnL TRUNCATION+FLOOR fix (#386) is CONFIRMED INTACT: settlement defers to window-close over the full Birdeye/tape fetch (NOT a truncated, partially-indexed tape that produced false AUTO_SELL_TIMER @~6s and 8/9 mis-settles), and exit-price impact is FLOORED at -100% (no sub--100% negative exit prices). Verified by a committed regression test (the #386 test) GREEN against the local tapes / golden fixture — a known-good token settles at window-close, not a false ~6s timer, and no exit price floors below -100%.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "88.2",
+          "text": "The post-grad entry-tape RECOVERY (#381/#382) is CONFIRMED INTACT: the silent-stream slot-hang fix (#381) and the grad+120s entry-window recovery (#382, which recovers the entry window the live WS subscribes-too-late to miss) survive into the clean deploy. NOTE the credit constraint: #382's recovery uses Birdeye REST, which is OFF this sprint — so the VERIFICATION is offline (the recovery LOGIC + its regression test stay intact and GREEN; live exercise of the REST path is deferred to the operator-driven post-soak window, not spent here). Verified by the #381/#382 regression tests GREEN; the ~8% gate-pass is confirmed a genuine population, NOT a bug.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "88.3",
+          "text": "LOCAL-PROOF + anti-prune guard: a committed test asserts BOTH fixes are present on the deploy artifact set (the code paths exist + their regression tests pass) so the Phase-C prune CANNOT silently drop them (the exact anti-hotfix failure this sprint exists to end). The tape-sourcing escalation (Tier 2 lake fallback, FREE/local) from EPIC-tape-sourcing-escalation is reconciled: Tier 2 (lake read, free) is in-scope-to-confirm-present; Tier 3 (Birdeye REST) is credit-gated and DEFERRED this sprint. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-89",
+      "title": "PHASE C — ONE clean VPS purge (all old models/formulas/positions/half-applied fixes) then deploy ONLY v6 + curvestage via the CD pipeline, observe-only / $25 / trading_enabled=FALSE — fixes already baked in (gated by ALL Phase-A/B local-proofs GREEN)",
+      "status": "draft",
+      "priority": "critical",
+      "phase": "C-purge-deploy",
+      "dependencies": [
+        "US-80",
+        "US-81",
+        "US-82",
+        "US-83",
+        "US-84",
+        "US-85",
+        "US-86",
+        "US-87",
+        "US-88"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "89.1",
+          "text": "GATE: the purge is AUTHORIZED only after EVERY Phase-A/B local-proof is GREEN (US-80..US-88 Tester-approved). The VPS is PURGED of all old models, old copy formulas, old positions, and all half-applied hotfix state — scoped EXCLUSIVELY with -p solanatrilly: distinct Postgres DB/volume, distinct Redis, distinct Docker network. NO unscoped docker down / up --force-recreate / prune / volume-removal; solanaBilly at /root/solanaBilly and on port 8001 is NEVER touched. Verified by the Tester from the deploy/purge run log: only solanatrilly-scoped resources are affected; solanaBilly containers remain Up and untouched on 8001.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "89.2",
+          "text": "ONLY the two artifacts are deployed via the GitHub Actions -> GHCR -> VPS CD pipeline (the VPS is NEVER hand-edited; docker-compose.staging.yml is the only compose): model `trilly_pregrad_v6` (with the v4/v5 component dirs + the bank under the mounted models tree) and copy formula `copy_2026-06-22_curvestage` (its HANDOFF/formula.json integration spec — on-curve gate, curve_frac<=0.6, the US-82-recalibrated honest P(grad) classifier, ride-to-grad exit). Both carry the Phase-B fixes baked in (US-86 corrected detector, US-83 honest settler, US-82 recalibrated threshold, US-87 wired v6, US-88 carry-forwards). NOTHING else from the old deploy carries over. Verified from the green deploy run: v6 + curvestage present, no legacy model/formula/position rows.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "89.3",
+          "text": "SAFETY + smoke: both tracks come up observe-only ($25, trading_enabled=FALSE and NEVER flipped — the AST no-auto-start guard confirms no boot/purge/deploy/ON path flips it True); the corrected graduation detector (US-86) is the live one; the stack answers HTTP 200 on 8002 and the (fresh, US-90) dashboard answers on 8003; engine containers Up; solanaBilly untouched on 8001; the deploy regression guard GREEN. Zero firehose (no live source started this sprint beyond what the recorder needs to come up observe-only with NO credit-burning REST/Dune calls). Verified by the Tester from the actual green deploy run.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-90",
+      "title": "PHASE C — Fresh HONEST dashboard: fix click-to-copy, add live-positions pagination, and WIRE the PnL number to fill_repricing.py firehose-reconstructed fills (UTC->Dubai time is OPTIONAL/nice-to-have) — a prettier version of the old lie is a sprint FAILURE",
+      "status": "draft",
+      "priority": "high",
+      "phase": "C-purge-deploy",
+      "dependencies": [
+        "US-80",
+        "US-89"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "90.1",
+          "text": "THE HONESTY REWIRE (the load-bearing AC): the dashboard PnL number is WIRED to copytrade/fill_repricing.py firehose-reconstructed real fills — NOT the old fake/inflated settler. The displayed copy PnL reflects honest entry/exit fills (the ~break-even/negative real number), and the model-track displayed PnL likewise reads repriced/honest Position rows — NO dashboard-local PnL math, NO second source (Principle #2). The UI clearly marks any not-yet-repriced value (curve-sim / pending) and excludes ENTRY_REJECTED from win-rate denominators. Verified by a test asserting the PnL API/view reads fill_repricing.py output (the canonical judge) and a test that a known inflated booked number is displayed at its repriced value, not the inflated one. A prettier version of the old lie FAILS this AC.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "90.2",
+          "text": "TWO REQUIRED UI fixes: (a) click-to-copy is FIXED (clicking a mint/wallet copies it to the clipboard — verified by a frontend test of the copy handler); (b) the live-positions view is PAGINATED (handles many incoming tokens without rendering all rows at once — verified by a pagination test/wiring check). OPTIONAL / NICE-TO-HAVE (do NOT block the story or the deploy on it): convert displayed times from UTC -> Dubai time (Asia/Dubai, UTC+4); if implemented, verify by a test asserting a known UTC timestamp renders as the correct Dubai-local string. All implemented items carry metadata front matter + an H1 ImportError trap per convention.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "90.3",
+          "text": "Deployed + smoke-tested on the VPS via the CD pipeline: the fresh dashboard answers on 8003 from an actual green deploy run, the PnL cell shows the fill_repricing-honest number (NOT the legacy settler), click-to-copy + pagination are live (Dubai-time if implemented), containers Up, solanaBilly untouched on 8001, deploy regression guard GREEN. End state: a FRESH, HONEST dashboard the operator can trust. Verified by the Tester from the green deploy run. Zero firehose. New frontend + backend files carry metadata front matter.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-91",
+      "title": "PHASE D — Observe soak both tracks ($25, trading_enabled=FALSE), judged EXCLUSIVELY by fill_repricing.py on the live recorder firehose — define the soak exit criteria + the kill-switches",
+      "status": "draft",
+      "priority": "high",
+      "phase": "D-soak",
+      "dependencies": [
+        "US-89",
+        "US-90"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "91.1",
+          "text": "Both tracks run OBSERVE-ONLY on the clean deploy: copy (curvestage, recalibrated gate, honest settler) and model (v6 at $25 flat), each $25, trading_enabled=FALSE and NEVER flipped this sprint. The soak's SOLE PnL/edge arbiter is copytrade/fill_repricing.py firehose-reconstructed real fills on the live recorder's OWN firehose lake — the dashboard number is NEVER the judge. Verified by a wiring check that the soak-reporting path reads fill_repricing.py output and that trading_enabled is False (AST guard GREEN).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "91.2",
+          "text": "The SOAK EXIT CRITERIA + KILL-SWITCHES are DEFINED and config-driven: COPY kill-switch = selected grad-rate < 40% over >=15 trades (denominator = real on-curve entries only, US-85.2 fix; offline was 60-69%); the leading health metric is selected grad-rate (converges before PnL). MODEL soak judges feature/scoring parity holding live + no inversion at $25 (post-grad PnL confirmation is owned by the separate backtest/recorder path, not this sprint). The depth-gated size ramp toward $100 stays OUT OF SCOPE / soak-gated. Verified by a test exercising the kill-switch thresholds + a documented exit-criteria checklist.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "91.3",
+          "text": "The soak monitoring is OPERABLE + HONEST: a monitor reports selected grad-rate + honest-fill net $/tr (copy) and parity/inversion status (model) from fill_repricing.py, on a fixed cadence, with the kill-switch wired to halt the engine (NOT real-capital — observe stays observe). End state recorded: a clean, honest, trustworthy dashboard + soak read; capital / live-flip / the model size-ramp remain operator-driven and OUT OF SCOPE. Zero firehose credit-burn beyond the recorder coming up. Verified by the Tester from the live observe stack: the monitor emits the metrics, the kill-switch is armed, trading_enabled is False.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    }
+  ]
+}
