@@ -276,3 +276,59 @@ class TestOfflineValidationCeilingDocumented:
         assert "live-percentile" in doc.lower() or "rolling" in doc.lower(), (
             "Module must document the live-percentile decision"
         )
+
+
+class TestColdStartBranches:
+    """Coverage: lazy django_redis import path + malformed-member handling.
+
+    These tests call the module functions WITHOUT passing redis_client=fake so
+    they exercise the lazy-import branches (lines 89-94, 116-121, 163-168).
+    In the test environment Redis is available, so the import succeeds and we
+    get real I/O against the test Redis instance.
+    """
+
+    def test_record_score_without_redis_client_arg(self):
+        """record_score() with no redis_client exercises the lazy import path."""
+        # Should not raise (Redis is up in test env); score is written and trimmed.
+        record_score(0.33)  # no redis_client= kwarg → exercises lines 89-94
+
+    def test_get_live_percentile_threshold_without_redis_client_arg(self):
+        """get_live_percentile_threshold() with no redis_client exercises lazy import."""
+        # Redis is up; window may be empty or cold → returns None or float, no raise.
+        result = get_live_percentile_threshold()  # no redis_client= → exercises 116-121
+        assert result is None or isinstance(result, float)
+
+    def test_get_window_stats_without_redis_client_arg(self):
+        """get_window_stats() with no redis_client exercises lazy import path."""
+        result = get_window_stats()  # no redis_client= → exercises 163-168
+        assert isinstance(result, dict)
+        assert "n" in result
+
+    def test_get_live_percentile_threshold_handles_malformed_members(self):
+        """Members with non-parseable score portion are skipped (lines 140-141)."""
+        # Build a fake redis with some malformed members mixed in
+        fake = MagicMock()
+        now = time.time()
+        # Mix valid members, a malformed member (no colon), and a bytes member
+        n = MIN_SCORES_FOR_LIVE_PERCENTILE
+        valid = [f"{i/n:.6f}:{now:.3f}".encode() for i in range(n)]
+        malformed = [b"not-a-float:12345", b"bad", b""]
+        fake.zrangebyscore.return_value = valid + malformed
+        fake.zremrangebyscore.return_value = None
+        result = get_live_percentile_threshold(redis_client=fake)
+        # Malformed members are skipped; valid ones still yield a threshold
+        assert result is not None
+        assert isinstance(result, float)
+
+    def test_get_window_stats_handles_malformed_members(self):
+        """Malformed members in get_window_stats are skipped (lines 179-180)."""
+        fake = MagicMock()
+        now = time.time()
+        n = MIN_SCORES_FOR_LIVE_PERCENTILE
+        valid = [f"{i/n:.6f}:{now:.3f}".encode() for i in range(n)]
+        malformed = [b"oops", b":::", b""]
+        fake.zrangebyscore.return_value = valid + malformed
+        fake.zremrangebyscore.return_value = None
+        result = get_window_stats(redis_client=fake)
+        assert result["n"] == n  # only valid members counted
+        assert result["warm"] is True
