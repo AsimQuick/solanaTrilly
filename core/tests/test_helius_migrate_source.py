@@ -111,19 +111,30 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
-REAL_MIGRATE_FIXTURE = FIXTURES_DIR / "helius_migrate_tx_real.json"
+REAL_MIGRATE_FIXTURE = FIXTURES_DIR / "helius_migrate_v2_real_grad_1.json"
+# Captured fee-program "MigrateBondingCurveCreator" txs — the FALSE POSITIVES the
+# old substring marker mis-detected as graduations (must now decode to None).  The
+# legacy helius_migrate_tx_real.json is one of these (it was NOT a real graduation).
+FALSE_POSITIVE_FIXTURES = [
+    FIXTURES_DIR / "helius_migrate_false_pos_feecreator_1.json",
+    FIXTURES_DIR / "helius_migrate_false_pos_feecreator_2.json",
+    FIXTURES_DIR / "helius_migrate_false_pos_feecreator_3.json",
+    FIXTURES_DIR / "helius_migrate_tx_real.json",
+]
 HELIUS_SOURCE_FILE = REPO_ROOT / "core" / "tape" / "helius_birth_tape_source.py"
 RUN_FIREHOSE_FILE = REPO_ROOT / "core" / "management" / "commands" / "run_firehose.py"
 
 # ---------------------------------------------------------------------------
-# Known values from captured frame (2026-06-21, slot 427956654)
+# Known values from a captured REAL graduation frame (2026-06-22, slot 428262359):
+# a MigrateV2 tx that creates the PumpSwap pool (pAMMBay CreatePool).  Cross-checked
+# against Dune pump_evt_completeevent.  (The prior fixture was a fee-program
+# MigrateBondingCurveCreator tx — a false positive — now in FALSE_POSITIVE_FIXTURES.)
 # ---------------------------------------------------------------------------
 
-# The REAL SPL mint — verified via getAccountInfo (SPL Token program owner).
-# Present in the real frame's accountKeys at index 3.
-REAL_FRAME_MINT = "74gPctSqK6stvYRCSe1GpNzcn9cTAh49GN3SmpUGAp3q"
-REAL_FRAME_SIG = "3tAbrT6pCnDpTaoquqmiWDooZVfNtphNxodqpGthxtkFhScyLqA8Uc4r5HnttJJczmgq5gycHqmXrYyKGHkRVRLU"
-REAL_FRAME_SLOT = 427956654
+# The REAL SPL mint — present in the real graduation frame's accountKeys (index 14).
+REAL_FRAME_MINT = "3ZLkpvUaZLSLZKfvQK9oFNcfduaGCYNe7RbZW7RhQTDG"
+REAL_FRAME_SIG = "5NyPiTQvqWkcjJsyAiYVDe2jVzmtABTrLLyfhE2ZhkqhmN1QePQps9fM3gy7761nW2nhsGYAuxbuTXEkTDWJJbG5"
+REAL_FRAME_SLOT = 428262359
 
 # Fixed epoch used in all decode_helius_migrate_event test calls so tests are
 # deterministic.  Value chosen to be obviously a real 2024 Unix timestamp (NOT a slot).
@@ -297,6 +308,34 @@ def test_decode_migrate_candidate_accounts_includes_real_mint() -> None:
     assert REAL_FRAME_MINT in candidates, (
         f"Real mint {REAL_FRAME_MINT!r} must be present in candidate_accounts. "
         f"Got: {candidates}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 2b: creator-fee "MigrateBondingCurveCreator" frames must NOT graduate.
+# These are the ~99% false-positive class the old substring marker caught (a
+# pump.fun FEE-program tx, program pfeeUxB…, no PumpSwap pool).  Real captured
+# frames — see memory graduation-detection-migratev2-substring-bug.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fp_fixture", FALSE_POSITIVE_FIXTURES, ids=lambda p: p.name
+)
+def test_decode_migrate_rejects_creator_fee_false_positives(fp_fixture) -> None:
+    """A pump.fun FEE-program creator-fee tx (MigrateBondingCurveCreator) is NOT a
+    graduation and must decode to None: it never creates a PumpSwap pool, which the
+    old 'Instruction: Migrate' substring marker ignored (mis-detecting every
+    creator-fee tx as a graduation)."""
+    from core.tape.helius_birth_tape_source import decode_helius_migrate_event
+
+    assert fp_fixture.exists(), f"false-positive fixture missing: {fp_fixture}"
+    with fp_fixture.open(encoding="utf-8") as fh:
+        frame = json.load(fh)
+    event = decode_helius_migrate_event(frame, fallback_epoch=TEST_FALLBACK_EPOCH)
+    assert event is None, (
+        f"{fp_fixture.name} is a creator-fee tx (no PumpSwap pool) and must NOT be "
+        f"detected as a graduation; got {event!r}"
     )
 
 

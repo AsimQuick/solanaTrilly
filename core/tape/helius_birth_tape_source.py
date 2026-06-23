@@ -122,8 +122,14 @@ SOURCE_TAG: str = "helius_live"
 #: PumpSwap AMM program address (the sole pump.fun graduation destination).
 PUMP_AMM_PROGRAM: str = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 
-#: Log line that indicates a migrate instruction in the pump.fun program.
-_MIGRATE_LOG_MARKER: str = "Instruction: Migrate"
+#: pump.fun bonding-curve program — the graduation SOURCE (liquidity migrates FROM here).
+PUMP_BONDING_PROGRAM: str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+
+#: PumpSwap pool-creation instruction.  A graduation is DEFINED by the bonding
+#: curve migrating its liquidity into a NEW PumpSwap pool, so a real graduation
+#: tx always logs this under the PumpSwap AMM program.  (Replaces the old loose
+#: "Instruction: Migrate" substring marker — see _is_migrate_log.)
+_CREATE_POOL_MARKER: str = "Instruction: CreatePool"
 
 #: dex_source stamp for migrate-detected graduation events.
 MIGRATE_DEX_SOURCE: str = "helius_migrate"
@@ -208,16 +214,28 @@ def _is_trade_log(log_messages: list[str]) -> bool:
 
 
 def _is_migrate_log(log_messages: list[str]) -> bool:
-    """Return True if log_messages contain the pump.fun Migrate instruction marker.
+    """Return True ONLY for a real pump.fun graduation transaction.
 
-    A migrate transaction always emits 'Instruction: Migrate' as part of its
-    6EF8rrecthR5… program log.  Verified on 3 real transactionNotification frames
-    (2026-06-21).  Returns False for trade (Buy/Sell) and create frames.
+    A graduation IS the bonding curve migrating its liquidity into a NEW PumpSwap
+    pool, so a genuine graduation tx invokes BOTH the pump.fun bonding program
+    (``PUMP_BONDING_PROGRAM`` 6EF8…, the source) AND the PumpSwap AMM program
+    (``PUMP_AMM_PROGRAM`` pAMMBay…, the destination), with a ``CreatePool`` log
+    (the pool actually being created).
+
+    This REPLACES the old substring test (``"Instruction: Migrate" in m``), which
+    also matched the pump.fun FEE program's ``"Instruction: MigrateBondingCurveCreator"``
+    creator-fee transactions — mis-detecting EVERY creator-fee tx as a graduation
+    (~99% false positives vs the Dune ``pump_evt_completeevent`` ground truth;
+    confirmed on-chain 2026-06-23: false positives run on program ``pfeeUxB…`` with
+    no pool, real graduations are ``MigrateV2`` + ``pAMMBay`` ``CreatePool``).
+    Returns False for trade (Buy/Sell), create, and creator-fee frames.
     """
-    for m in log_messages:
-        if _MIGRATE_LOG_MARKER in m:
-            return True
-    return False
+    joined = "\n".join(log_messages)
+    return (
+        _CREATE_POOL_MARKER in joined
+        and PUMP_AMM_PROGRAM in joined
+        and PUMP_BONDING_PROGRAM in joined
+    )
 
 
 def extract_migrate_account_candidates(data: dict) -> list[str]:
@@ -567,7 +585,10 @@ def decode_helius_migrate_event(
     Detection criteria:
       - method == "transactionNotification"
       - meta.err is None (landed transactions only)
-      - meta.logMessages contains "Instruction: Migrate"
+      - meta.logMessages show a real graduation: a PumpSwap pool creation
+        (CreatePool under pAMMBay…) in a tx that also invokes the pump.fun
+        bonding program (6EF8…) — NOT a creator-fee "MigrateBondingCurveCreator"
+        tx (see _is_migrate_log)
 
     Emitted event shape (matches DetectionConsumer._is_graduation_event checks):
       {
