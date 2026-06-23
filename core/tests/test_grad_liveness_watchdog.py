@@ -15,17 +15,31 @@ Testing philosophy: every test here anchors to the real Django ORM / Postgres
 code path as production.  The recovery function is injected so os._exit is
 never called inside the test process.
 
+The watchdog uses a PROGRESS-based staleness check, not an absolute-age check:
+  - _last_progress_at is set to time.time() on start() — fresh grace window.
+  - It advances to now() whenever MAX(graduated_at) increases (new graduation).
+  - Recovery fires when now() - _last_progress_at > stale_seconds.
+
+This avoids the restart-loop trap: on startup with a hours-old MAX in the DB,
+the watchdog does NOT fire immediately — it only fires after stale_seconds of
+no new graduation, giving detection time to recover.
+
 Coverage:
-  §1 STALE + firehose_active=True  → recovery fires (the core correctness case).
-  §2 FRESH graduation             → recovery does NOT fire.
-  §3 firehose_active=False        → recovery does NOT fire (even with stale data).
-  §4 No Token rows yet            → recovery does NOT fire (daemon just started).
-  §5 Crashed helius_task          → recovery fires via _run_active inspection.
-  §6 Normal helius_task (cancel)  → recovery does NOT fire via _run_active.
+  §1 PROGRESS exhausted + firehose_active=True  → recovery fires.
+  §2 Fresh graduation (new MAX)                 → recovery does NOT fire.
+  §3 firehose_active=False                      → recovery does NOT fire.
+  §4 No Token rows yet                          → recovery does NOT fire.
+  §5 STARTUP with stale MAX (restart scenario)  → recovery does NOT fire during
+       grace window (the restart-loop bug test).
+  §6 New graduation mid-window resets clock     → recovery does NOT fire even
+       after the original stale window would have expired.
+  §7 Crashed helius_task                        → recovery fires via _run_active.
+  §8 Normal helius_task (cancel)                → recovery does NOT fire.
 """
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -43,8 +57,8 @@ from core.management.commands.run_firehose import (
 
 def _make_watchdog(recovery_calls: list, *, stale_seconds: int = GRAD_STALE_SECONDS) -> GraduationLivenessWatchdog:
     """Build a watchdog whose recovery_fn appends to *recovery_calls* (no os._exit)."""
-    def _recovery(stale_age_s: float) -> None:
-        recovery_calls.append(stale_age_s)
+    def _recovery(no_progress_for_s: float) -> None:
+        recovery_calls.append(no_progress_for_s)
 
     return GraduationLivenessWatchdog(
         stale_seconds=stale_seconds,
@@ -85,55 +99,70 @@ def _create_token(graduated_at: datetime) -> None:
 
 
 # ---------------------------------------------------------------------------
-# §1 — STALE + firehose_active=True → recovery fires
+# §1 — Progress exhausted + firehose_active=True → recovery fires
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db(transaction=True)
-def test_stale_graduation_fires_recovery():
-    """MAX(graduated_at) > GRAD_STALE_SECONDS ago + firehose_active=True → recovery called."""
+def test_progress_exhausted_fires_recovery():
+    """No progress for > stale_seconds → recovery fires.
+
+    Simulate the case where the watchdog has been running for stale_seconds
+    with no new graduation: manually backdate _last_progress_at to stale_seconds
+    ago and call _poll_once with a MAX(graduated_at) that has NOT advanced.
+    This is the genuine dead-detection scenario.
+    """
     recovery_calls: list = []
     watchdog = _make_watchdog(recovery_calls, stale_seconds=60)
 
     _set_firehose_active(True)
 
-    # Plant a token graduated WELL beyond the stale threshold.
-    stale_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=7200)  # 2 hours ago
-    _create_token(stale_ts)
+    # Plant a token that graduated 2 hours ago (the "last seen" state in a dead scenario).
+    old_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=7200)
+    _create_token(old_ts)
+
+    # Simulate the watchdog having already observed this token on a previous poll.
+    # The watchdog saw this MAX epoch and did NOT advance — so _last_progress_at
+    # was not updated.  Backdate it to more than stale_seconds ago to trigger fire.
+    watchdog._last_seen_max_epoch = old_ts.timestamp()  # already seen this token
+    watchdog._last_progress_at = time.time() - 120  # 120s ago (> threshold of 60s)
 
     watchdog._poll_once()
 
     assert len(recovery_calls) == 1, (
-        f"Expected recovery to fire once on stale graduation, got {recovery_calls}"
+        f"Expected recovery to fire when progress exhausted, got {recovery_calls}"
     )
-    stale_age_reported = recovery_calls[0]
-    # The reported age should be close to 7200s (within a few seconds of test wall-clock drift).
-    assert stale_age_reported >= 60, (
-        f"Reported stale age {stale_age_reported}s should be >= threshold 60s"
+    no_progress_reported = recovery_calls[0]
+    assert no_progress_reported >= 60, (
+        f"Reported no-progress duration {no_progress_reported}s should be >= threshold 60s"
     )
 
 
 # ---------------------------------------------------------------------------
-# §2 — FRESH graduation → recovery does NOT fire
+# §2 — Fresh graduation (new MAX) → recovery does NOT fire
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db(transaction=True)
 def test_fresh_graduation_does_not_fire():
-    """MAX(graduated_at) within threshold → recovery NOT called."""
+    """A new graduation (MAX advances) → progress clock resets → recovery NOT called."""
     recovery_calls: list = []
-    watchdog = _make_watchdog(recovery_calls, stale_seconds=1800)
+    watchdog = _make_watchdog(recovery_calls, stale_seconds=60)
 
     _set_firehose_active(True)
 
-    # Token graduated just 5 minutes ago — well within the 30-min threshold.
-    fresh_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=300)
+    # Token graduated just now — MAX is fresh and has never been seen before.
+    fresh_ts = datetime.now(tz=timezone.utc)
     _create_token(fresh_ts)
+
+    # Simulate the watchdog having seen an older epoch previously (progress advances).
+    watchdog._last_seen_max_epoch = (fresh_ts - timedelta(seconds=300)).timestamp()
+    watchdog._last_progress_at = time.time() - 90  # would fire WITHOUT the new grad
 
     watchdog._poll_once()
 
     assert len(recovery_calls) == 0, (
-        f"Recovery should NOT fire for a fresh graduation, got {recovery_calls}"
+        f"Recovery should NOT fire when MAX graduated_at advances (new graduation), got {recovery_calls}"
     )
 
 
@@ -144,7 +173,7 @@ def test_fresh_graduation_does_not_fire():
 
 @pytest.mark.django_db(transaction=True)
 def test_inactive_firehose_does_not_fire():
-    """firehose_active=False → watchdog is quiescent even when graduation data is stale."""
+    """firehose_active=False → watchdog is quiescent even when progress is exhausted."""
     recovery_calls: list = []
     watchdog = _make_watchdog(recovery_calls, stale_seconds=60)
 
@@ -153,6 +182,10 @@ def test_inactive_firehose_does_not_fire():
     # Token graduated 3 hours ago — definitely stale.
     stale_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=10800)
     _create_token(stale_ts)
+
+    # Progress exhausted (no update for 120s > 60s threshold).
+    watchdog._last_seen_max_epoch = stale_ts.timestamp()
+    watchdog._last_progress_at = time.time() - 120
 
     watchdog._poll_once()
 
@@ -179,6 +212,9 @@ def test_no_token_rows_does_not_fire():
     # Ensure no tokens exist for a clean test.
     Token.objects.all().delete()
 
+    # Even with a stale _last_progress_at, no tokens = startup grace.
+    watchdog._last_progress_at = time.time() - 120
+
     watchdog._poll_once()
 
     assert len(recovery_calls) == 0, (
@@ -187,7 +223,121 @@ def test_no_token_rows_does_not_fire():
 
 
 # ---------------------------------------------------------------------------
-# §5 — Crashed helius_task → recovery fires via _run_active inspection
+# §5 — STARTUP with stale MAX (restart scenario) → no fire during grace window
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_startup_with_stale_max_does_not_fire_immediately():
+    """Restart after outage: MAX(graduated_at) is hours old but _last_progress_at = now.
+
+    This is the restart-loop bug scenario:
+      - System just restarted after a real outage.
+      - MAX(graduated_at) is hours old (last graduation was before the outage).
+      - _last_progress_at is set to NOW in start() — full grace window.
+      - The watchdog must NOT fire immediately.
+      - It should only fire after stale_seconds of CONTINUED no-progress.
+
+    We call _poll_once() multiple times to confirm:
+      1. First poll: sees hours-old MAX for the first time (first observation →
+         _last_seen_max_epoch updates, but since it was None, this counts as
+         "first observation progress" → _last_progress_at advances to now).
+      2. Second poll: MAX unchanged → no progress update; but since
+         _last_progress_at is still ~now, no fire.
+    """
+    recovery_calls: list = []
+    watchdog = _make_watchdog(recovery_calls, stale_seconds=60)
+
+    _set_firehose_active(True)
+
+    # Hours-old graduation in the DB (the outage scenario).
+    stale_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=7200)
+    _create_token(stale_ts)
+
+    # Simulate fresh start: _last_progress_at = NOW (as set in start()).
+    # _last_seen_max_epoch = None (never polled before, as on a real restart).
+    watchdog._last_progress_at = time.time()
+    watchdog._last_seen_max_epoch = None
+
+    # First poll: sees the hours-old MAX for the first time.
+    # Since _last_seen_max_epoch was None, this is a "first observation"
+    # and _last_progress_at advances. No fire.
+    watchdog._poll_once()
+
+    assert len(recovery_calls) == 0, (
+        "Recovery must NOT fire on first poll after restart (first-observation grace), "
+        f"got {recovery_calls}"
+    )
+
+    # Second poll: MAX unchanged (no new graduation). _last_progress_at was just
+    # updated to ~now in the first poll (first-observation advances progress).
+    # Still no fire because < 60s have elapsed since last progress.
+    watchdog._poll_once()
+
+    assert len(recovery_calls) == 0, (
+        "Recovery must NOT fire on second poll shortly after restart, "
+        f"got {recovery_calls}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §6 — New graduation mid-window resets clock → no fire after original window
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_new_graduation_mid_window_resets_progress_clock():
+    """A new graduation arriving resets _last_progress_at; no fire follows.
+
+    Scenario:
+      1. Watchdog is stale (50s without progress, threshold=60s).
+      2. A new graduation arrives (MAX advances).
+      3. _last_progress_at resets to now.
+      4. Even after the ORIGINAL 60s window has passed, no fire because the
+         clock was reset.
+
+    This proves the reset semantics are correct end-to-end.
+    """
+    recovery_calls: list = []
+    watchdog = _make_watchdog(recovery_calls, stale_seconds=60)
+
+    _set_firehose_active(True)
+
+    # Initial state: an old graduation that was already observed.
+    old_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=3600)
+    _create_token(old_ts)
+    watchdog._last_seen_max_epoch = old_ts.timestamp()
+    # Nearly at the stale threshold — 50s without progress.
+    watchdog._last_progress_at = time.time() - 50
+
+    # Poll 1: MAX unchanged (no new graduation). No fire yet (50s < 60s).
+    watchdog._poll_once()
+    assert len(recovery_calls) == 0, f"Should not fire at 50s, got {recovery_calls}"
+
+    # New graduation arrives — insert a NEWER token.
+    new_ts = datetime.now(tz=timezone.utc)
+    _create_token(new_ts)
+
+    # Poll 2: MAX advances. _last_progress_at resets to ~now.
+    watchdog._poll_once()
+    assert len(recovery_calls) == 0, (
+        f"Recovery should NOT fire when new graduation resets clock, got {recovery_calls}"
+    )
+
+    # Verify _last_progress_at was actually reset (within a few seconds of now).
+    assert time.time() - watchdog._last_progress_at < 5.0, (
+        "Expected _last_progress_at to be ~now after new graduation, but it was not updated"
+    )
+
+    # Poll 3: MAX unchanged again. But _last_progress_at is fresh, so no fire.
+    watchdog._poll_once()
+    assert len(recovery_calls) == 0, (
+        f"Recovery must NOT fire immediately after a clock reset, got {recovery_calls}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §7 — Crashed helius_task → recovery fires via _run_active inspection
 # ---------------------------------------------------------------------------
 
 
@@ -214,8 +364,8 @@ def test_crashed_helius_task_triggers_recovery():
 
     recovery_calls: list = []
 
-    def _recovery(stale_age_s: float) -> None:
-        recovery_calls.append(("recovery", stale_age_s))
+    def _recovery(no_progress_for_s: float) -> None:
+        recovery_calls.append(("recovery", no_progress_for_s))
 
     class _CrashingDaemon(FirehoseDaemon):
         """FirehoseDaemon subclass where _helius_loop raises immediately."""
@@ -262,7 +412,7 @@ def test_crashed_helius_task_triggers_recovery():
 
 
 # ---------------------------------------------------------------------------
-# §6 — Normal helius_task (cancelled cleanly) → recovery does NOT fire
+# §8 — Normal helius_task (cancelled cleanly) → recovery does NOT fire
 # ---------------------------------------------------------------------------
 
 
@@ -282,8 +432,8 @@ def test_normal_helius_cancel_does_not_trigger_recovery():
 
     recovery_calls: list = []
 
-    def _recovery(stale_age_s: float) -> None:
-        recovery_calls.append(("recovery", stale_age_s))
+    def _recovery(no_progress_for_s: float) -> None:
+        recovery_calls.append(("recovery", no_progress_for_s))
 
     class _NormalDaemon(FirehoseDaemon):
         """FirehoseDaemon whose _helius_loop blocks until cancelled (normal behaviour)."""
