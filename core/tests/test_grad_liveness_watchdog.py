@@ -61,14 +61,25 @@ def _set_firehose_active(active: bool) -> None:
 
 
 def _create_token(graduated_at: datetime) -> None:
-    """Insert a Token row with the given graduated_at timestamp."""
+    """Insert a minimal Token row with the given graduated_at timestamp.
+
+    Supplies all NOT NULL columns so the DB constraint is satisfied.
+    raw_graduation is the verbatim graduation event JSON — a minimal stub is
+    sufficient for the watchdog (which only reads graduated_at, never raw_graduation).
+    """
     from core.models import Token
-    mint = f"MINT_{graduated_at.isoformat()}"
+
+    # Use a deterministic mint derived from the timestamp so multiple tokens
+    # in the same test don't collide (update_or_create handles the duplicate case).
+    mint = f"WATCHDOG_TEST_{int(graduated_at.timestamp())}"
     Token.objects.update_or_create(
         mint=mint,
         defaults={
+            "pool_address": "POOL_TEST",
             "graduated_at": graduated_at,
             "graduated_block_time": int(graduated_at.timestamp()),
+            "dex_source": "pump_amm",
+            "raw_graduation": {"stub": True},
         },
     )
 
