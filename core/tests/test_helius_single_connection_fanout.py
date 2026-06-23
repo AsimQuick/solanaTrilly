@@ -69,13 +69,16 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
-REAL_MIGRATE_FIXTURE = FIXTURES_DIR / "helius_migrate_tx_real.json"
+REAL_MIGRATE_FIXTURE = FIXTURES_DIR / "helius_migrate_v2_real_grad_1.json"
 
 # ---------------------------------------------------------------------------
-# Verified known mint from real fixture (2026-06-21)
+# Verified known mint from a real graduation fixture (MigrateV2 + PumpSwap
+# CreatePool, 2026-06-22, cross-checked vs Dune).  The prior fixture
+# (helius_migrate_tx_real.json) was a fee-program false positive — see
+# graduation-detection-migratev2-substring-bug.
 # ---------------------------------------------------------------------------
 
-REAL_FRAME_MINT = "74gPctSqK6stvYRCSe1GpNzcn9cTAh49GN3SmpUGAp3q"
+REAL_FRAME_MINT = "3ZLkpvUaZLSLZKfvQK9oFNcfduaGCYNe7RbZW7RhQTDG"
 TEST_FALLBACK_EPOCH = 1_719_000_000
 
 # ---------------------------------------------------------------------------
