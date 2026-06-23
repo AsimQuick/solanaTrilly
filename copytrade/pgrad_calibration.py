@@ -43,20 +43,62 @@ FIREHOSE PROXY — INVALID FOR THIS CALIBRATION:
   population dataset for OTHER analyses but cannot substitute for production Birdeye
   scoring.
 
+TRAIN/SERVE SKEW MEASUREMENT (measured 2026-06-23, vps_export Birdeye data):
+  SOURCE: lake/vps_export/gap_birdeye_features.csv.gz (37k tokens, May-Jun 2026,
+          Birdeye seek_by_time items with basePrice/quotePrice — CORRECT pipeline format).
+
+  FEATURE DISTRIBUTIONS (production entry_features(), at copy-trigger depth):
+    price_at_entry — LAB (Jun-6, n=4570): median=5.1e-4, p75=1.3e-3
+                   — LIVE (depth-matched, pre_sol_in>=10 SOL, n=48): median=4.3e-4
+                   — LIVE/LAB ratio: ~0.83 (NEAR PARITY at trigger depth)
+    fdv_proxy      — same ratio (fdv_proxy = price * 1e9, identical behavior)
+
+  PGRAD SCORE DISTRIBUTIONS (model scored on same populations):
+    LAB gated (cf<=0.6, n=2522): pgrad median=0.018, p75=0.096
+    LIVE undepth-filtered (last buy, n=4805): pgrad median=0.072, p75=0.183
+    LIVE depth-matched (pre_sol_in>=10, n=48): pgrad median=0.097, p75=0.344
+    LIVE/LAB ratio at trigger depth (score): ~5x
+
+  INTERPRETATION:
+    price_at_entry is near-parity at trigger depth (ratio 0.83x). The score inflation
+    (~5x on depth-matched entries) is NOT caused by the price feature. It is driven by
+    feature interactions at early-curve entries — specifically tok_age_s=19 (lab=58),
+    etg_s=231 (lab=82), and pre_sol_in=11 (lab=43). The depth-matched live sample is
+    also SELECTION-BIASED: it consists of the HIGHEST VELOCITY tokens in the vps_export
+    (those that reach 10 SOL in ~55 items = very high buying velocity), which the model
+    scores higher regardless of data source. Separating genuine train/serve skew from
+    population composition requires labeled live soak data.
+
+  IMPLICATION FOR THRESHOLD:
+    Using the fixed lab-calibrated 0.0956 would admit ~50% of live depth-matched entries
+    instead of the intended 25%. Decision: implement LIVE-PERCENTILE gate (top-25% of
+    the recorder's own rolling score window) in pgrad_live_percentile.py. The fixed
+    0.0956 remains as the cold-start fallback.
+
 CALIBRATION DECISION:
-  The FROZEN threshold 0.153 is already highly selective (3.76-4.51x lift).
-  The p75 recalibrated threshold is 0.073-0.096 on the production (lab) pipeline.
-  Both thresholds are measured on the correct pipeline.
+  Fixed threshold: 0.0956 (lab top-25%, cold-start fallback for live-percentile gate).
+  Live threshold: p75 of rolling Redis window (>=50 scores, 24h window) — preferred.
+  See copytrade/pgrad_live_percentile.py for implementation.
 
 RECALIBRATED_THRESHOLD = 0.0956 (p75 of Jun-6 fold, most recent lab data).
-  This is LOWER than frozen (0.153) which means it selects MORE candidates.
-  Selectivity: 25.0% pass, 48.3% sel_grad_rate, 3.40x lift.
+  Cold-start fallback for live-percentile gate. In production the live p75 replaces
+  this once the rolling window accumulates >= 50 scored tokens.
+
+OFFLINE VALIDATION CEILING (documented per sprint-15 coordinator requirement):
+  A fully production-faithful, LABELED selectivity proof is INFEASIBLE offline:
+    (a) firehose Jun20-23 tapes lack Birdeye basePrice/quotePrice — entry_features()
+        returns empty for firehose items (structural incompatibility, confirmed).
+    (b) vps_export Birdeye data has the right fields but only n=48 depth-matched
+        (copy-trigger depth, pre_sol_in>=10) entries out of 37k — too small for
+        stable statistical conclusions.
+  Therefore the FINAL selectivity proof is the LIVE SOAK.
+  Offline we establish: correct wiring + sensible/robust threshold + parity
+  characterization. That is the honest bar: "properly tested," not "proven profitable."
 
 HONEST CAVEAT:
   The lab parquets are from May-Jun (training period). Live (Jun 20+) population
-  characteristics may differ. The soak provides the evidence-accumulation phase.
-  Even at reduced selectivity, any threshold > 0 on this bimodal model will be
-  selective. The gate gets curvestage to 'properly tested', NOT 'proven profitable'.
+  characteristics may differ. The live-percentile gate is robust to any magnitude of
+  train/serve skew. The soak provides the evidence-accumulation phase.
 """
 from __future__ import annotations
 
