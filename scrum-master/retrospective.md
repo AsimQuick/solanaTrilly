@@ -677,5 +677,15 @@ The goal was to OPEN the epic and deliver it observe-complete in the SPEC's mand
 - **Token spend / cost:** see `../project-state.json` (owned by Project Lead — not reproduced here)
 - **Retrospective carry-over:** **K1 ACTIONED** (the Copy-Trade Dashboard v1 epic OPENED + delivered observe-complete; LIVE out of scope → L1) · **K2 STILL UNBLOCKED** (the soak; operator-driven → L3) · **K3 PENDING** (the endgame, gated behind the soak → L4) · **K4 PARTIALLY ACTIONED** (async-safety guard added for the copytrade consumer via AC-59.2; generalize project-wide → L2) · **K5 STILL FORWARD-PLANNED** (the P8 execution path — now the explicit blocker for copy-trade LIVE → L1; the P8-dependent dashboard views → L5)
 
+
+## Change Requests
+_Log of mid-sprint scope changes, new tools, or library additions with impact notes (PO-approved). One row per request._
+
+| Sprint | Request | Impact | Approved By | Status |
+|--------|---------|--------|-------------|--------|
+| sprint-15 | **CLEAN RESET (process + scope change).** Abandon the hotfix-PR style (half-applied fixes, untraceable landings, fake/inflated dashboard PnL) and return to structured user stories + a Tester quality gate + a Dev-Team loop. PURGE the VPS and re-deploy ONLY `models/trilly_pregrad_v6` + `models/copy_2026-06-22_curvestage`, observe-only, $25, `trading_enabled=FALSE` (never flipped). Sequenced fix-validate-locally-then-purge (A→B→C→D). | HIGH/structural. Supersedes the live-hotfix workflow used #354–#392 and the untracked capital-path EPIC (deferred — observe-only). NO CREDITS: firehose budget (6 Birdeye + 6 Helius) untouched; all testing offline against the local Jun 20–23 tapes + the free cum-vol_sol≥85 graduation label. Anti-hotfix gate: every Phase-A/B story carries a reproducible local proof; the purge is blocked until all are GREEN. | PO (operator-directed) | approved — planned as sprint-15 (`sprint15.json`) |
+| sprint-15 | **Tool additions (local, free):** salvage the VPS-`/tmp`-only diagnostic probes `gate_fidelity.py` + `resettle.py` into the repo (US-80); add a local firehose validation harness (parser + free grad labeler + `vol_sol × SOL_price` dollar basis, US-81); stage the `trilly_pregrad_v6` artifact into the repo `models/` tree (US-87). | LOW. No new runtime libraries; reuses existing `LakeReader`/`fill_repricing.py`; harness is test-scoped. The probes are unrecoverable once the purge runs → must land in Phase A. | PO | approved |
+| sprint-15 | **Detector reconciliation:** definitively replace the `Instruction: Migrate` substring detector (mis-fires on `MigrateBondingCurveCreator`, ~99% false positives) with MigrateV2 + PumpSwap `CreatePool`; supersede the partial hotfixes #389–#392 and the two graduation EPIC drafts (US-86). | HIGH (foundational). All pre-fix scored tokens + model-edge reads recorded INVALID; the clean deploy MUST ship the corrected detector or live judging is impossible from day one. Verified offline (banked frames) — zero credits. | PO | approved |
+
 ---
 *After editing any `/scrum-master/` doc, re-index with `mcp__devrag__reindex_document` (project convention).*

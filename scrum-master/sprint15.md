@@ -1,7 +1,7 @@
 # Sprint 15 — CLEAN RESET
 
 **Phase:** planning
-**Progress:** 0/12 stories | 0/36 ACs
+**Progress:** 0/13 stories | 0/39 ACs
 **Last Updated:** 2026-06-23
 
 ## Sprint Goal
@@ -15,9 +15,10 @@ Replace the failed **hotfix-PR style** (half-applied fixes, untraceable landings
 
 **Hard constraints (LOCKED — do not re-litigate):**
 - **NO CREDITS** — Helius/Birdeye/Dune OFF for the entire sprint. All testing uses the LOCAL Jun 20–23 tapes only (already pulled, byte-exact vs VPS, at `/Users/asim/NoIcloud/solanatrills/lake/firehose/dt=2026-06-2{0,1,2,3}/part-0.jsonl.gz`). The firehose budget (6 Birdeye + 6 Helius) is UNTOUCHED. Dune is 402/out-of-credits on both keys. REAFFIRMED across ALL stories: any AC implying a credit spend is redesigned around the local Jun 20–23 tapes + the local fixtures already on hand (`lake/golden/*`, `/Users/asim/NoIcloud/solanabilly3/data/graduated/seed_recent.csv`, recorder logs/frames), or explicitly DEFERRED. Vendor escalation requires explicit operator re-authorization.
-- **FREE GRADUATION LABELS** — the firehose is bonding-curve-only (`phase` ~100% "pre"); graduation = cumulative buy `vol_sol` ≥ ~85 SOL. Zero-credit, full-population ground truth for the whole window.
-- **DOLLAR BASIS** — `vol_usd` is ALL ZERO; every dollar quantity (curve_frac, the $250 filter, fill_repricing) derives from `vol_sol × SOL_price` (~$84/SOL this window), NEVER `vol_usd`.
-- **BAD LINES** — ~2–10%/day are unparseable partial writes → skip-and-count-and-flag, never fatal.
+- **FREE GRADUATION LABELS** — the firehose captures BOTH bonding-curve (`phase:pre`) AND post-grad (`phase:post`) swaps (Jun-22 alone has ~38k post rows, `rel`=seconds-since-grad 0–2918s; earlier "post not captured / only ~13 grads" claims were WRONG). The offline graduation LABEL = cumulative buy `vol_sol` ≥ ~85 SOL computed from the PRE rows. Zero-credit, full-population, for the whole window.
+- **DOLLAR BASIS (per-phase)** — `vol_usd` is ALL ZERO on **PRE rows only** (the bug is pre-only); PRE dollars (curve_frac, the $250 filter) derive from `vol_sol × SOL_price` (~$84/SOL), NEVER `vol_usd`. **POST rows already carry a populated `vol_usd`.**
+- **CRITICAL GAP (US-92)** — POST rows carry **NO `mint`/pool/pair** (keys: `block_time, slot, signature, rel, price, side, vol, vol_usd, owner, phase`), so post-grad fills are **UNATTRIBUTABLE to a token offline**. The recorder must emit `mint` on every post row, else the live recorder can NEVER self-validate model PnL or the copy ride-to-grad exit via `fill_repricing.py`. **US-92 gates US-89 (deploy) + US-91 (soak).**
+- **BAD LINES** — ~2–10%/day are genuinely unparseable partial writes → skip-and-count-and-flag, never fatal. NOTE: `phase:post` rows are **VALID** (different schema, no `mint`/`vol_sol`), NOT corruption — count them as `post`, never as bad lines.
 - **MODEL TRACK = OBSERVE + PARITY-ONLY** — ship v6 observe-only; validate ONLY feature/scoring PARITY locally (live `entry_features` vs lab parquets). v6 post-grad PnL is OUT OF SCOPE (a separate Birdeye backtest agent owns it, already done Jun 20–21; the live recorder confirms later).
 - **SAFETY GATE** — `trading_enabled` DEFAULT False, NEVER flipped; ZERO real orders / ZERO capital; the live RPC/Sender send boundary present but NEVER invoked (AST-guarded); §5 copy-trade isolation PRESERVED; solanaBilly UNTOUCHED on 8001; every docker op scoped `-p solanatrilly`.
 - **ANTI-HOTFIX MECHANISM** — every Phase-A/B story's DoD includes a **reproducible local validation** (against the Jun 20–23 tapes or a golden/regression fixture) that **PROVES the fix landed**. No story is "done" on "works locally" hand-waving. The local-proof gate is what **unblocks the Phase-C purge**.
@@ -72,16 +73,17 @@ Replace the failed **hotfix-PR style** (half-applied fixes, untraceable landings
 | US-86 | B-model | FOUNDATIONAL: decide the graduation detector by MATCH-RATE vs completeevent ground truth (`seed_recent.csv`, FREE/local) — score BOTH candidates (substring vs MigrateV2+CreatePool) offline over local fixtures, ship the higher precision/recall; kills the near-zero post-grad tagging | critical | — | 3 | draft |
 | US-87 | B-model | Confirm v6 stack wired (v4 SELECTION × v5 EXIT × depth-gated SIZING @ $25 flat) + banks loaded; PROVE feature/scoring PARITY locally (NOT post-grad PnL) | high | US-81 | 3 | draft |
 | US-88 | B-model | Carry-forward verification: prove #386 (truncation+floor) and #381/#382 (post-grad entry-tape recovery) survive INTACT into the clean deploy | high | US-87 | 3 | draft |
-| US-89 | C | ONE clean VPS purge (all old models/formulas/positions/half-applied fixes) then deploy ONLY v6 + curvestage via CD, observe-only/$25/`trading_enabled=FALSE` | critical | US-80…US-88 | 3 | draft |
+| US-92 | B-recorder | CRITICAL: post-grad firehose rows must carry the token MINT — recorder writes post rows with NO mint, so post-grad fills are unattributable offline and the live recorder can NEVER self-validate model PnL / copy ride-to-grad exit | critical | US-81 | 3 | draft |
+| US-89 | C | ONE clean VPS purge (all old models/formulas/positions/half-applied fixes) then deploy ONLY v6 + curvestage via CD, observe-only/$25/`trading_enabled=FALSE` | critical | US-80…US-88, US-92 | 3 | draft |
 | US-90 | C | Fresh HONEST dashboard: fix click-to-copy + pagination (required) + WIRE PnL to `fill_repricing.py` (required); UTC→Dubai time OPTIONAL/nice-to-have | high | US-80, US-89 | 3 | draft |
-| US-91 | D | Observe soak both tracks ($25, `trading_enabled=FALSE`), judged EXCLUSIVELY by `fill_repricing.py`; define soak exit criteria + kill-switches | high | US-89, US-90 | 3 | draft |
+| US-91 | D | Observe soak both tracks ($25, `trading_enabled=FALSE`), judged EXCLUSIVELY by `fill_repricing.py`; define soak exit criteria + kill-switches | high | US-89, US-90, US-92 | 3 | draft |
 
-> **Scope:** sprint-15 commits **12 stories / 36 ACs** — a deliberately larger "clean reset" sprint, but strictly **sequenced A→B→C→D** with a hard local-proof gate before the purge. Source of truth: [`sprint15.json`](sprint15.json). **NO CREDITS — the firehose budget (6 Birdeye + 6 Helius) is UNTOUCHED; all testing is offline against the local Jun 20–23 tapes + the free cum-vol_sol≥85 graduation label.**
+> **Scope:** sprint-15 commits **13 stories / 39 ACs** — a deliberately larger "clean reset" sprint, but strictly **sequenced A→B→C→D** with a hard local-proof gate before the purge. Source of truth: [`sprint15.json`](sprint15.json). **NO CREDITS — the firehose budget (6 Birdeye + 6 Helius) is UNTOUCHED; all testing is offline against the local Jun 20–23 tapes + the free cum-vol_sol≥85 graduation label.**
 
 **Build order:**
 1. **Phase A (US-80, US-81)** runs FIRST and is the foundation. US-80 (salvage the VPS-`/tmp`-only probes — UNRECOVERABLE once the purge runs) and US-81 (the local harness: parser + free grad labeler + dollar basis) are independent and may run in parallel; every other story imports US-81.
-2. **Phase B** runs after A. **COPY:** US-82 (the EDGE — classifier recalibration) → US-85 (re-soak + kill-switch); US-83 (settler honesty, depends on US-86) and US-84 (weekly retrain) in parallel where deps allow. **MODEL:** US-86 (FOUNDATIONAL graduation-detector fix — also feeds US-83) is independent and high-priority; US-87 (v6 wired + parity) → US-88 (carry-forward verification). Phase-B stories that touch the same shared modules (`run_firehose.py`, `curvestage_engine`) run **serially through the shared tree**.
-3. **Phase C (US-89, US-90)** is GATED on ALL Phase-A/B local-proofs GREEN. US-89 (purge + clean deploy of ONLY v6 + curvestage) then US-90 (fresh honest dashboard wired to `fill_repricing.py`).
+2. **Phase B** runs after A. **COPY:** US-82 (the EDGE — classifier recalibration) → US-85 (re-soak + kill-switch); US-83 (settler honesty, depends on US-86) and US-84 (weekly retrain) in parallel where deps allow. **MODEL:** US-86 (FOUNDATIONAL graduation-detector fix — also feeds US-83) is independent and high-priority; US-87 (v6 wired + parity) → US-88 (carry-forward verification). **RECORDER:** US-92 (CRITICAL — post rows must carry `mint`) is independent and **gates US-89 + US-91** (a mint-less post tape can never be settled by `fill_repricing.py`). Phase-B stories that touch the same shared modules (`run_firehose.py`, `tape_sink.py`, `curvestage_engine`) run **serially through the shared tree**.
+3. **Phase C (US-89, US-90)** is GATED on ALL Phase-A/B local-proofs GREEN — **including US-92** (post rows attributable to a token; without it the deploy ships a self-validation that can never run). US-89 (purge + clean deploy of ONLY v6 + curvestage) then US-90 (fresh honest dashboard wired to `fill_repricing.py`).
 4. **Phase D (US-91)** is the observe soak on the clean deploy, judged exclusively by `fill_repricing.py`, with the kill-switches armed. Capital / live-flip / the model size-ramp remain OPERATOR-DRIVEN and OUT OF SCOPE.
 
 ## Reconciliation with existing untracked EPIC drafts

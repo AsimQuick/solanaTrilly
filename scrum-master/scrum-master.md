@@ -2,7 +2,7 @@
 file: scrum-master.md
 purpose: Current sprint status board + controlled vocabulary for solanaTrilly
 owner: product-owner
-last-updated: 2026-06-18 (sprint-14 PLANNED — FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE: M2 pre-deploy built-image import smoke (US-71) + the last two PRD §13.2 dashboard views (US-72 Calibration & PnL, US-73 Replay viewer overlay) + status-integrity-at-the-source (US-74); M1/US-70 deploy gate ALREADY CLOSED on main via PR #296; ZERO capital, ZERO real orders, ZERO firehose)
+last-updated: 2026-06-23 (sprint-15 PLANNED — CLEAN RESET: replace the failed hotfix-PR style with structured stories + Tester gate + Dev-Team loop; fix-validate-LOCALLY-then-PURGE the VPS; deploy ONLY trilly_pregrad_v6 + copy_2026-06-22_curvestage, observe-only / $25 / trading_enabled=FALSE; judge by fill_repricing.py firehose-reconstructed fills, NEVER the dashboard; NO CREDITS — all testing offline against the local Jun 20–23 tapes + the free cum-vol_sol≥85 graduation label; ZERO capital, ZERO real orders, firehose budget untouched)
 -->
 
 # solanaTrilly — Scrum Master Board
@@ -56,6 +56,37 @@ last-updated: 2026-06-18 (sprint-14 PLANNED — FINISH THE LAST AGENT-BUILDABLE 
 > not sprint stories) — so **sprint-10 OPENS P6, the FOUNDATIONAL research-first dashboard (PRD §13)**, the
 > last unbuilt PRD pillar, and closes the two agent-actionable sprint-9 carries (**I1** clean US-43
 > redeploy, **I4** the AI-agent ruff gate). See **[`sprint10.json`](sprint10.json)**.
+
+## Sprint-15 — CLEAN RESET: structured stories + Tester gate + Dev-Team loop; fix-validate-LOCALLY-then-PURGE; deploy ONLY trilly_pregrad_v6 + copy_2026-06-22_curvestage observe-only ($25, trading_enabled=FALSE); judge by fill_repricing.py — PLANNED
+- **Phase:** planning
+- **Sprint plan (source of truth):** [`sprint15.json`](sprint15.json) (human mirror: [`sprint15.md`](sprint15.md))
+- **Why this sprint:** the hotfix-PR style failed (half-applied fixes, untraceable landings, fake/inflated dashboard PnL proven to reconstruct to ~break-even/negative on the real firehose). This sprint replaces it with the structured PO→Tester→Dev loop and does ONE clean reset: salvage the VPS-only judge/diagnostic probes, build a LOCAL validation harness over the Jun 20–23 firehose tapes, PROVE every copy + model fix locally, then ONE clean `-p solanatrilly`-scoped purge + a clean CD deploy of ONLY the two artifacts with fixes baked in + a fresh HONEST dashboard, then an observe soak judged ONLY by `fill_repricing.py`.
+- **Sprint goal:** (A) salvage `gate_fidelity.py`/`resettle.py` + confirm `fill_repricing.py` canonical + stand up the local harness (skip-and-count parser, FREE cum-vol_sol≥85 graduation labeler, `vol_sol × SOL_price` dollar basis); (B-copy) recalibrate the curvestage P(grad) gate to the live top-25% + train/serve parity + honest settler (ground-truth graduation) + weekly-retrain wiring + re-soak harness/kill-switch; (B-model) the FOUNDATIONAL graduation-detector fix (MigrateV2 + PumpSwap CreatePool; kill the `Instruction: Migrate` substring false-positive) + confirm v6 (v4 SELECTION × v5 EXIT × depth-gated SIZING @ $25 flat) wired with banks loaded + PROVE feature/scoring PARITY locally (NOT post-grad PnL) + carry-forward verify #386 + #381/#382; (C) ONE clean purge + deploy ONLY v6 + curvestage + a fresh honest dashboard (click-to-copy, pagination, UTC→Dubai, PnL wired to `fill_repricing.py`); (D) observe soak both tracks judged by `fill_repricing.py` with kill-switches armed. **SAFETY GATE (non-negotiable):** `trading_enabled` DEFAULT False and NEVER flipped; ZERO capital / ZERO real orders; §5 copy-trade isolation PRESERVED; solanaBilly UNTOUCHED on 8001 (purge scoped `-p solanatrilly` only). **NO CREDITS** — Helius/Birdeye/Dune OFF the entire sprint; all testing offline against the local Jun 20–23 tapes; the firehose budget (6 Birdeye + 6 Helius) is UNTOUCHED. **ANTI-HOTFIX MECHANISM:** every Phase-A/B story carries a reproducible LOCAL proof; the Phase-C purge is BLOCKED until all are GREEN.
+
+## Stories (sprint-15 — committed scope)
+| ID | Phase | Title | Priority | Deps | ACs | Status |
+|----|-------|-------|----------|------|-----|--------|
+| US-80 | A | SALVAGE VPS-only probes (gate_fidelity.py, resettle.py) into the repo BEFORE purge + confirm fill_repricing.py canonical | critical | — | 3 | draft |
+| US-81 | A | LOCAL validation harness over Jun 20–23 tapes: skip-and-count parser + FREE grad labeler (cum vol_sol ≥ ~85) + vol_sol × SOL_price dollar basis | critical | — | 3 | draft |
+| US-82 | B-copy | Classifier calibration/parity: G2 parity table + find P(grad) inflation + recalibrate gate-3 to LIVE top-25% (prove selective) | critical | US-81 | 3 | draft |
+| US-83 | B-copy | Settler honesty: graduation from GROUND TRUTH (live = corrected on-chain detector US-86; offline = cum-vol_sol≥85) | high | US-81, US-86 | 3 | draft |
+| US-84 | B-copy | Wire the weekly retrain on the recorder's OWN on-curve tapes (date-gated no-op until ≥7 days) | medium | US-81, US-82 | 3 | draft |
+| US-85 | B-copy | Re-soak validation harness + kill-switch (selected grad-rate < 40% over ≥15 trades); judge by honest-fill re-settle | high | US-82, US-83 | 3 | draft |
+| US-86 | B-model | FOUNDATIONAL: decide the graduation detector by MATCH-RATE vs completeevent ground truth (seed_recent.csv, FREE/local) — score BOTH candidates (substring vs MigrateV2+CreatePool) offline over local fixtures, ship higher precision/recall | critical | — | 3 | draft |
+| US-87 | B-model | Confirm v6 stack wired (v4 SELECTION × v5 EXIT × depth-gated SIZING @ $25 flat) + banks loaded; PROVE parity locally (NOT post-grad PnL) | high | US-81 | 3 | draft |
+| US-88 | B-model | Carry-forward verify: #386 (truncation+floor) + #381/#382 (post-grad entry-tape recovery) survive INTACT into the clean deploy | high | US-87 | 3 | draft |
+| US-92 | B-recorder | CRITICAL: post-grad firehose rows must carry the token MINT (post rows have NO mint → fills unattributable offline → live recorder can't self-validate model PnL / copy exit). GATES US-89 + US-91 | critical | US-81 | 3 | draft |
+| US-89 | C | ONE clean VPS purge then deploy ONLY v6 + curvestage via CD, observe-only/$25/trading_enabled=FALSE | critical | US-80…US-88, US-92 | 3 | draft |
+| US-90 | C | Fresh HONEST dashboard: click-to-copy + pagination (required) + WIRE PnL to fill_repricing.py (required); UTC→Dubai OPTIONAL | high | US-80, US-89 | 3 | draft |
+| US-91 | D | Observe soak both tracks ($25, trading_enabled=FALSE), judged EXCLUSIVELY by fill_repricing.py; define exit criteria + kill-switches | high | US-89, US-90, US-92 | 3 | draft |
+
+> **Scope:** sprint-15 commits **13 stories / 39 ACs** — a deliberately larger clean-reset sprint, strictly sequenced A→B→C→D with a hard local-proof gate before the purge. Source of truth: [`sprint15.json`](sprint15.json). **NO CREDITS — offline against the local Jun 20–23 tapes + the free cum-vol_sol≥85 label; 6 Birdeye + 6 Helius remain banked.** **DATA-PREMISE CORRECTION:** post-grad IS captured (`phase:post`, ~38k Jun-22 rows, `vol_usd` populated on post rows) but post rows carry NO `mint` → US-92 (critical) fixes the recorder to attribute them, gating US-89 + US-91. GitHub Issues: created at sprint-15 kickoff (one per story).
+
+> **GitHub Issues:** created at sprint-15 kickoff (2026-06-23), one per story —
+> [US-80 #393](https://github.com/AsimQuick/solanaTrilly/issues/393) · [US-81 #394](https://github.com/AsimQuick/solanaTrilly/issues/394) · [US-82 #395](https://github.com/AsimQuick/solanaTrilly/issues/395) · [US-83 #396](https://github.com/AsimQuick/solanaTrilly/issues/396) · [US-84 #397](https://github.com/AsimQuick/solanaTrilly/issues/397) · [US-85 #398](https://github.com/AsimQuick/solanaTrilly/issues/398) · [US-86 #399](https://github.com/AsimQuick/solanaTrilly/issues/399) · [US-87 #400](https://github.com/AsimQuick/solanaTrilly/issues/400) · [US-88 #401](https://github.com/AsimQuick/solanaTrilly/issues/401) · [US-89 #402](https://github.com/AsimQuick/solanaTrilly/issues/402) · [US-90 #403](https://github.com/AsimQuick/solanaTrilly/issues/403) · [US-91 #404](https://github.com/AsimQuick/solanaTrilly/issues/404) · [US-92 #406](https://github.com/AsimQuick/solanaTrilly/issues/406).
+> Source of truth remains [`sprint15.json`](sprint15.json).
+
+---
 
 ## Sprint-14 — FINISH THE LAST AGENT-BUILDABLE PRD/SPEC SCOPE: M2 recurrence guard (built-image import smoke) + the last two PRD §13.2 dashboard views + status-integrity-at-the-source — PLANNED
 - **Phase:** in-progress (US-70 recorded DONE before kickoff — see banner; open stories US-71/72/73/74 not started)
