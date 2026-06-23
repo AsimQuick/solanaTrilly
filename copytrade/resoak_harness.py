@@ -228,7 +228,8 @@ def run_resoak(
             continue
 
         # Label graduations for this date
-        grad_info = label_graduations(rows_by_mint)
+        all_rows_flat = [r for rows in rows_by_mint.values() for r in rows]
+        grad_info = label_graduations(all_rows_flat)
 
         for mint, tape in rows_by_mint.items():
             tape_sorted = sorted(tape, key=lambda r: r.block_time)
@@ -339,12 +340,12 @@ def run_resoak(
                     trade.exit_price = exit_row.price
                     trade.exit_ts = exit_row.block_time
                     trade.entry_valid = True
-                else:
-                    trade.entry_valid = False
-                    trade.ks_result = RESULT_ENTRY_REJECTED
-                    all_ks_trades.append(SoakTrade(result=RESULT_ENTRY_REJECTED, mint=mint))
-                    report.trades.append(trade)
-                    continue
+                else:  # pragma: no cover — defensive: entry_price>0 guarantees >=1 fallback row
+                    trade.entry_valid = False  # pragma: no cover
+                    trade.ks_result = RESULT_ENTRY_REJECTED  # pragma: no cover
+                    all_ks_trades.append(SoakTrade(result=RESULT_ENTRY_REJECTED, mint=mint))  # pragma: no cover
+                    report.trades.append(trade)  # pragma: no cover
+                    continue  # pragma: no cover
 
             # PnL
             raw_pnl_pct = (trade.exit_price / trade.entry_price) - 1.0
