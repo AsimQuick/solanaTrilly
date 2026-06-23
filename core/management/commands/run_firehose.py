@@ -3,7 +3,7 @@
 # sprint: epic-tape-sourcing-escalation
 # story: EPIC-tape-sourcing-escalation Tier 2 + Tier 3,
 #        hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution,
-#        hotfix-grad-liveness-watchdog
+#        hotfix-grad-liveness-watchdog, hotfix-firehose-drain-and-fairness
 # status: fixed
 # created-by: dev-team
 # last-updated: 2026-06-23
@@ -122,6 +122,23 @@ DEFAULT_POSTGRAD_TICK_S = 5.0
 #: AC-3: how often the durable tape sink is flushed to the lake off the hot path.
 DEFAULT_TAPE_FLUSH_INTERVAL_S = 10.0
 DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
+
+# ---------------------------------------------------------------------------
+# Terminalization deadline constants (Fix 1 — infinite re-scan drain)
+# ---------------------------------------------------------------------------
+
+#: Grace buffer added to (score_at_elapsed_s + outcome_window_s) before a
+#: thin/no-tape DETECTED token is terminalized.  This gives Tier-2 + Tier-3
+#: backfill (lake scan + Birdeye REST) adequate time to land swaps and for the
+#: result to be observed on at least one tick.
+#:
+#: Rationale: the outcome window is typically ~1800 s; adding 600 s (10 min)
+#: ensures the backfill tasks (which are async fire-and-forget) have completed
+#: and the result has been observed by at least one score tick before we give up.
+#: This is deliberately conservative: a grad that is still DETECTED 40 min past
+#: its outcome window close with <20 swaps will NEVER score; terminalizing it
+#: immediately on the deadline is safe.
+_TERMINALIZE_GRACE_S: int = 600  # 10 minutes extra grace after window close
 
 # ---------------------------------------------------------------------------
 # Graduation-liveness watchdog constant
@@ -1929,6 +1946,18 @@ class FirehoseDaemon:
         _MAX_BACKFILL_DISPATCH_PER_TICK = 4
         backfills_dispatched = 0
 
+        # Terminalization deadline (Fix 1): grad_bt + score_at + outcome_window
+        # + _TERMINALIZE_GRACE_S.  After this epoch a DETECTED token that still
+        # lacks a scoreable tape (< 20 swaps) is definitively un-scoreable and
+        # should be marked SKIPPED so it is never re-scanned.  We compute the
+        # deadline from scoring context once per tick.
+        now_epoch = self._clock.now().timestamp()
+        _terminate_deadline_offset = (
+            scoring["score_at_elapsed_s"]
+            + scoring["outcome_window_s"]
+            + _TERMINALIZE_GRACE_S
+        )
+
         for mint, graduated_block_time in due:
             # Gate already passed this session → the paper leg is time-deferred to
             # the outcome-window close (handled in _settle_due_pending after this
@@ -1959,6 +1988,31 @@ class FirehoseDaemon:
                     swaps, graduated_block_time, sol_usd_spot=sol_usd
                 )
             if features is None:
+                # Fix 1 — terminalize past-deadline thin/no-tape tokens.
+                #
+                # Guard: only terminalize if backfill has had a fair chance.
+                # A FRESH token (past_deadline=False) always takes the defer
+                # path below so Tier-2 and Tier-3 can land their swaps.
+                # Once the deadline (score_at + outcome_window + grace) has
+                # elapsed, the token is definitively un-scoreable regardless
+                # of how many swaps it has (< 20 fails the secondary gate and
+                # that will never improve for a finished bonding curve).
+                # Marking SKIPPED drains it from future ticks immediately.
+                past_deadline = now_epoch > (graduated_block_time + _terminate_deadline_offset)
+                if past_deadline:
+                    # Definitively un-scoreable: terminate.
+                    self._scored_mints.add(mint)
+                    await sync_to_async(
+                        self._set_token_status_sync, thread_sensitive=True
+                    )(mint, "SKIPPED")
+                    logger.info(
+                        "%s score: mint=%s past deadline (%d swaps, need ≥20) "
+                        "— marking SKIPPED (terminalized, will not re-scan).",
+                        LOG_PREFIX, mint, len(swaps),
+                    )
+                    continue
+
+                # Not past deadline: standard defer / backfill dispatch path.
                 # Tier-2 lake backfill: if the buffer is empty AND we have not
                 # already dispatched a lake scan for this mint this session,
                 # fire-and-forget a task that reads the firehose lake and
@@ -2308,6 +2362,20 @@ class FirehoseDaemon:
         The data migration (0014_backfill_scored_token_status) ensures legacy Token
         rows that already have an associated Prediction are set to status=SCORED
         before this filter is applied, so old soaked tokens are also excluded.
+
+        BOUNDED SET (Fix 1):
+        Only DETECTED tokens within a recency window are scoring candidates.
+        The window is score_at_elapsed_s + outcome_window_s + _TERMINALIZE_GRACE_S:
+        any token graduated more than this many seconds ago that is still DETECTED
+        has missed both backfill windows and its outcome window.  These are
+        zombie rows; they are excluded here so the per-tick set stays bounded
+        even when the DB has a large un-terminalized backlog.  The terminalization
+        itself happens in _score_tick once the deadline is confirmed per token.
+
+        NEWEST-FIRST (Fix 2):
+        Due tokens are returned newest-grad-first so the per-tick backfill dispatch
+        cap (4/tick) goes to the freshest tokens, not the oldest backlog entries.
+        This prevents a large backlog from starving fresh graduations of their tape.
         """
         from core.models import Token
         from core.resolver import get_active_config
@@ -2316,22 +2384,37 @@ class FirehoseDaemon:
         if config is None:
             return []
         score_at = config.scoring.score_at_elapsed_s
+        outcome_window = config.outcome.window_s
         now = self._clock.now()
+        now_epoch = int(now.timestamp())
+
+        # Deadline in seconds from graduation: after this a DETECTED token that
+        # still has no scoreable tape is terminalized.  The bound below filters
+        # the candidate set to this window so the per-tick scan stays O(recent).
+        deadline_s = score_at + outcome_window + _TERMINALIZE_GRACE_S
+
         due: list[tuple[str, int]] = []
         graduated: set[str] = set()
-        # Scan ALL Token rows to refresh the graduated-mint set (protects
-        # collection buffer idle-kill), but ONLY include status=DETECTED tokens
-        # as scoring candidates.
+
+        # Refresh the graduated-mint set from ALL Token rows (needed for the
+        # collection buffer's idle-kill protection — do not restrict this scan).
         for tok in Token.objects.all():
             graduated.add(tok.mint)
-            # Skip already-scored or definitively no-tape tokens (restart-safety).
-            if tok.status in (Token.STATUS_SCORED, Token.STATUS_SKIPPED):
-                continue
+        self._graduated_mints = graduated
+
+        # Scoring candidates: status=DETECTED, within the recency window,
+        # ordered NEWEST-first (graduated_block_time DESC) so the dispatch cap
+        # serves fresh tokens before backlog tokens.
+        cutoff_bt = now_epoch - deadline_s
+        for tok in (
+            Token.objects
+            .filter(status=Token.STATUS_DETECTED, graduated_block_time__gt=cutoff_bt)
+            .order_by("-graduated_block_time")
+        ):
             if tok.mint in self._scored_mints:
                 continue
             if score_time_reached(tok.graduated_at, score_at, now):
                 due.append((tok.mint, int(tok.graduated_block_time)))
-        self._graduated_mints = graduated
         return due
 
     def _build_scoring_context_sync(self):
