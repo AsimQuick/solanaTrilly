@@ -2678,11 +2678,15 @@ class FirehoseDaemon:
         if config is not None:
             detection_dict = config.detection.model_dump()
 
-        # Apply min_liquidity floor to cut non-pump-fun AMM noise.
-        # Real pump.fun grads exit with ≥$7k; 5000 USDC is a safe floor.
-        if not detection_dict.get("graduation_min_liquidity"):
-            detection_dict = dict(detection_dict)
-            detection_dict["graduation_min_liquidity"] = 5000
+        # Capture ALL pump.fun graduations: rely on the source=="pump_amm" filter
+        # to cut non-pump pairs, NOT a liquidity floor.  The prior 5000-USDC floor
+        # assumed grads "exit with ≥$7k", but a Birdeye NEW_PAIR frame carries
+        # liquidity at pool-CREATION time (~$140 observed live, before the ~85-SOL
+        # grad liquidity is deposited), so ANY floor above ~$140 rejected EVERY real
+        # graduation — the backstop caught nothing (observed: "liquidity=140 < 5000")
+        # and contributed zero gap-fill during the 2026-06-23 detection outage.
+        detection_dict = dict(detection_dict)
+        detection_dict["graduation_min_liquidity"] = 0
 
         source = BirdeyeGraduationSource(
             api_key=birdeye_api_key,
