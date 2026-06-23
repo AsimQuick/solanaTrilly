@@ -169,8 +169,17 @@ _ALLOWED_FUNCTION = "now"  # method name inside WallClock
 # The Redis token-bucket rate limiter (core/rate_limiter.py) legitimately needs
 # wall-clock time to compute elapsed seconds for token refill — this is NOT
 # pipeline domain logic and is NOT subject to the injected-clock seam (AC-24.4).
+#
+# GraduationLivenessWatchdog in run_firehose.py uses time.time() in two methods:
+#   _poll_once — computes no-progress duration and resets the progress clock
+#   start      — initialises _last_progress_at to now() on every startup
+# The watchdog is a threading.Thread that runs OUTSIDE the asyncio event loop by
+# design (immune to loop starvation); it therefore CANNOT use the daemon's
+# injected Clock seam (which is asyncio-bound).  This is intentional
+# infrastructure usage, not a pipeline domain clock read.
 _TIME_TIME_ALLOWED: dict[Path, set[str]] = {
     CORE_ROOT / "rate_limiter.py": {"acquire"},
+    CORE_ROOT / "management" / "commands" / "run_firehose.py": {"_poll_once", "start"},
 }
 
 

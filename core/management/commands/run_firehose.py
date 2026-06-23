@@ -2,11 +2,12 @@
 # module: core.management.commands.run_firehose
 # sprint: epic-tape-sourcing-escalation
 # story: EPIC-tape-sourcing-escalation Tier 2 + Tier 3,
-#        hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution
+#        hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution,
+#        hotfix-grad-liveness-watchdog
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-22
-# dependencies: django, asyncio, logging, signal, asgiref,
+# last-updated: 2026-06-23
+# dependencies: django, asyncio, logging, signal, asgiref, os, threading, time,
 #               core.tape.birdeye_graduation_source, core.tape.birdeye_swap_source,
 #               core.tape.birdeye_swap_mapper, core.tape.helius_birth_tape_source,
 #               core.management.commands.run_listener, core.detection.consumer,
@@ -81,16 +82,21 @@ live source in the test path.
 
 CLOCK (AC-2.2)
 ==============
-There is NO datetime.now()/time.time() in this module.  All "now" for the
-post-grad TTL (and scoring schedule) comes from the injected daemon clock; the
-asyncio event-loop clock (loop.time()) is used only for cooperative sleeping,
-never as a wall-clock timestamp.
+Pipeline domain code (post-grad TTL, scoring schedule) uses the injected daemon
+clock exclusively; the asyncio event-loop clock (loop.time()) is used only for
+cooperative sleeping.  The GraduationLivenessWatchdog is the sole exception: it
+is a threading.Thread that runs OUTSIDE the asyncio event loop (immune to loop
+starvation) and deliberately uses time.time() for wall-clock staleness tracking.
+Its time.time() calls are explicitly allowlisted in core/tests/test_clock.py.
 """
 import asyncio
 import json
 import logging
+import os
 import signal
 import sys
+import threading
+import time
 from pathlib import Path
 
 from asgiref.sync import sync_to_async
@@ -117,6 +123,22 @@ DEFAULT_POSTGRAD_TICK_S = 5.0
 DEFAULT_TAPE_FLUSH_INTERVAL_S = 10.0
 DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
 
+# ---------------------------------------------------------------------------
+# Graduation-liveness watchdog constant
+# ---------------------------------------------------------------------------
+
+#: If firehose_active=True and no graduation has been persisted in this many
+#: seconds, the graduation-liveness watchdog fires CRITICAL + recovers by
+#: exiting the process (Docker restart policy recreates it).
+#:
+#: Calibration rationale: live graduation rate is ~8/hour = ~1 every 7.5 min.
+#: A 30-minute gap (4× the expected inter-graduation interval) is definitively
+#: anomalous — the detection path is dead, not just slow.  This constant is
+#: deliberately conservative to avoid false positives during genuine quiet
+#: periods (weekends / low market activity) while still catching the 7-hour
+#: silent-death incident that motivated this watchdog.
+GRAD_STALE_SECONDS: int = 1800  # 30 minutes
+
 #: Post-grad paper-settle window-close recovery.  A gate-passing token's paper leg
 #: is DEFERRED until the full outcome window has elapsed (wall-clock), then settled
 #: over a SINGLE fresh Birdeye REST fetch of the whole [entry-gap,
@@ -126,6 +148,262 @@ DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
 #: seconds past entry) and silently misses the real later TAKE_PROFIT / RUG_PULL.
 #: The quote-window floor offset (entry-30) matches the settler's pre-entry quote.
 _POSTGRAD_REST_QUOTE_GAP_S = 30
+
+
+# ---------------------------------------------------------------------------
+# Graduation-liveness watchdog — threading.Thread, NOT asyncio
+# ---------------------------------------------------------------------------
+
+
+class GraduationLivenessWatchdog:
+    """Out-of-band watchdog that detects a dead graduation-detection path.
+
+    WHY A THREAD, NOT AN ASYNCIO TASK
+    ==================================
+    The watchdog must survive event-loop starvation — the exact failure mode we
+    are guarding against.  If the loop is jammed (backfill semaphore pressure,
+    slow DB in sync_to_async, WS pump backed up) an asyncio task running on the
+    same loop can be delayed for minutes, defeating the watchdog's purpose.
+
+    A ``threading.Thread`` with a ``time.sleep`` loop is entirely outside the
+    asyncio event loop.  It fires on wall-clock time regardless of loop pressure,
+    making it structurally immune to the starvation scenario we observed live.
+
+    RECOVERY: os._exit(1)
+    ======================
+    ``os._exit(1)`` is the correct recovery mechanism here:
+      1. It bypasses Python's exception machinery and all atexit handlers —
+         the process dies *immediately*, not "eventually after cleanup".
+      2. Docker's ``restart: unless-stopped`` (confirmed present in
+         ``docker-compose.staging.yml`` for ``inference_engine``) recreates the
+         container automatically.  ``firehose_active`` is persisted in Postgres
+         so the daemon self-resumes on restart without operator intervention.
+      3. In-process "restart" surgery (cancelling + recreating the _helius_loop
+         task, reconnecting the WS, re-draining queues) is fragile and has been
+         confirmed not to work: pausing scoring did NOT revive detection in the
+         live incident — the only proven recovery was a container restart.
+
+    ``os._exit`` is chosen over ``sys.exit`` because the latter raises
+    ``SystemExit`` which can be caught by any outer try/except and silently
+    absorbed.  ``os._exit`` is unconditional.
+
+    PROGRESS-BASED STALENESS — avoiding the restart-loop trap
+    ==========================================================
+    A naive "fire if MAX(graduated_at) > stale_seconds ago" check has a
+    critical flaw: on every daemon restart after a real outage (the exact
+    recovery scenario), the last graduation in the DB is hours old.  The
+    watchdog would fire os._exit immediately — before detection has its
+    ~7.5 min grace to produce a fresh graduation — causing Docker to restart
+    the container, which immediately sees the same stale MAX and fires again,
+    producing an INFINITE RESTART LOOP.
+
+    The fix: track PROGRESS, not an absolute age.
+
+      - On ``start()``, record ``_last_progress_at = time.time()`` (the
+        startup wall-clock).
+      - Track ``_last_seen_max_epoch``: the MAX(graduated_at) epoch seen on
+        the PREVIOUS poll cycle (None initially).
+      - Each poll: read ``MAX(graduated_at)``.
+        * If it ADVANCED vs the previous value (a new graduation was
+          persisted), set ``_last_progress_at = now``.
+        * If it is unchanged (or None), ``_last_progress_at`` is untouched.
+      - Fire only if ``now - _last_progress_at > stale_seconds``.
+
+    Effect:
+      - Startup / restart: ``_last_progress_at`` = now.  Even with a 2-hour-
+        old MAX in the DB, the watchdog will NOT fire for a full stale_seconds
+        (30 min) after start — giving detection plenty of time to recover.
+      - Genuine dead path: once stale_seconds elapses with no new graduation,
+        the watchdog fires exactly once and the container restarts.
+      - New graduation mid-window: resets the progress clock immediately; the
+        watchdog will not fire until stale_seconds of silence follow.
+      - Restart cadence is bounded at ~stale_seconds (30 min) per cycle —
+        never a tight loop.
+
+    DESIGN
+    ======
+    The thread polls every ``check_interval_s`` seconds.  On each poll:
+      1. Reads ``PipelineState.firehose_active`` via Django ORM.
+      2. If inactive, sleeps and retries — the watchdog does nothing while the
+         firehose is deliberately off.
+      3. Reads ``MAX(Token.graduated_at)`` (or None if no tokens exist yet).
+      4. If MAX advanced vs previous poll, updates ``_last_progress_at``.
+      5. Fires if ``now - _last_progress_at > stale_seconds``.
+
+    The ``recovery_fn`` is injectable for tests (avoids killing the test process).
+
+    Args:
+        stale_seconds:    Staleness threshold (default: GRAD_STALE_SECONDS).
+        check_interval_s: How often the thread polls (default: 60s).
+        recovery_fn:      Callable invoked on watchdog fire (default: os._exit(1)).
+                          Signature: (no_progress_for_s: float) -> None.
+                          MUST be idempotent — the thread may call it once and
+                          then block; the process should be gone before a second
+                          call can happen.
+    """
+
+    def __init__(
+        self,
+        *,
+        stale_seconds: int = GRAD_STALE_SECONDS,
+        check_interval_s: float = 60.0,
+        recovery_fn=None,
+    ) -> None:
+        self._stale_seconds = stale_seconds
+        self._check_interval_s = check_interval_s
+        self._recovery_fn = recovery_fn or self._default_recovery
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        # Progress tracking — set in start() so every restart gets a fresh window.
+        self._last_progress_at: float = 0.0  # epoch seconds; set by start()
+        self._last_seen_max_epoch: float | None = None  # MAX(graduated_at) last poll
+
+    @staticmethod
+    def _default_recovery(no_progress_for_s: float) -> None:  # pragma: no cover
+        """Default recovery: log CRITICAL and hard-exit so Docker restarts."""
+        logger.critical(
+            "[FIREHOSE] graduation-liveness-watchdog: FIRED — no new graduation "
+            "for %.0f seconds (threshold=%d). "
+            "Detection path is dead. Exiting (os._exit) so Docker restart "
+            "policy recreates the container and revives detection.",
+            no_progress_for_s,
+            GRAD_STALE_SECONDS,
+        )
+        # Flush log handlers so the CRITICAL line lands before the process dies.
+        logging.shutdown()
+        os._exit(1)  # noqa: SLF001 — intentional hard exit for container restart
+
+    @staticmethod
+    def _read_state_sync() -> tuple[bool, "object | None"]:
+        """Return (firehose_active, max_graduated_at).
+
+        Both reads are single fast queries.  max_graduated_at is a Python
+        datetime (or None if no Token rows exist yet).
+
+        The thread closes the DB connection after each poll cycle to avoid
+        holding an idle connection across long sleep intervals (Django per-thread
+        connection pooling; the connection is re-opened on the next access).
+        """
+        from django.db.models import Max
+
+        from core.models import PipelineState, Token
+
+        state = PipelineState.get()
+        firehose_active = bool(state.firehose_active)
+
+        max_grad = Token.objects.aggregate(max_graduated_at=Max("graduated_at"))["max_graduated_at"]
+
+        return firehose_active, max_grad
+
+    def _poll_once(self) -> None:
+        """One watchdog check cycle: update progress, fire if no progress for stale_seconds."""
+        try:
+            from django.db import connection
+
+            firehose_active, max_graduated_at = self._read_state_sync()
+            # Close the thread's DB connection immediately after use so we do
+            # not hold a pooled connection open across the sleep interval.
+            connection.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[FIREHOSE] graduation-liveness-watchdog: DB read failed (%s) — "
+                "skipping this check cycle.",
+                exc,
+            )
+            return
+
+        if not firehose_active:
+            # Firehose deliberately off — no graduation expected; also reset
+            # progress clock so a re-activation gets a fresh grace window.
+            self._last_progress_at = time.time()
+            self._last_seen_max_epoch = None
+            return
+
+        now = time.time()
+
+        if max_graduated_at is None:
+            # No Token rows in DB yet (daemon just started, no graduations seen).
+            # Do not fire — treat this as implicit progress (startup grace).
+            logger.debug(
+                "[FIREHOSE] graduation-liveness-watchdog: no Token rows yet — "
+                "treating as progress (startup grace).",
+            )
+            self._last_progress_at = now
+            return
+
+        # Convert the timezone-aware Django datetime to epoch seconds.
+        current_max_epoch = max_graduated_at.timestamp()
+
+        # Progress check: did MAX(graduated_at) advance since the last poll?
+        if (
+            self._last_seen_max_epoch is None
+            or current_max_epoch > self._last_seen_max_epoch
+        ):
+            # A new graduation was persisted — update progress timestamp.
+            logger.debug(
+                "[FIREHOSE] graduation-liveness-watchdog: progress — "
+                "MAX(graduated_at) advanced (prev=%.0f now=%.0f).",
+                self._last_seen_max_epoch or 0.0,
+                current_max_epoch,
+            )
+            self._last_progress_at = now
+
+        self._last_seen_max_epoch = current_max_epoch
+
+        no_progress_for_s = now - self._last_progress_at
+
+        if no_progress_for_s >= self._stale_seconds:
+            logger.critical(
+                "[FIREHOSE] graduation-liveness-watchdog: STALE — "
+                "no new graduation for %.0f seconds (threshold=%d, "
+                "firehose_active=True). Detection path appears dead. "
+                "Triggering recovery.",
+                no_progress_for_s,
+                self._stale_seconds,
+            )
+            self._recovery_fn(no_progress_for_s)
+        else:
+            logger.debug(
+                "[FIREHOSE] graduation-liveness-watchdog: OK — "
+                "no new graduation for %.0f seconds (threshold=%d).",
+                no_progress_for_s,
+                self._stale_seconds,
+            )
+
+    def _run(self) -> None:
+        """Thread main loop: poll every check_interval_s until stop() is called."""
+        logger.info(
+            "[FIREHOSE] graduation-liveness-watchdog: thread started "
+            "(stale_seconds=%d, check_interval_s=%.0f).",
+            self._stale_seconds,
+            self._check_interval_s,
+        )
+        while not self._stop_event.wait(timeout=self._check_interval_s):
+            self._poll_once()
+        logger.info("[FIREHOSE] graduation-liveness-watchdog: thread stopped.")
+
+    def start(self) -> None:
+        """Start the watchdog thread (daemon=True so it never blocks process exit)."""
+        if self._thread is not None and self._thread.is_alive():
+            return  # already running
+        self._stop_event.clear()
+        # Reset progress tracking on every start so a restart gets a fresh
+        # stale_seconds grace window (prevents the restart-loop trap).
+        self._last_progress_at = time.time()
+        self._last_seen_max_epoch = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="grad-liveness-watchdog",
+            daemon=True,  # dies with the process if normal shutdown completes first
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signal the watchdog thread to stop and wait for it to exit."""
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+            self._thread = None
 
 
 # ---------------------------------------------------------------------------
@@ -717,11 +995,43 @@ class FirehoseDaemon:
     # ------------------------------------------------------------------
 
     async def _run_active(self, deadline) -> None:
-        """Launch helius/reconciler/scoring/post-grad tasks; stop on flip/stop/deadline."""
+        """Launch helius/reconciler/scoring/post-grad tasks; stop on flip/stop/deadline.
+
+        GRADUATION-LIVENESS WATCHDOG
+        ============================
+        A GraduationLivenessWatchdog thread runs for the duration of the active
+        run.  It is a daemon threading.Thread (not asyncio) so it is immune to
+        event-loop starvation.  If no graduation is persisted in GRAD_STALE_SECONDS
+        while firehose_active=True, it logs CRITICAL and calls os._exit(1) so
+        Docker's restart: unless-stopped recreates the container.
+
+        DETECTION-CRASH RECOVERY
+        ========================
+        asyncio.gather(..., return_exceptions=True) silently absorbs a crashed
+        helius_task — the process stays "up" but detection is dead.  After the
+        gather we inspect helius_task: if it exited with an exception (not
+        CancelledError), we log CRITICAL and trigger the same recovery path
+        (os._exit(1) via the watchdog recovery_fn) so the container is restarted
+        rather than limping on with a dead detector.
+        """
         self._active_sources = []
         self._postgrad_tasks = {}
         self._postgrad_seen = set()
         self._postgrad_sources = {}
+
+        # Start the graduation-liveness watchdog thread for this active run.
+        # Injectable _grad_watchdog_factory for tests; defaults to the real watchdog.
+        watchdog_factory = getattr(self, "_grad_watchdog_factory", None)
+        if watchdog_factory is not None:
+            grad_watchdog = watchdog_factory()
+        else:
+            grad_watchdog = GraduationLivenessWatchdog()
+        grad_watchdog.start()
+        logger.info(
+            "%s graduation-liveness-watchdog started (stale_threshold=%ds).",
+            LOG_PREFIX,
+            GRAD_STALE_SECONDS,
+        )
 
         helius_task = asyncio.create_task(self._helius_loop(), name="firehose-helius")
         reconciler_task = asyncio.create_task(self._reconciler_loop(), name="firehose-reconciler")
@@ -738,17 +1048,46 @@ class FirehoseDaemon:
             # The watcher returns when firehose flips False / stop / deadline.
             await watcher_task
         finally:
+            # Stop the graduation-liveness watchdog thread (clean shutdown).
+            # On os._exit recovery paths this never runs (the process is already
+            # dead); on normal flip-to-False shutdown it stops the thread cleanly.
+            grad_watchdog.stop()
+
             for t in (
                 helius_task, reconciler_task,
                 scoring_task, postgrad_task, flush_task,
             ):
                 t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             await self._cancel_postgrad_subscriptions()
             await self._disconnect_all_sources()
             # AC-3: final flush so the in-flight tail (< flush_every) is persisted.
             await sync_to_async(self._tape_sink.flush, thread_sensitive=True)()
             logger.info("%s active run stopped — all tasks cancelled, sources disconnected.", LOG_PREFIX)
+
+            # DETECTION-CRASH RECOVERY: inspect helius_task result.
+            # If helius_task exited with a real exception (not CancelledError and
+            # not None from clean completion), the detection path crashed and was
+            # silently absorbed by the gather.  Log CRITICAL and trigger recovery
+            # so the container is restarted rather than running with dead detection.
+            #
+            # tasks index 0 = helius_task (matches the tasks list order above).
+            helius_result = results[0]
+            if (
+                isinstance(helius_result, BaseException)
+                and not isinstance(helius_result, asyncio.CancelledError)
+            ):
+                logger.critical(
+                    "%s helius_task exited with exception: %r — "
+                    "detection path is dead. Triggering recovery (os._exit) "
+                    "so Docker restart policy recreates the container.",
+                    LOG_PREFIX,
+                    helius_result,
+                )
+                # Reuse the watchdog's recovery_fn so the test-injectable path
+                # is also covered here (in tests this writes to a list rather
+                # than calling os._exit).
+                grad_watchdog._recovery_fn(0.0)
 
     async def _tape_flush_loop(self, deadline) -> None:
         """AC-3: periodically flush the durable tape sink off the event loop.
