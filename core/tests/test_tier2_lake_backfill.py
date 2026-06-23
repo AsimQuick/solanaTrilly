@@ -4,7 +4,7 @@
 # story: EPIC-tape-sourcing-escalation Tier 2
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-21
+# last-updated: 2026-06-23
 # dependencies: pytest, pytest-django, asyncio, gzip, json, pathlib, datetime,
 #               core.management.commands.run_firehose, core.backfill.lake_backfill,
 #               core.firehose.tape_sink, core.models
@@ -411,9 +411,12 @@ def test_restart_safety_scored_excluded_from_due():
         },
     )
 
-    # grad_at must be in the past so score_time_reached(grad_at, score_at=1, now) is True.
-    # Use a fixed past datetime so VirtualClock comparison is clear.
-    grad_at = datetime(2026, 6, 21, 10, 0, 0, tzinfo=timezone.utc)  # 2h before VirtualClock
+    # grad_at must be in the past so score_time_reached(grad_at, score_at=1, now) is True,
+    # AND within the recency window (score_at + outcome_window + _TERMINALIZE_GRACE_S = 2401 s).
+    # VirtualClock is 2026-06-21T12:00:00Z; use grad_at 100 s before that so it is
+    # firmly inside the 2401-s window and past the score_at=1 s gate.
+    from datetime import timedelta  # noqa: PLC0415
+    grad_at = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc) - timedelta(seconds=100)
 
     # DETECTED token (should be in due list).
     tok_detected = Token.objects.create(
