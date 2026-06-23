@@ -242,12 +242,16 @@ def test_fetch_token_tape_retries_500_then_succeeds():
 
 
 def test_retrain_mature_lake_pending_build(tmp_path):
+    """Lake is mature (12 days span) but has no JSONL data — returns not_enough_samples."""
     from copytrade.curvestage_train import retrain_from_lake
 
     (tmp_path / "dt=2026-06-10").mkdir()
     (tmp_path / "dt=2026-06-22").mkdir()  # 12 days -> mature
     res = retrain_from_lake(str(tmp_path), str(tmp_path))
-    assert res["reason"] == "lake_retrain_pending_build" and res["lake_age_days"] == 12
+    # Mature lake with 0 data records → not_enough_samples (keeping seed)
+    assert res["reason"] == "not_enough_samples"
+    assert res["lake_age_days"] == 12
+    assert res["retrained"] is False
 
 
 # ---------------------------------------------------------------------------

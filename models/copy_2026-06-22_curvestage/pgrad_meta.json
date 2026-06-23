@@ -27,7 +27,7 @@
   "theta_curve_frac": 0.6,
   "select_depth_pct": 25,
   "pgrad_threshold_frozen": 0.15286554403847696,
-  "pgrad_threshold_recalibrated": 0.0142,
+  "pgrad_threshold_recalibrated": 0.0445,
   "lgbm_params": {
     "n_estimators": 300,
     "learning_rate": 0.03,
@@ -51,12 +51,18 @@
   },
   "breakeven_grad_rate_pct": 39,
   "recalibration_results": {
-    "base_grad_rate": 0.132,
-    "selected_grad_rate": 0.137,
-    "n_candidates": 9696,
-    "score_median": 0.006,
+    "base_grad_rate": 0.165,
+    "selected_grad_rate": 0.219,
+    "n_candidates": 545,
+    "n_selected": 137,
+    "score_median": 0.0273,
     "is_selective": true,
-    "source": "firehose_proxy_jun20_22",
-    "note": "Recalibrated to live top-25% percentile on Jun 20-22 firehose. price_at_entry/fdv_proxy from firehose proxy (6x higher than Birdeye). Weak lift (1.04x) due to firehose/Birdeye price basis mismatch. Gets curvestage to properly-tested, NOT proven."
+    "source": "labeled_proxy",
+    "proxy_parquet": "firehose_copy_replay.parquet (Jun 20-23, full-population with grad labels)",
+    "frozen_threshold_selectivity": "n_sel=48 (8.8%), sel_grad=20.8%, lift=1.26x",
+    "recalibrated_threshold_selectivity": "n_sel=137 (25.1%), sel_grad=21.9%, lift=1.33x",
+    "wrong_v1_threshold_0_0142": "n_sel=473 (86.8%), sel_grad=18.2%, lift=1.10x - NEAR NO-OP (buggy)",
+    "production_inference": "Production Birdeye prices ~9x above firehose. Simulated p75 on production-scale prices ~0.27-0.32. Frozen 0.153 passes ~47-52% at ~1.3x lift on production pipeline.",
+    "note": "Recalibrated to live top-25% percentile using firehose_copy_replay.parquet (Jun 20-23, n=545 labeled gated candidates). Firehose proxy prices (SOL/token, ~9x lower than Birdeye USD/token). RANK ORDER preserved: p75=0.0445 is the correct top-25% threshold for offline harness use. Selectivity: sel_grad=21.9% vs base=16.5% (1.33x lift). Gets curvestage to properly-tested, NOT proven."
   }
 }
