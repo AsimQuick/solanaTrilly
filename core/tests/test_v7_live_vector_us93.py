@@ -77,7 +77,6 @@ from core.v7_pregrad_features import (
     _token_amount_for_row,
     assemble_v7_features,
     compute_n_pregrad_holders,
-    compute_n_pregrad_holders_from_trade_pages,
     compute_v7_pregrad_feats,
 )
 from core.v7_scorer import BOOSTERS_PRESENT, N_FEATURES
@@ -543,20 +542,54 @@ def test_compute_n_pregrad_holders_basic() -> None:
     )
 
 
-def test_compute_n_pregrad_holders_excludes_post_grad() -> None:
-    """compute_n_pregrad_holders() excludes swaps at/after grad_ts."""
+def test_compute_n_pregrad_holders_trusts_caller_scope() -> None:
+    """compute_n_pregrad_holders() trusts its caller to pass the right swap scope.
+
+    TRAIN/SERVE SKEW FIX (AC-93 coordinator directive):
+    The original function filtered ``bt >= grad_ts`` to exclude post-grad swaps.
+    This was an OBSOLETE guard that caused train/serve skew:
+      - LIVE path: TapeStore is pre-only (solanaBilly bonding-curve tape, schema A).
+        No time filter needed — caller already provides only pre-grad swaps.
+      - PARITY/LAB path: lab's pregrad_holders() has NO time filter and includes
+        all trades (including at/after gts) from the raw30k_pregrad Birdeye tape.
+        Removing the filter allows 400/400 exact parity.
+
+    The function now processes ALL swaps it receives.  The caller is responsible
+    for passing the appropriate scope.
+
+    This test verifies the behavior: passing a mixed set counts ALL valid swaps.
+    """
     grad_ts = 1_782_000_000.0
     swaps = [
+        # Pre-grad buy
         {"block_time": grad_ts - 10, "side": "buy", "owner": "w1",
-         "vol_sol": 0.1, "price": 1e-6},
-        # Post-grad: must be excluded
+         "token_amount": 1000, "vol_sol": 0.1, "price": 1e-6},
+        # At-grad and post-grad: now INCLUDED (caller trusts scope)
         {"block_time": grad_ts + 5, "side": "buy", "owner": "w2",
-         "vol_sol": 0.1, "price": 1e-6},
+         "token_amount": 500, "vol_sol": 0.1, "price": 1e-6},
         {"block_time": grad_ts, "side": "buy", "owner": "w3",
-         "vol_sol": 0.1, "price": 1e-6},
+         "token_amount": 500, "vol_sol": 0.1, "price": 1e-6},
     ]
+    # All 3 wallets have positive token balances — all counted
     result = compute_n_pregrad_holders(swaps, grad_ts)
-    assert result == 1.0, f"Expected 1 holder (only w1 is pre-grad), got {result}"
+    assert result == 3.0, (
+        f"Expected 3 holders (all swaps processed — no time filter; caller "
+        f"controls scope). Got {result}.\n"
+        f"LIVE path: pre-only TapeStore prevents post-grad contamination.\n"
+        f"PARITY path: all-swaps input replicates lab pregrad_holders() exactly."
+    )
+
+    # bt=0 still skipped (invalid timestamp)
+    swaps_zero_bt = [
+        {"block_time": 0, "side": "buy", "owner": "w_invalid",
+         "token_amount": 1000, "vol_sol": 0.1, "price": 1e-6},
+        {"block_time": grad_ts - 100, "side": "buy", "owner": "w_valid",
+         "token_amount": 1000, "vol_sol": 0.1, "price": 1e-6},
+    ]
+    result2 = compute_n_pregrad_holders(swaps_zero_bt, grad_ts)
+    assert result2 == 1.0, (
+        f"bt=0 rows must still be skipped (invalid timestamp). Got {result2}."
+    )
 
 
 def test_compute_n_pregrad_holders_empty_tape() -> None:
@@ -1089,21 +1122,31 @@ _REQUIRE_RAW30K = pytest.mark.skipif(
 def test_v7_builder_parity_n_pregrad_holders_all_400() -> None:
     """AC-93.4(b) REAL PARITY TEST — n_pregrad_holders exact match on all 400 tokens.
 
-    WHAT THIS PROVES
-    ================
-    The balance-based compute_n_pregrad_holders (via compute_v7_features_from_trade_pages)
+    WHAT THIS PROVES (TRAIN/SERVE SKEW FIX)
+    ========================================
+    The LIVE function ``compute_n_pregrad_holders`` (the same one production runs)
     reproduces parity_sample.parquet's n_pregrad_holders EXACTLY for all 400 tokens
-    when given the lab's input (Birdeye raw30k_pregrad/*.json.gz trade_pages format).
+    when given ALL trades from the raw30k_pregrad Birdeye tapes.
+
+    This CLOSES the train/serve skew identified by the coordinator:
+      - PREVIOUS STATE: parity test called ``compute_n_pregrad_holders_from_trade_pages``
+        (no-filter helper), while production called ``compute_n_pregrad_holders``
+        (with bt >= gts filter).  Different functions → different counts → skew.
+      - FIXED STATE: ``compute_n_pregrad_holders`` now has NO time filter.
+        Passing all swaps from the raw tape replicates lab ``pregrad_holders()`` exactly.
+        The live production path uses a pre-only TapeStore (no post-grad entries), so
+        the same function produces correct results in both contexts.
 
     This closes the AC-93.4 "builder-logic half" of parity:
       - The lab built parity_sample.parquet from raw30k_pregrad trade_pages
         (holder_exit.py pregrad_holders() + backfill_pregrad.py pre_features()).
       - This test recomputes the same features FROM THE SAME RAW TAPES using
-        the production builder (compute_v7_features_from_trade_pages).
-      - Exact match proves the builder logic reproduces the lab definition exactly.
+        the LIVE production function (compute_n_pregrad_holders via
+        normalise_all_trade_page_swaps).
+      - 400/400 exact match proves the LIVE function reproduces the lab exactly.
 
-    NUANCE (honestly stated in docstring)
-    ======================================
+    NUANCE (honestly stated)
+    ========================
     parity_sample was built from Birdeye trade_pages (Birdeye's raw30k fetch).
     The LIVE production path consumes firehose rows (schema A solanaBilly or
     schema B self-tape).  This test proves the feature-builder LOGIC is correct
@@ -1119,13 +1162,16 @@ def test_v7_builder_parity_n_pregrad_holders_all_400() -> None:
 
     HEADLINE RESULT
     ===============
-    n_pregrad_holders: 400/400 exact match (0 diff on all tokens).
+    n_pregrad_holders: 400/400 exact match (0 diff on all tokens) — LIVE function.
     """
     import gzip as _gzip
 
     pd = pytest.importorskip("pandas")
 
-    from core.v7_pregrad_features import compute_v7_features_from_trade_pages
+    from core.v7_pregrad_features import (
+        compute_v7_features_from_trade_pages,
+        normalise_all_trade_page_swaps,
+    )
 
     df = pd.read_parquet(_V7_PARITY)
 
@@ -1145,8 +1191,10 @@ def test_v7_builder_parity_n_pregrad_holders_all_400() -> None:
         with _gzip.open(tape_path, "rt") as fh:
             rec = json.load(fh)
 
-        # n_pregrad_holders: checked for ALL 400 tokens via the no-filter path
-        h_comp = compute_n_pregrad_holders_from_trade_pages(rec["trade_pages"])
+        # n_pregrad_holders: LIVE FUNCTION called with ALL swaps (no time filter)
+        # This replicates lab pregrad_holders() exactly — same function as production.
+        all_swaps = normalise_all_trade_page_swaps(rec["trade_pages"])
+        h_comp = compute_n_pregrad_holders(all_swaps)
         h_exp = float(row["n_pregrad_holders"])
         holder_diffs.append(abs(h_comp - h_exp))
 
@@ -1171,19 +1219,19 @@ def test_v7_builder_parity_n_pregrad_holders_all_400() -> None:
         f"Expected holder diffs for all 400 tokens, got {len(holder_diffs)}."
     )
 
-    # ---- n_pregrad_holders: EXACT MATCH on ALL 400 tokens ----
+    # ---- n_pregrad_holders: EXACT MATCH on ALL 400 tokens (LIVE FUNCTION) ----
     max_holder_diff = max(holder_diffs)
     n_exact_holders = sum(1 for d in holder_diffs if d == 0.0)
     assert max_holder_diff == 0.0, (
-        f"n_pregrad_holders parity FAILED.\n"
+        f"n_pregrad_holders parity FAILED (LIVE function compute_n_pregrad_holders).\n"
         f"Exact match: {n_exact_holders}/400\n"
         f"Max abs diff: {max_holder_diff:.2f}\n"
-        f"This means compute_n_pregrad_holders_from_trade_pages does NOT reproduce\n"
-        f"the lab's pregrad_holders(). Investigate: uiAmount source, txType filter, "
-        f"buy/sell sign."
+        f"This means compute_n_pregrad_holders does NOT reproduce the lab's "
+        f"pregrad_holders(). Investigate: uiAmount source, txType filter, buy/sell sign, "
+        f"time filter (should be NONE — function trusts caller scope)."
     )
     assert n_exact_holders == 400, (
-        f"n_pregrad_holders: {n_exact_holders}/400 exact, expected 400/400."
+        f"n_pregrad_holders: {n_exact_holders}/400 exact, expected 400/400 (LIVE function)."
     )
 
     # ---- 19 pre-grad features: NEAR-EXACT on the {n_with_feats} checkable tokens ----
@@ -1216,6 +1264,9 @@ def test_v7_builder_parity_n_pregrad_holders_all_400() -> None:
 def test_v7_builder_parity_report() -> None:
     """AC-93.4(b) summary report — prints per-feature match statistics.
 
+    Uses the LIVE function (compute_n_pregrad_holders via normalise_all_trade_page_swaps)
+    so the report reflects the actual production path, not a helper.
+
     Prints but does not assert on individual features (full assertions are in
     test_v7_builder_parity_n_pregrad_holders_all_400 above).  Useful for
     diagnosing partial drift if a future refactor affects precision.
@@ -1224,7 +1275,10 @@ def test_v7_builder_parity_report() -> None:
 
     pd = pytest.importorskip("pandas")
 
-    from core.v7_pregrad_features import compute_v7_features_from_trade_pages
+    from core.v7_pregrad_features import (
+        compute_v7_features_from_trade_pages,
+        normalise_all_trade_page_swaps,
+    )
 
     df = pd.read_parquet(_V7_PARITY)
 
@@ -1241,8 +1295,9 @@ def test_v7_builder_parity_report() -> None:
         with _gzip.open(tape_path, "rt") as fh:
             rec = json.load(fh)
 
-        # Holder count: no-filter path (exact lab replica)
-        h_comp = compute_n_pregrad_holders_from_trade_pages(rec["trade_pages"])
+        # Holder count: LIVE FUNCTION with all swaps (no time filter)
+        all_swaps = normalise_all_trade_page_swaps(rec["trade_pages"])
+        h_comp = compute_n_pregrad_holders(all_swaps)
         holder_diffs.append(abs(h_comp - float(row["n_pregrad_holders"])))
 
         feats = compute_v7_features_from_trade_pages(rec["trade_pages"], rec["gts"])
@@ -1255,22 +1310,23 @@ def test_v7_builder_parity_report() -> None:
 
     # These will appear in verbose pytest output (not assertions — use for diagnostics)
     lines = [
-        f"\n=== AC-93.4(b) Builder Parity Report ({len(holder_diffs)} tokens holder, {n_checked} pre-feats) ===",
-        f"n_pregrad_holders: exact_match={sum(1 for d in holder_diffs if d==0)}/{len(holder_diffs)} "
+        f"\n=== AC-93.4(b) Builder Parity Report [{len(holder_diffs)} tokens holder, {n_checked} pre-feats] ===",
+        f"n_pregrad_holders (LIVE func): exact_match={sum(1 for d in holder_diffs if d==0)}/{len(holder_diffs)} "
         f"max_diff={max(holder_diffs):.2f}",
     ]
     for feat in V7_PRE_FEATURE_NAMES:
         diffs = pre_feat_diffs[feat]
-        lines.append(
-            f"  {feat:30s}: max_diff={max(diffs):.4e}  "
-            f"exact_frac={sum(1 for d in diffs if d < 1e-9)/len(diffs):.1%}"
-        )
+        if diffs:
+            lines.append(
+                f"  {feat:30s}: max_diff={max(diffs):.4e}  "
+                f"exact_frac={sum(1 for d in diffs if d < 1e-9)/len(diffs):.1%}"
+            )
 
     print("\n".join(lines))
 
-    # n_pregrad_holders must be exact on all 400 tokens
+    # n_pregrad_holders must be exact on all 400 tokens (LIVE function)
     assert max(holder_diffs) == 0.0, (
-        f"n_pregrad_holders not exact: max_diff={max(holder_diffs):.2f} "
+        f"n_pregrad_holders not exact (LIVE function): max_diff={max(holder_diffs):.2f} "
         f"({sum(1 for d in holder_diffs if d==0)}/{len(holder_diffs)} exact)"
     )
 

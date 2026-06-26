@@ -4,7 +4,7 @@
 # story: US-93
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-26
+# last-updated: 2026-06-26  (train/serve skew fix: removed bt>=grad_ts filter from compute_n_pregrad_holders)
 # dependencies: numpy, core.v4_rep_builder
 # ---
 """v7 live feature vector builder: 19 pre-grad feats + n_pregrad_holders + 24 rep feats.
@@ -323,7 +323,7 @@ def _token_amount_for_row(s: dict) -> float:
 
 def compute_n_pregrad_holders(
     swaps: list[dict],
-    grad_ts: float,
+    grad_ts: float = 0.0,
 ) -> float:
     """Compute n_pregrad_holders: distinct wallets with net-positive TOKEN balance at graduation.
 
@@ -337,9 +337,26 @@ def compute_n_pregrad_holders(
         bal[w] -= uiAmount   for every sell
         n_pregrad_holders = count(bal[w] > 0)
 
+    NO TIME FILTER (AC-93 train/serve-skew fix):
+    The original implementation filtered ``bt >= grad_ts`` to exclude post-grad swaps.
+    This was an obsolete guard:
+      - For the LIVE production path: ``swaps`` comes from ``self._tape`` (TapeStore),
+        which is fed ONLY by solanaBilly's bonding-curve tape (schema A, phase=pre,
+        ``BillyTapeTailer``).  Post-grad goes to the SEPARATE ``self._postgrad_tape``.
+        No time filter is needed because the live input is pre-only by construction.
+      - For the PARITY TEST path: ``swaps`` are ALL trades from the raw30k_pregrad
+        Birdeye tape (including the small fraction at/after gts).  The lab's
+        ``pregrad_holders()`` processes ALL trades in the file without a time filter.
+        Removing the filter here means the parity test can call THIS function directly
+        and achieve 400/400 exact match — no separate helper needed.
+
+    The ``bt <= 0`` guard is retained to skip rows with missing/invalid timestamps.
+
     TOKEN-AMOUNT SOURCE (in order of preference):
       1. ``token_amount`` key (integer, raw on-chain units) — present on schema-A
-         rows from the US-96 solanaBilly shared tape adapter.
+         rows from the US-96 solanaBilly shared tape adapter, and on normalised
+         Birdeye trade_pages rows (``normalise_trade_page_swap`` sets
+         ``token_amount = to/from.uiAmount``).
       2. Derived: ``vol_sol / price`` — both fields present on schema A and B.
          Bounded error (same-block price slippage); strictly better than buy-count proxy.
 
@@ -350,20 +367,26 @@ def compute_n_pregrad_holders(
     Parameters
     ----------
     swaps:
-        Pre-grad swap records.  Only rows with block_time < grad_ts are used.
+        Swap records.  The caller is responsible for passing the appropriate
+        scope:
+          - LIVE path: pre-grad-only swaps from TapeStore (no post-grad entries).
+          - PARITY/LAB path: ALL trades from the raw30k_pregrad tape (including
+            at-grad and post-grad entries; this replicates pregrad_holders() exactly).
     grad_ts:
-        Token graduation Unix timestamp (seconds).
+        Token graduation Unix timestamp (seconds).  Kept for API compatibility;
+        no longer used to filter rows.  Pass 0.0 if unknown.
 
     Returns
     -------
     float
-        Count of distinct wallets with net token balance > 0 at graduation.
+        Count of distinct wallets with net token balance > 0.
     """
     wallet_balance: dict[str, float] = {}
 
     for s in swaps:
+        # Skip rows with missing/invalid timestamp (bt=0 means no timestamp)
         bt = float(s.get("block_time", 0) or s.get("block_unix_time", 0) or 0)
-        if bt <= 0 or bt >= grad_ts:
+        if bt <= 0:
             continue
         owner = s.get("owner") or ""
         if not owner:
@@ -405,9 +428,11 @@ def normalise_trade_page_swap(it: dict, grad_ts: float) -> dict | None:
       ``holder_exit.py:pregrad_holders()`` does NOT filter by time — it processes ALL
       trades in the file regardless of blockUnixTime.
       This function applies the pre_features filter (bt < grad_ts) so that the result
-      can be passed to compute_v7_pregrad_feats.
-      For holder counting, use compute_n_pregrad_holders_from_trade_pages() which
-      replicates pregrad_holders() with NO time filter.
+      can be passed to compute_v7_pregrad_feats (19 pre-grad features).
+
+      For holder counting: pass the result of ``normalise_all_trade_page_swaps``
+      (which does NOT filter by time) to ``compute_n_pregrad_holders``.
+      This replicates ``pregrad_holders()`` exactly and achieves 400/400 parity.
 
     INPUT SCHEMA (Birdeye trade_pages item):
       blockUnixTime  — Unix timestamp of the swap
@@ -471,6 +496,53 @@ def normalise_trade_page_swap(it: dict, grad_ts: float) -> dict | None:
     }
 
 
+def normalise_all_trade_page_swaps(trade_pages: list[list[dict]]) -> list[dict]:
+    """Normalise ALL Birdeye trade_pages swaps (NO time filter).
+
+    Used for the holder-count path: passes ALL trades (including those at/after gts)
+    to ``compute_n_pregrad_holders``, exactly replicating ``pregrad_holders()``
+    which has no time filter.
+
+    INPUT SCHEMA: same as ``normalise_trade_page_swap`` (Birdeye trade_pages item).
+    OUTPUT: list of internal swap dicts (block_time, side, owner, token_amount, ...).
+    """
+    result: list[dict] = []
+    for page in (trade_pages or []):
+        for it in (page or []):
+            if it.get("txType") != "swap":
+                continue
+            bt = it.get("blockUnixTime") or it.get("block_unix_time")
+            if bt is None:
+                continue
+            bt_f = float(bt)
+            if bt_f <= 0:
+                continue
+            owner = it.get("owner") or ""
+            side = it.get("side")
+            if side not in ("buy", "sell"):
+                ca = float((it.get("base") or {}).get("uiChangeAmount") or 0)
+                side = "buy" if ca > 0 else "sell"
+            if side not in ("buy", "sell"):
+                continue
+            leg = it.get("to") if side == "buy" else it.get("from")
+            token_amount_ui = abs(float((leg or {}).get("uiAmount") or 0.0))
+            price = it.get("tokenPrice") or it.get("basePrice")
+            price_f = float(price) if price else 0.0
+            q = it.get("quote") or {}
+            qp = float(it.get("quotePrice") or q.get("price") or 0)
+            vol_sol = abs(float(q.get("uiAmount") or 0))
+            result.append({
+                "block_time": bt_f,
+                "side": side,
+                "owner": owner,
+                "token_amount": token_amount_ui,
+                "price": price_f,
+                "vol": vol_sol * qp,
+                "vol_sol": vol_sol,
+            })
+    return result
+
+
 def compute_n_pregrad_holders_from_trade_pages(trade_pages: list[list[dict]]) -> float:
     """Compute n_pregrad_holders from Birdeye trade_pages with NO time filter.
 
@@ -530,14 +602,16 @@ def compute_v7_features_from_trade_pages(
     that proves the builder LOGIC is correct given the lab's Birdeye input — it closes
     the AC-93.4(b) "builder-logic half" of parity.
 
-    KEY DESIGN DIFFERENCE FROM assemble_v7_features
-    ================================================
+    DESIGN (single-function, no helper)
+    ====================================
     1. Pre-grad features (19 feats): normalise_trade_page_swap filters bt >= grad_ts
        exactly as backfill_pregrad.py:pre_features() does.
-    2. n_pregrad_holders: computed by compute_n_pregrad_holders_from_trade_pages()
-       which does NOT filter by time, exactly as holder_exit.py:pregrad_holders() does.
-       The raw30k_pregrad files may contain a small number of swaps at/after gts;
-       the lab includes them in the holder count.
+    2. n_pregrad_holders: ``compute_n_pregrad_holders`` called with ALL normalised swaps
+       (no time filter) via ``normalise_all_trade_page_swaps``, exactly as
+       ``holder_exit.py:pregrad_holders()`` does.  The raw30k_pregrad files may contain
+       swaps at/after gts; the lab includes them in the holder count.
+       ``compute_n_pregrad_holders`` (the live function) now has NO time filter, so
+       passing all swaps replicates the lab exactly — 400/400 proven.
 
     Parameters
     ----------
@@ -569,8 +643,13 @@ def compute_v7_features_from_trade_pages(
     if pre_feats is None:
         return None
 
-    # 3. n_pregrad_holders: NO time filter (replicates pregrad_holders() exactly)
-    n_holders = compute_n_pregrad_holders_from_trade_pages(trade_pages)
+    # 3. n_pregrad_holders: ALL trades (NO time filter) via the live function.
+    # Replicates holder_exit.py:pregrad_holders() exactly — includes at/after-gts swaps
+    # that are present in the raw30k_pregrad Birdeye tapes.  The live production path
+    # uses a pre-only TapeStore (no post-grad entries), so it achieves equivalent
+    # results via the same function.
+    all_swaps = normalise_all_trade_page_swaps(trade_pages)
+    n_holders = compute_n_pregrad_holders(all_swaps)
 
     # 4. Rep features (0-fill if no bank)
     if wallet_bank is not None:
