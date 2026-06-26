@@ -1,8 +1,8 @@
 {
   "sprint": "sprint-15",
   "phase": "B-pending",
-  "last-updated": "2026-06-24",
-  "last-updated-by": "dev-team",
+  "last-updated": "2026-06-26",
+  "last-updated-by": "product-owner",
   "goal": "CLEAN RESET — replace the failed hotfix-PR style (half-applied fixes, untraceable landings, fake/inflated dashboard PnL) with structured user stories + a tester quality gate + a dev-team loop, then fix-validate-LOCALLY-then-PURGE the VPS and deploy ONLY two artifacts (model `models/trilly_pregrad_v6`, copy formula `models/copy_2026-06-22_curvestage`) observe-only, $25, trading_enabled=FALSE (never flipped). LOCKED SEQUENCE = fix-validate-then-purge: (Phase A) salvage the VPS-only judge/diagnostic probes BEFORE any purge + stand up a LOCAL validation harness over the Jun 20-23 firehose tapes; (Phase B) develop+PROVE every COPY and MODEL fix LOCALLY against those tapes FIRST; (Phase C) ONE clean VPS purge of all old models/formulas/positions/half-applied fixes, then deploy the two artifacts with fixes already baked in, with a FRESH HONEST dashboard; (Phase D) observe soak, judged EXCLUSIVELY by firehose-reconstructed real fills via fill_repricing.py — NEVER the dashboard number. NO CREDITS: Helius/Birdeye/Dune are OFF for the ENTIRE sprint; all testing uses the LOCAL Jun 20-23 tapes only (already pulled to /Users/asim/NoIcloud/solanatrills/lake/firehose/dt=2026-06-2{0,1,2,3}/part-0.jsonl.gz, byte-exact vs VPS). FREE GRADUATION LABELS: the firehose captures BOTH bonding-curve (phase 'pre') AND post-grad (phase 'post') swaps (Jun-22 alone has ~38k post rows, rel=seconds-since-graduation 0-2918s) — earlier 'post not captured / only 13 grads' claims were WRONG; offline graduation labeling = cumulative buy vol_sol >= ~85 SOL on the pre rows — zero-credit full-population ground truth for the whole window. DOLLAR BASIS (per-phase): vol_usd is ALL ZERO on PRE rows ONLY (the vol_usd=0 bug is pre-only) -- on PRE rows every dollar quantity (curve_frac, the $250 filter) MUST derive from vol_sol x SOL_price, NEVER vol_usd; POST rows already carry a populated vol_usd. CRITICAL GAP (US-92): POST rows carry NO mint/pool/pair, so post-grad fills are UNATTRIBUTABLE to a token offline -- fixing the recorder to emit mint on every post row GATES the deploy + soak (the live recorder cannot self-validate model PnL or the copy ride-to-grad exit on a mint-less post tape). BAD LINES: ~2-10%/day are unparseable partial writes -> skip-and-count-and-flag, never fatal. MODEL TRACK = OBSERVE + PARITY-ONLY: ship v6 observe-only and validate ONLY its feature/scoring PARITY locally (live entry_features vs lab parquets); v6 post-grad PnL is OUT OF SCOPE (a separate Birdeye backtest agent owns it, already done Jun 20-21; the live recorder confirms later). SAFETY GATE (non-negotiable): trading_enabled DEFAULT False, NEVER flipped this sprint; ZERO real orders / ZERO capital; the live RPC/Sender send boundary present but NEVER invoked (AST-guarded); SS5 copy-trade isolation PRESERVED; solanaBilly UNTOUCHED on 8001, every docker op scoped -p solanatrilly. ANTI-HOTFIX MECHANISM: every story's DoD includes a REPRODUCIBLE LOCAL validation (against the Jun 20-23 tapes or a golden/regression fixture) that PROVES the fix landed — no story is 'done' on 'works locally' hand-waving; the local-proof gate is what UNBLOCKS the Phase-C purge.",
   "reference_docs": [
     "scrum-master/prd.md",
@@ -21,7 +21,10 @@
     "ops/firehose_activation_log.md",
     "/Users/asim/NoIcloud/solanatrills/lake/firehose/MANIFEST.md",
     "/Users/asim/NoIcloud/solanatrills/models/trilly_pregrad_v6/MODEL_HANDOFF.md",
-    "/Users/asim/NoIcloud/solanatrills/models/copy_2026-06-22_curvestage/HANDOFF.md"
+    "/Users/asim/NoIcloud/solanatrills/models/copy_2026-06-22_curvestage/HANDOFF.md",
+    "/Users/asim/NoIcloud/solanatrills/models/trilly_pregrad_v7/MODEL_HANDOFF.md",
+    "/Users/asim/NoIcloud/solanatrills/models/trilly_pregrad_v7/meta.json",
+    "/Users/asim/NoIcloud/solanatrills/analysis/graduated/POSTGRAD_FINDINGS.md"
   ],
   "definition_of_done": [
     "ANTI-HOTFIX LOCAL-PROOF GATE (the sprint's core mechanism): every Phase-A/B story ships a REPRODUCIBLE, COMMITTED local validation (a pytest test, a script with pinned expected output, or a golden/regression fixture) that runs against the Jun 20-23 firehose tapes (or a derived fixture) and PROVES the specific fix landed. 'Works locally' hand-waving is NOT done. The local-proof for every Phase-B story must be GREEN before the Phase-C purge is authorized.",
@@ -305,9 +308,9 @@
     },
     {
       "id": "US-87",
-      "title": "PHASE B (MODEL, OBSERVE + PARITY-ONLY) — Confirm the v6 stack (v4 SELECTION x v5 EXIT x depth-gated SIZING) is actually wired + its banks loaded before promote, and PROVE feature/scoring PARITY locally (live entry_features vs lab parquets) — NOT post-grad PnL",
+      "title": "PHASE B (MODEL, v7 BUILD #1 of 3) — Vendor trilly_pregrad_v7 into the repo + stand up the offline PARITY HARNESS against parity_sample.parquet (400 tokens x 44 feats + expected 8-seed score) — the local-proof gate every other v7 story validates against. SUPERSEDES the obsolete 'verify v6 wired' scope (v6 is retired; v7 is a BUILD).",
       "status": "draft",
-      "priority": "high",
+      "priority": "critical",
       "phase": "B-model",
       "dependencies": [
         "US-81"
@@ -315,21 +318,21 @@
       "acceptance_criteria": [
         {
           "id": "87.1",
-          "text": "The v6 deployable stack is CONFIRMED wired per its MODEL_HANDOFF: v6 = v4 SELECTION (the 53-feature seed-bagged rank-blend incl. the v4 REP+recurrence builder + the WalletBankLookup bank singleton loaded ONCE at daemon init, never per-tick) x v5 EXIT (the at-entry structural exit router) x depth-gated SIZING (observe at $25 FLAT this sprint — the size ramp is soak-gated and OUT OF SCOPE). The prior degraded-model failure mode (v4's REP+recurrence builder never wired into run_firehose -> 33 features zeroed) is CONFIRMED CLOSED: a test asserts the v6 feature vector is fully populated (no silently-zeroed feature block) and the bank is loaded before promote. The v6 ARTIFACT is staged into the repo's models/ tree (it currently exists only in the lab at solanatrills/models/trilly_pregrad_v6) so the clean deploy can ship it. Verified by a test asserting the wired feature count + a non-zero feature block.",
+          "text": "RESCOPE NOTE (record prominently): the old US-87 ('confirm the v6 stack is wired + prove v6 parity') is OBSOLETE and SUPERSEDED — trilly_pregrad_v7 replaces v6/v6.1 (same post-grad lane, but selection/exit/sizing re-derived + walk-forward-validated on the recent fold + a 2x impact stress; v6's projections predated that rigor). v7 is NOT a verify — it is a from-scratch BUILD of a NEW model family (44 leak-safe pre-grad + holder + wallet-reputation feats predicting realized $25 PnL; mean of 8 LightGBM boosters), so the deploy ships v7, not v6. The v7 artifact is VENDORED into the repo at models/trilly_pregrad_v7/ (meta.json, MODEL_HANDOFF.md, parity_sample.parquet, selection/seed0..7.txt) copied byte-identical from the read-only lab repo /Users/asim/NoIcloud/solanatrills/models/trilly_pregrad_v7/ (lab is read-only; copy, never modify). Verified: a test asserts all 11 artifact files are present under models/trilly_pregrad_v7/, the 8 booster files load, and meta.json parses with feature_order==44 names, gate==15.86012, exit policy tr30_t600, and the sizing rule ($100 if entry-depth>=$8000 else $25, cap $100). v6 stays referenced for lineage only; it is NOT deployed.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "87.2",
-          "text": "FEATURE/SCORING PARITY is PROVEN LOCALLY: live entry_features assembled over the LOCAL recorder tapes (US-81 harness) are byte-/tolerance-faithful to the lab parquets the v6 stack was built on, and the live score matches the offline score on the golden fixture (the existing golden-parity tests — test_golden_parity_v4 / v6 — stay GREEN, plus the live buyer-assembly parity gap flagged in EPIC-model-track-deploy AREA A is closed or its bounded impact documented). The es60 fallback xfails (~2.1%) are accepted-as-structured per the lab decision (do NOT request lab importance). Verified by the golden-parity test suite GREEN + a live-vs-lab feature-distribution table over the local tapes.",
+          "text": "PARITY HARNESS stood up: a committed harness loads models/trilly_pregrad_v7/parity_sample.parquet (400 tokens x the 44 features in meta.json.selection.feature_order + the expected 8-seed `score` column + `eflow`) and scores each row's 44-feature vector through the mean of the 8 boosters (selection/seed0..7.txt). Verified by a test asserting that the harness's recomputed score matches the parquet's expected `score` for all 400 rows within a documented tolerance (e.g. <=1e-6 abs, or the lab-pinned tolerance) — i.e. the booster-load + averaging path is byte/tolerance-faithful to the lab. This is the LOCAL-PROOF gate the feature-pipeline story (US-93) and exit/sizing story (US-94) validate their live vectors against. Zero firehose (parity_sample.parquet is fully local).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "87.3",
-          "text": "SCOPE FENCE + LOCAL-PROOF: this story validates ONLY feature/scoring parity, NOT v6 post-grad PnL (a separate Birdeye backtest agent owns that, already done Jun 20-21; the live recorder confirms later — explicitly OUT OF SCOPE here). A committed parity-proof test runs the v6 scoring path end-to-end on a local-tape fixture and asserts live==offline within tolerance, with the depth-gated sizing pinned at $25 flat (no size-up). trading_enabled stays False; the model never sends. Zero firehose.",
+          "text": "SCOPE FENCE + DISCIPLINE: this story vendors the artifact + proves the SCORING path (given the correct 44-feature vector -> correct score) only; it does NOT build the live feature vector (US-93) nor the exit/sizing (US-94). The harness exposes a clean API (load_v7 / score_vectors / parity_check against parity_sample.parquet) that US-93/US-94 import — the single referenced v7 foundation. NaN-fill rules from meta.json.selection.nan_fill are loaded and exposed (reputation feats -> 0.0; pre+holder feats -> the pinned medians) but APPLIED by US-93. trading_enabled stays False; the model never sends. Zero firehose; HARD NO-CREDITS (parity_sample.parquet is the local oracle). New files carry metadata front matter.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -347,7 +350,8 @@
       "priority": "high",
       "phase": "B-model",
       "dependencies": [
-        "US-87"
+        "US-87",
+        "US-93"
       ],
       "acceptance_criteria": [
         {
@@ -359,7 +363,7 @@
         },
         {
           "id": "88.2",
-          "text": "The post-grad entry-tape RECOVERY (#381/#382) is CONFIRMED INTACT: the silent-stream slot-hang fix (#381) and the grad+120s entry-window recovery (#382, which recovers the entry window the live WS subscribes-too-late to miss) survive into the clean deploy. NOTE the credit constraint: #382's recovery uses Birdeye REST, which is OFF this sprint — so the VERIFICATION is offline (the recovery LOGIC + its regression test stay intact and GREEN; live exercise of the REST path is deferred to the operator-driven post-soak window, not spent here). Verified by the #381/#382 regression tests GREEN; the ~8% gate-pass is confirmed a genuine population, NOT a bug.",
+          "text": "V7 LINKAGE (record): #381/#382 IS v7's post-grad entry-window recovery — v7 enters on the first post-grad swap >= grad+2s within 30s, exactly the entry window the live WS subscribes-too-late to miss and #382 recovers; this carry-forward is now DIRECTLY relevant to the v7 build (US-93 entry trigger). The post-grad entry-tape RECOVERY (#381/#382) is CONFIRMED INTACT: the silent-stream slot-hang fix (#381) and the grad+120s entry-window recovery (#382, which recovers the entry window the live WS subscribes-too-late to miss) survive into the clean deploy. NOTE the credit constraint: #382's recovery uses Birdeye REST, which is OFF this sprint — so the VERIFICATION is offline (the recovery LOGIC + its regression test stay intact and GREEN; live exercise of the REST path is deferred to the operator-driven post-soak window, not spent here). Verified by the #381/#382 regression tests GREEN; the ~8% gate-pass is confirmed a genuine population, NOT a bug.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -367,6 +371,121 @@
         {
           "id": "88.3",
           "text": "LOCAL-PROOF + anti-prune guard: a committed test asserts BOTH fixes are present on the deploy artifact set (the code paths exist + their regression tests pass) so the Phase-C prune CANNOT silently drop them (the exact anti-hotfix failure this sprint exists to end). The tape-sourcing escalation (Tier 2 lake fallback, FREE/local) from EPIC-tape-sourcing-escalation is reconciled: Tier 2 (lake read, free) is in-scope-to-confirm-present; Tier 3 (Birdeye REST) is credit-gated and DEFERRED this sprint. Zero firehose.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-93",
+      "title": "PHASE B (MODEL, v7 BUILD #2 of 3) — Build the v7 44-feature LIVE vector: entry trigger on the US-86 detector -> 19 pre-grad curve-life feats + n_pregrad_holders (THE #1 feature) + 24 wallet-reputation feats (reuse the v4 wallet-bank infra / port lab v4_outcome_rep.py) -> exact computation + leak-safe windows per meta.json.feature_order, proven by parity against parity_sample.parquet",
+      "status": "draft",
+      "priority": "critical",
+      "phase": "B-model",
+      "dependencies": [
+        "US-81",
+        "US-86",
+        "US-87"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "93.1",
+          "text": "ENTRY TRIGGER + the 19 PRE-GRAD curve-life feats + n_pregrad_holders. Entry fires on the SAME on-chain graduation marker as US-86 (the corrected MigrateV2 + PumpSwap CreatePool detector / bonding_complete) — enter on the first post-grad AMM swap >= grad_ts+2s within 30s (reject slip>15% or a dust-fill < 0.3x local median price); entering later is REFUTED (do not delay). The 19 pre-grad curve-life feats (pre_buy_frac, pre_buy_vol_usd, pre_buys_last60, pre_max_trade_usd, pre_mean_trade_usd, pre_n_buys, pre_n_sells, pre_n_swaps, pre_net_flow_usd, pre_price_ret, pre_top1_buyer_share, pre_top3_buyer_share, pre_trades_per_sec, pre_uniq_buyers, pre_uniq_traders, pre_vol_last300, pre_vol_last60, pre_vol_usd, pre_window_covered_s) are computed from the pre-grad bonding-curve tape (the same kind v4 already computes), all leak-safe / available at graduation. SCOPING FLAG (operator, explicit): n_pregrad_holders is the #1 feature by importance (meta.json top_features imp=727.1, ~2x the next) — a dev-team scoping question MUST CONFIRM it is computable LIVE from the pre-grad tape's cumulative buys-minus-sells per wallet (distinct wallets with a positive balance at graduation), or via a holder snapshot, BEFORE the build commits; flag in dev_notes if neither is available live. Verified by a test asserting the 20 pre+holder features are computed on a fixture tape and (where derivable) match the parity_sample.parquet values within tolerance; dollar quantities derive from vol_sol x SOL_price per phase (US-81.3 for pre rows), never the all-zero pre-row vol_usd.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "93.2",
+          "text": "The 24 WALLET-REPUTATION feats. Build the 24 outcome-weighted wallet-reputation features (whale_outcome_features.csv families: time_rdollar_*, time_pk24_*, size_rdollar_*, size_pk24_* — each repmean_mean/repmean_max/repmax_mean/ngood_sum/nhist/wmean) = the outcome-weighted reputation of the token's early/big buyers' PRIOR graduate picks, leak-safe walk-forward (only picks resolved BEFORE this graduation). SCOPING FLAG (operator, explicit — the HEAVIEST dependency): a dev-team scoping question MUST CONFIRM what wallet-bank infra already exists in solanatrilly vs what must be ported from the lab. KNOWN (PO survey): the v4 wallet-bank infra IS present in-repo (core/v4_rep_builder.py with assemble_v4_features + WalletBankLookup, core/scorer.py, lake/v4_wallet_bank.parquet, wired in core/management/commands/run_firehose.py) and v7's MODEL_HANDOFF says these feats are 'built from the same wallet-bank infra v4/v6 already maintain (analysis/graduated/v4_outcome_rep.py)'. The dev team MUST verify whether the existing v4 bank emits THESE 44-order column names / families as-is, or whether the lab v4_outcome_rep.py (/Users/asim/NoIcloud/solanatrills/analysis/graduated/v4_outcome_rep.py) must be ported to produce the time/size x rdollar/pk24 reputation columns. NaN/unknown reputation -> 0.0 (in-distribution; many tokens have unknown-rep buyers). Verified by a test asserting the 24 rep feats are produced in the meta.json.feature_order positions and match parity_sample.parquet within tolerance for the sampled tokens, with unknown-rep -> 0.0.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "93.3",
+          "text": "LOCAL-PROOF — the FULL 44-feature live vector PASSES PARITY end-to-end: assemble the complete 44-feature vector (19 pre + n_pregrad_holders + 24 rep, in meta.json.selection.feature_order), apply the meta.json.selection.nan_fill rules (reputation feats -> 0.0; pre+holder feats -> the pinned medians, NOT 0-filled), score it through the US-87 harness, and assert the live feature vector AND the resulting 8-seed score MATCH parity_sample.parquet within the documented tolerance for the parity tokens reproducible offline. This is the anti-hotfix local-proof: a live feature vector + score must equal the expected before any number is believed (project law: a model's live score must equal its offline score). Document any feature that is NOT offline-reproducible from the local tapes (e.g. if n_pregrad_holders or a rep family needs live state) with its bounded-impact rationale. Zero firehose; HARD NO-CREDITS. New files carry metadata front matter.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-94",
+      "title": "PHASE B (MODEL, v7 BUILD #3 of 3) — Build the v7 gate (score >= 15.86012) + the tr30_t600 RIDE exit (30% trailing stop off the running post-grad max, hard 600s timer, honest fill) + depth-gated SIZING ($100 if entry-depth >= $8000 else $25; CAP $100, never $200) — observe-only at $25 flat this sprint; the size-up is soak-gated",
+      "status": "draft",
+      "priority": "high",
+      "phase": "B-model",
+      "dependencies": [
+        "US-87",
+        "US-93"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "94.1",
+          "text": "GATE + RIDE EXIT. The selection GATE trades a graduate iff its 8-seed score >= 15.86012 (the fixed threshold calibrated to ~top-25%/day ~= 52 trades/day at ~209 enterable graduations/day; meta.json.gate) — a single config-driven named constant, never a scattered literal. The EXIT is the RIDE policy tr30_t600 on the post-grad AMM price: track the running max from fill, SELL when price <= running_max x (1 - 0.30) (30% trailing stop) OR at 600s, whichever first; honest fill = first swap >= trigger+2s. FAST SCALPS ARE REFUTED — the post-grad open is a dump (win~30%); do not cut, you RIDE. Verified by a test asserting (a) the gate admits exactly the >=15.86012 scores on a fixture and rejects below, and (b) the tr30_t600 exit fires the trailing stop and the 600s timer correctly on synthetic post-grad price paths (a path that draws down 30% off its max exits at the stop; a path that never does exits at 600s).",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "94.2",
+          "text": "DEPTH-GATED SIZING + observe fence. size = $100 if entry-depth >= $8000 else $25, with a HARD CAP of $100 ($200 is the impact-fragile zone — never exceed). Offline depth proxy = eflow ($-flow in [grad, grad+60]); the LIVE depth measure = graduation-instant AMM pool liquidity (the soak must confirm the live proxy tracks eflow before the size-up is trusted — US-91). THIS SPRINT: observe-only at $25 FLAT — the depth-gated size ramp toward $100 is SOAK-GATED and OUT OF SCOPE for the build (wire the rule + the $25/$100 branch, but the live default is $25 flat and trading_enabled stays False). Honest-fill / grading conventions match the lab settle_engine: entry impact 2S/(S+eflow), drain impact 2S/(S+flow) on exit, 1% round-trip fee. Verified by a test asserting the sizing rule returns $100 above the depth threshold and $25 below, the cap holds at $100, and the live observe default is $25 flat with no size-up path reachable while trading_enabled is False.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "94.3",
+          "text": "LOCAL-PROOF — the FULL v7 inference path (entry trigger -> 44-feat vector via US-93 -> 8-seed score via US-87 -> gate 15.86 -> tr30_t600 ride exit -> depth-gated sizing pinned at $25) runs end-to-end on a local-tape fixture and a committed test asserts: the gate decision + the scored vector match parity_sample.parquet within tolerance, the exit fires per tr30_t600, and the booked size is $25 flat (observe). trading_enabled stays False and is never flipped; the live RPC/Sender send boundary is present but NEVER invoked (AST-guarded, US-11 no-auto-start pattern stays GREEN). Grade conventions = post-grad TAPE + on-chain graduation, never dashboard PnL. Zero firehose; HARD NO-CREDITS. New files carry metadata front matter.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "",
+      "tester_status": "not-started",
+      "tester_notes": ""
+    },
+    {
+      "id": "US-95",
+      "title": "PHASE B (MODEL, RISK/DEPENDENCY — scope as a KNOWN dependency, not necessarily a this-sprint build) — v7 is Birdeye-trained and a Birdeye-trained model did NOT transfer to the live firehose (the t120 lesson); the shipped 8 boosters are REFERENCE/ARCHITECTURE and MUST be retrained on solanatrilly's OWN live AMM feed before ANY capital. This DEPENDS ON US-92 (the recorder must bank usable post-grad data WITH mint to retrain on). The retrain itself is post-soak/future (insufficient live feed today)",
+      "status": "draft",
+      "priority": "high",
+      "phase": "B-model",
+      "dependencies": [
+        "US-87",
+        "US-92"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "95.1",
+          "text": "RECORD THE RISK + THE DEPENDENCY (this is a scoping/traceability story, not a build): v7's economics rest on a hand-picked Birdeye GRADUATE sample (survivorship -> the $/day is an optimistic ceiling), and the t120 line PROVED a Birdeye-trained model did NOT transfer to the live firehose. Therefore the shipped boosters (selection/seed0..7.txt) are treated as REFERENCE ARCHITECTURE — they may be deployed to OBSERVE at flat $25 (US-89/US-91) but MUST be retrained on solanatrilly's own live AMM feed BEFORE any real capital. The retrain CANNOT happen this sprint: it requires enough banked live post-grad feed, which requires US-92 (post rows must carry the mint to be attributable + retrainable) and weeks of recorder uptime. Verified by a documented dependency note linking US-95 -> US-92 (mint-on-post-row is the gating precondition) and the operator-acknowledged risk that NO capital is authorized until a live-feed retrain holds out-of-time.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "95.2",
+          "text": "DEFINE the retrain CONTRACT (so the future retrain is unambiguous, even though the run is deferred): the retrain rebuilds the v7 training set from solanatrilly's OWN recorded post-grad firehose (graduation label = the US-86 detector + the US-81 cum-vol_sol>=85 free label; post-grad outcomes attributed via the US-92 mint; the same 44 leak-safe features in meta.json.feature_order; dollars via the per-phase basis), retrains the 8-seed LightGBM bag, and re-derives the gate threshold on a held-out recent fold (the lab decay finding: the lane faded Feb->Jun, only selection keeps the recent fold alive -> retrain WEEKLY, the most-recent fold is the only valid read). This mirrors the copy-track US-84 weekly-retrain pattern. Verified by a documented retrain spec/checklist committed to the model-track docs (no live run required this sprint); any code stub is date-gated/no-op like US-84 until the live lake matures.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "95.3",
+          "text": "LOCAL-PROOF (lightweight, scope-appropriate): a committed test/artifact asserts the dependency wiring is honest — (a) the deploy/soak stories (US-89/US-91) carry an explicit 'observe-only, boosters are reference, no capital before live-feed retrain' note; (b) the US-95<->US-92 linkage is recorded so US-92 is understood as the retrain precondition; (c) the four PO risks (right-tail-carried, survivorship+feed-transfer, decay, fill-fragility) are documented in the model-track risk register so nobody scopes v7 as a guaranteed $500/day. Zero firehose; HARD NO-CREDITS. This story is DONE when the risk + dependency are recorded and traceable, NOT when a retrain has run (the retrain is explicitly post-soak/future).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -430,7 +549,10 @@
         "US-86",
         "US-87",
         "US-88",
-        "US-92"
+        "US-92",
+        "US-93",
+        "US-94",
+        "US-95"
       ],
       "acceptance_criteria": [
         {
@@ -442,7 +564,7 @@
         },
         {
           "id": "89.2",
-          "text": "ONLY the two artifacts are deployed via the GitHub Actions -> GHCR -> VPS CD pipeline (the VPS is NEVER hand-edited; docker-compose.staging.yml is the only compose): model `trilly_pregrad_v6` (with the v4/v5 component dirs + the bank under the mounted models tree) and copy formula `copy_2026-06-22_curvestage` (its HANDOFF/formula.json integration spec — on-curve gate, curve_frac<=0.6, the US-82-recalibrated honest P(grad) classifier, ride-to-grad exit). Both carry the Phase-B fixes baked in (US-86 corrected detector, US-83 honest settler, US-82 recalibrated threshold, US-87 wired v6, US-88 carry-forwards). NOTHING else from the old deploy carries over. Verified from the green deploy run: v6 + curvestage present, no legacy model/formula/position rows.",
+          "text": "V7 DEPLOY (rescope): the deployed model is trilly_pregrad_v7 (NOT the retired v6); observe-only / $25 FLAT / trading_enabled=FALSE; the shipped boosters are REFERENCE ARCHITECTURE pending a live-feed retrain (US-95) — NO capital this sprint. ONLY the two artifacts are deployed via the GitHub Actions -> GHCR -> VPS CD pipeline (the VPS is NEVER hand-edited; docker-compose.staging.yml is the only compose): model `trilly_pregrad_v7` (with the 8 boosters selection/seed0..7.txt + the wallet-rep bank under the mounted models tree) and copy formula `copy_2026-06-22_curvestage` (its HANDOFF/formula.json integration spec — on-curve gate, curve_frac<=0.6, the US-82-recalibrated honest P(grad) classifier, ride-to-grad exit). Both carry the Phase-B fixes baked in (US-86 corrected detector, US-83 honest settler, US-82 recalibrated threshold, US-87/US-93/US-94 v7 build, US-88 carry-forwards). NOTHING else from the old deploy carries over. Verified from the green deploy run: v6 + curvestage present, no legacy model/formula/position rows.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
@@ -512,14 +634,14 @@
       "acceptance_criteria": [
         {
           "id": "91.1",
-          "text": "Both tracks run OBSERVE-ONLY on the clean deploy: copy (curvestage, recalibrated gate, honest settler) and model (v6 at $25 flat), each $25, trading_enabled=FALSE and NEVER flipped this sprint. The soak's SOLE PnL/edge arbiter is copytrade/fill_repricing.py firehose-reconstructed real fills on the live recorder's OWN firehose lake — the dashboard number is NEVER the judge. Verified by a wiring check that the soak-reporting path reads fill_repricing.py output and that trading_enabled is False (AST guard GREEN).",
+          "text": "Both tracks run OBSERVE-ONLY on the clean deploy: copy (curvestage, recalibrated gate, honest settler) and model (v7 at $25 flat), each $25, trading_enabled=FALSE and NEVER flipped this sprint. The soak's SOLE PnL/edge arbiter is copytrade/fill_repricing.py firehose-reconstructed real fills on the live recorder's OWN firehose lake — the dashboard number is NEVER the judge. Verified by a wiring check that the soak-reporting path reads fill_repricing.py output and that trading_enabled is False (AST guard GREEN).",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
         },
         {
           "id": "91.2",
-          "text": "The SOAK EXIT CRITERIA + KILL-SWITCHES are DEFINED and config-driven: COPY kill-switch = selected grad-rate < 40% over >=15 trades (denominator = real on-curve entries only, US-85.2 fix; offline was 60-69%); the leading health metric is selected grad-rate (converges before PnL). MODEL soak judges feature/scoring parity holding live + no inversion at $25 (post-grad PnL confirmation is owned by the separate backtest/recorder path, not this sprint). The depth-gated size ramp toward $100 stays OUT OF SCOPE / soak-gated. Verified by a test exercising the kill-switch thresholds + a documented exit-criteria checklist.",
+          "text": "The SOAK EXIT CRITERIA + KILL-SWITCHES are DEFINED and config-driven: COPY kill-switch = selected grad-rate < 40% over >=15 trades (denominator = real on-curve entries only, US-85.2 fix; offline was 60-69%); the leading health metric is selected grad-rate (converges before PnL). MODEL soak judges feature/scoring parity holding live + no inversion at $25 (post-grad PnL confirmation is owned by the separate backtest/recorder path, not this sprint). The depth-gated size ramp toward $100 stays OUT OF SCOPE / soak-gated. Verified by a test exercising the kill-switch thresholds + a documented exit-criteria checklist. V7 PRE-REGISTERED SOAK ACCEPTANCE (adopt VERBATIM from MODEL_HANDOFF 'Acceptance criteria for the soak', graded on the post-grad TAPE + on-chain graduation, NEVER dashboard PnL): (a) OBSERVE at flat $25 FIRST — live per-trade $/tr >= ~$2.5 on recent graduates (= the offline impact-independent anchor ~$130-210/day), NO inversion; (b) deep-book ($100-eligible) fills match the 2S/(S+flow) impact model within ~2x (logged from the reconstructed firehose via fill_repricing.py, NOT the dashboard); (c) the selection edge holds OUT-OF-TIME (retrain weekly — the lane decays); (d) ONLY after (a)-(c) hold, ramp size depth-gated toward $100, NEVER exceed $100/trade. The 4 PO RISKS the soak must price in: RIGHT-TAIL-CARRIED (the median trade LOSES; top ~5% of trades carry 110-190% of profit — the #1 risk, worse at larger size); SURVIVORSHIP + FEED-TRANSFER (Birdeye-trained -> retrain on the live AMM feed before capital, US-95); DECAY (lane faded Feb->Jun, retrain frequently, recent fold is the only valid read); FILL-FRAGILITY ($500 modeled vs ~$350 stressed is a deep-book-fill question; honest band ~$300 stressed to ~$570 modeled). The depth-gated size ramp stays OUT OF SCOPE / soak-gated this sprint.",
           "checked": false,
           "dev_status": "not-started",
           "tester_status": "not-started"
