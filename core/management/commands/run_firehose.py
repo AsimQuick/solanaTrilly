@@ -829,17 +829,34 @@ class FirehoseDaemon:
         self._reconciler_factory = reconciler_factory or self._build_reconciler
         self._postgrad_factory = postgrad_factory or self._build_postgrad_source
         self._clock = clock or WallClock()
+        # US-96 TAPE_SOURCE: "shared_billy" (default) reads solanaBilly's shared
+        # tape read-only and does NOT open Helius or write a self-tape.
+        # "self" restores the original self-firehose path as a fallback escape hatch.
+        # SEAM EXCEPTION: when the legacy test seam (collection_factory / helius_factory)
+        # is injected, force TAPE_SOURCE=self so the legacy _helius_loop path runs —
+        # the injected factory IS the tape source in that case (Principle #7).
+        if helius_factory is not None or collection_factory is not None:
+            self._tape_source: str = "self"
+        else:
+            self._tape_source = getattr(settings, "TAPE_SOURCE", "shared_billy")
+
         # AC-3 durable tape sink: every collected swap is appended to the
         # daily-partitioned lake (lake/tapes) so a soak banks a replayable tape and
         # the US-78 swaps surface populates.  Injectable for tests; default writes
         # to the shared lake volume.  The hooks tag phase so the export derives the
         # venue (pre->pump_dot_fun, post->pump_amm).
+        # Under TAPE_SOURCE=shared_billy: do NOT write a self-tape (we read billy's
+        # tape read-only; no duplicate tape write).  _tape is created WITHOUT on_add.
         if tape_sink is None:
             from core.firehose.tape_sink import LakeTapeSink
 
             tape_sink = LakeTapeSink()
         self._tape_sink = tape_sink
-        self._tape = TapeStore(on_add=lambda _m, s: self._tape_sink.record(s, "pre"))
+        if self._tape_source == "shared_billy":
+            # No self-tape write under shared_billy — _tape has no on_add hook.
+            self._tape = TapeStore()
+        else:
+            self._tape = TapeStore(on_add=lambda _m, s: self._tape_sink.record(s, "pre"))
         self._postgrad_tape = TapeStore(on_add=lambda _m, s: self._tape_sink.record(s, "post"))
         self._scored_mints: set[str] = set()
         # Mints known to have graduated (Token row exists).  Refreshed by the
@@ -1050,7 +1067,32 @@ class FirehoseDaemon:
             GRAD_STALE_SECONDS,
         )
 
-        helius_task = asyncio.create_task(self._helius_loop(), name="firehose-helius")
+        # US-96 TAPE_SOURCE branch:
+        #   shared_billy → guard freshness first (idle + log warning if stale);
+        #                   run _shared_billy_loop instead of _helius_loop;
+        #                   no Helius subscription, no self-tape write.
+        #   self          → original path (HeliusBirthTapeSource + self-tape).
+        if self._tape_source == "shared_billy":
+            from core.firehose.shared_tape import STALE_WARNING, billy_firehose_is_live
+            if not billy_firehose_is_live():
+                logger.warning(
+                    "%s TAPE_SOURCE=shared_billy startup guard: %s — IDLE (no Helius, no self-tape).",
+                    LOG_PREFIX, STALE_WARNING,
+                )
+                # Idle: just run the watcher + scorer so the daemon stays alive
+                # and the flag is respected; no collection happens until tapes are fresh.
+                collection_task = asyncio.create_task(
+                    self._shared_billy_idle_loop(), name="firehose-shared-idle"
+                )
+            else:
+                collection_task = asyncio.create_task(
+                    self._shared_billy_loop(), name="firehose-shared-billy"
+                )
+            helius_task = collection_task  # alias for result inspection below
+        else:
+            helius_task = asyncio.create_task(self._helius_loop(), name="firehose-helius")
+            collection_task = helius_task
+
         reconciler_task = asyncio.create_task(self._reconciler_loop(), name="firehose-reconciler")
         scoring_task = asyncio.create_task(self._scoring_loop(), name="firehose-scoring")
         postgrad_task = asyncio.create_task(self._postgrad_loop(), name="firehose-postgrad")
@@ -1082,21 +1124,21 @@ class FirehoseDaemon:
             await sync_to_async(self._tape_sink.flush, thread_sensitive=True)()
             logger.info("%s active run stopped — all tasks cancelled, sources disconnected.", LOG_PREFIX)
 
-            # DETECTION-CRASH RECOVERY: inspect helius_task result.
-            # If helius_task exited with a real exception (not CancelledError and
-            # not None from clean completion), the detection path crashed and was
-            # silently absorbed by the gather.  Log CRITICAL and trigger recovery
-            # so the container is restarted rather than running with dead detection.
+            # DETECTION-CRASH RECOVERY: inspect helius_task/collection_task result.
+            # If it exited with a real exception (not CancelledError and not None
+            # from clean completion), the collection path crashed and was silently
+            # absorbed by the gather.  Log CRITICAL and trigger recovery so the
+            # container is restarted rather than running with dead detection.
             #
-            # tasks index 0 = helius_task (matches the tasks list order above).
+            # tasks index 0 = helius_task / collection_task (see tasks list above).
             helius_result = results[0]
             if (
                 isinstance(helius_result, BaseException)
                 and not isinstance(helius_result, asyncio.CancelledError)
             ):
                 logger.critical(
-                    "%s helius_task exited with exception: %r — "
-                    "detection path is dead. Triggering recovery (os._exit) "
+                    "%s collection_task exited with exception: %r — "
+                    "collection path is dead. Triggering recovery (os._exit) "
                     "so Docker restart policy recreates the container.",
                     LOG_PREFIX,
                     helius_result,
@@ -1642,6 +1684,78 @@ class FirehoseDaemon:
 
     _collection_loop = _collection_loop_legacy
     _graduation_loop = _graduation_loop_legacy
+
+    # ------------------------------------------------------------------
+    # Task a2 — SHARED BILLY TAPE READER (TAPE_SOURCE=shared_billy)
+    # ------------------------------------------------------------------
+
+    async def _shared_billy_loop(self) -> None:
+        """US-96: tail solanaBilly's shared tape and feed normalised swaps into
+        self._tape, replacing the Helius subscription.
+
+        No Helius subscription is opened.  No self-tape is written.  The scoring
+        loop reads self._tape exactly as before.
+
+        Freshness is re-checked inside BillyTapeTailer.async_iter; if billy's
+        tape goes stale mid-run, the tailer idles (logs the warning) until fresh
+        tapes reappear.
+        """
+        from core.firehose.shared_tape import BILLY_TAPE_DEFAULT_ROOT, BillyTapeTailer
+
+        tape_root = BILLY_TAPE_DEFAULT_ROOT
+        tailer = BillyTapeTailer(root=tape_root)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=50_000)
+
+        logger.info(
+            "%s TAPE_SOURCE=shared_billy: tailing %s (no Helius sub, no self-tape write).",
+            LOG_PREFIX, tape_root,
+        )
+
+        # Start the async_iter coroutine that pushes swap dicts onto the queue.
+        iter_task = asyncio.create_task(
+            tailer.async_iter(stop_event=self._stop, queue=queue),
+            name="shared-billy-iter",
+        )
+        try:
+            while not self._stop.is_set():
+                # Drain the queue and add rows to the TapeStore.
+                try:
+                    swap = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    await asyncio.sleep(0.05)
+                    continue
+                mint = swap.get("mint")
+                if mint:
+                    self._tape.add(mint, swap)
+        except asyncio.CancelledError:
+            iter_task.cancel()
+            await asyncio.gather(iter_task, return_exceptions=True)
+            raise
+        finally:
+            iter_task.cancel()
+            await asyncio.gather(iter_task, return_exceptions=True)
+
+    async def _shared_billy_idle_loop(self) -> None:  # pragma: no cover — startup stale guard; I/O
+        """US-96: idle loop when shared_billy tape is stale at startup.
+
+        Periodically re-checks freshness.  When the tape becomes fresh, logs
+        the fact and returns (the outer _run_active / gather loop will restart
+        the active run on the next firehose_active poll cycle).
+        """
+        from core.firehose.shared_tape import STALE_WARNING, billy_firehose_is_live
+
+        logger.warning(
+            "%s TAPE_SOURCE=shared_billy IDLE — %s Waiting for fresh tapes.",
+            LOG_PREFIX, STALE_WARNING,
+        )
+        while not self._stop.is_set():
+            await asyncio.sleep(30.0)
+            if billy_firehose_is_live():
+                logger.info(
+                    "%s TAPE_SOURCE=shared_billy: fresh tapes detected — restart collection.",
+                    LOG_PREFIX,
+                )
+                return
 
     # ------------------------------------------------------------------
     # Task b2 — GRADUATION SECONDARY (Birdeye gap-fill → MigrateReconciler)

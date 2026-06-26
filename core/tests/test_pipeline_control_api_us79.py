@@ -1,11 +1,11 @@
 # ---
 # module: core.tests.test_pipeline_control_api_us79
-# sprint: sprint-14
-# story: US-79 (operator inference Start/Stop)
+# sprint: sprint-15
+# story: US-79 (operator inference Start/Stop), US-96 (freshness gate mock)
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-20
-# dependencies: pytest, pytest-django
+# last-updated: 2026-06-26
+# dependencies: pytest, pytest-django, unittest.mock
 # ---
 """US-79 — pipeline control API (inference Start/Stop + status board).
 
@@ -16,6 +16,7 @@ touches trading_enabled (the capital gate stays observe/paper).
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -46,11 +47,15 @@ def test_status_reflects_pipeline_state(client):
 def test_inference_start_sets_flags(client):
     from core.models import PipelineState
 
-    resp = client.post(
-        "/api/control/inference/",
-        data=json.dumps({"on": True}),
-        content_type="application/json",
-    )
+    # US-96: mock the freshness check so this US-79 test works without a
+    # real billy_tape mount (the freshness gate is separately tested in
+    # test_shared_firehose_us96.py::TestInferenceEnableFreshnessGate).
+    with patch("core.firehose.shared_tape.billy_firehose_is_live", return_value=True):
+        resp = client.post(
+            "/api/control/inference/",
+            data=json.dumps({"on": True}),
+            content_type="application/json",
+        )
     assert resp.status_code == 200
     body = resp.json()
     assert body["inference_on"] is True

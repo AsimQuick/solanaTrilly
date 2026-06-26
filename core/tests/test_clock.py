@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_clock
-# sprint: sprint-2, sprint-6
-# story: US-2 AC-2.2, US-24 AC-24.4
+# sprint: sprint-15
+# story: US-2 AC-2.2, US-24 AC-24.4, US-96 (shared_tape allowlist)
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-16
+# last-updated: 2026-06-26
 # dependencies: core.clock, core.replay_source, datetime, pathlib, ast, asyncio
 # ---
 """AC-2.2 — Injectable Clock abstraction tests.
@@ -180,6 +180,11 @@ _ALLOWED_FUNCTION = "now"  # method name inside WallClock
 _TIME_TIME_ALLOWED: dict[Path, set[str]] = {
     CORE_ROOT / "rate_limiter.py": {"acquire"},
     CORE_ROOT / "management" / "commands" / "run_firehose.py": {"_poll_once", "start"},
+    # US-96: billy_firehose_is_live checks the wall-clock age of a file's mtime.
+    # This is intentional infrastructure usage (same rationale as the watchdog):
+    # it is a host-filesystem freshness check that explicitly needs wall-clock
+    # time, not the injectable Clock seam (which is async-bound + replay-only).
+    CORE_ROOT / "firehose" / "shared_tape.py": {"billy_firehose_is_live"},
 }
 
 
