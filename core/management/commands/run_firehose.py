@@ -1,10 +1,11 @@
 # ---
 # module: core.management.commands.run_firehose
-# sprint: epic-tape-sourcing-escalation
+# sprint: sprint-15
 # story: EPIC-tape-sourcing-escalation Tier 2 + Tier 3,
 #        hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution,
 #        hotfix-grad-liveness-watchdog, hotfix-firehose-drain-and-fairness,
-#        US-94 v7 gate + tr30_t600 exit + depth-gated sizing + live wiring
+#        US-94 v7 gate + tr30_t600 exit + depth-gated sizing + live wiring,
+#        US-92 post-grad rows carry mint
 # status: fixed
 # created-by: dev-team
 # last-updated: 2026-06-26
@@ -3053,6 +3054,14 @@ def _postgrad_event_to_swap(event: dict, mint: str, graduated_block_time: int) -
     so the settler's entry/exit walk (over absolute block_time) lines up with the
     grad + score_at_elapsed_s entry the scoring task computes.
 
+    US-92 FIX: ``mint`` is stamped directly into the returned dict so that every
+    post-grad row written to the lake via LakeTapeSink.record() carries its
+    graduated-token mint.  Without this the lake rows have keys
+    [block_time, owner, phase, price, rel, side, slot, vol, vol_usd] with NO mint,
+    making post-grad fills unattributable to a token offline.  The mint is KNOWN
+    at emission from the per-subscription factory call (``self._postgrad_factory(mint)``)
+    — it requires ZERO additional RPC calls or credit spend.
+
     Returns None for an unmappable event (the caller skips None).
     """
     from core.tape.birdeye_swap_mapper import map_birdeye_swap
@@ -3062,6 +3071,7 @@ def _postgrad_event_to_swap(event: dict, mint: str, graduated_block_time: int) -
         return None
     block_time = int(mapped.get("block_time", 0))
     return {
+        "mint": mint,          # US-92: stamped from per-subscription context — zero credits
         "block_time": block_time,
         "slot": int(mapped.get("slot", 0)),
         "signature": str(mapped.get("signature", "")),
