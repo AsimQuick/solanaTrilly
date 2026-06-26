@@ -27,6 +27,14 @@ ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
 BIRDEYE_API_KEY = env("BIRDEYE_API_KEY", default="")
 HELIUS_API_KEY = env("HELIUS_API_KEY", default="")
 
+# US-96 — Shared firehose source (TAPE_SOURCE toggle).
+#   "shared_billy" (default): read solanaBilly's read-only shared tape at
+#     /app/lake/billy_tape; do NOT open Helius/Birdeye subscriptions; do NOT write
+#     a self-tape.  Requires the :ro bind-mount in docker-compose.staging.yml.
+#   "self": the original self-firehose path (Helius subscription + self-tape write).
+#     Keep as a working fallback escape hatch.
+TAPE_SOURCE: str = env("TAPE_SOURCE", default="shared_billy")
+
 INSTALLED_APPS = [
     "daphne",
     "django.contrib.admin",

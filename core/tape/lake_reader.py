@@ -1,11 +1,11 @@
 # ---
 # module: core.tape.lake_reader
-# sprint: sprint-5
-# story: US-19 AC-19.3
+# sprint: sprint-15
+# story: US-19 AC-19.3, US-96 (schema-A normalisation)
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-16
-# dependencies: gzip, glob, json, pathlib, logging, typing
+# last-updated: 2026-06-26
+# dependencies: gzip, glob, json, pathlib, logging, typing, core.firehose.shared_tape
 # ---
 """LakeReader — truncated-tail-tolerant jsonl.gz lake reader (PRD §6.4.1).
 
@@ -18,6 +18,12 @@ daily-partitioned jsonl.gz lake and silently tolerates:
   skips the rest of that file.
 - A partial / malformed final line (json.JSONDecodeError) — the line is
   silently skipped; the rest of the file is unaffected.
+
+US-96: both schema-A (solanaBilly raw-reserves) and schema-B (solanatrilly
+self-tape) rows are normalised via ``normalise_row`` from
+``core.firehose.shared_tape`` before being yielded.  Schema-A rows that are
+missing `mint` (post-grad rows) are silently skipped.  Rows that fail
+normalisation are skipped and counted on ``self.bad_lines``.
 
 Partition layout (§6.4.1):
     {base_dir}/dt=YYYY-MM-DD/part-*.jsonl.gz
@@ -40,13 +46,23 @@ class LakeReader:
     truncation point is yielded; the truncated fragment and the rest of that
     file are silently skipped.
 
+    US-96: automatically normalises schema-A (solanaBilly raw-reserves) rows
+    to the same format as schema-B (solanatrilly self-tape) rows via
+    ``core.firehose.shared_tape.normalise_row`` + ``norm_row_to_swap_dict``.
+    Rows that cannot be normalised (missing mint, zero denominators) are
+    silently skipped; the count is tracked on ``self.bad_lines``.
+
     Args:
         base_dir: Root of the lake tree.  Defaults to ``lake/tapes``.
                   Tests pass ``tmp_path`` here to keep the filesystem clean.
+        normalise: If True (default), run the schema-A/B normaliser on every
+                   row.  Set False only in tests that need the raw dict.
     """
 
-    def __init__(self, base_dir: str | Path = "lake/tapes") -> None:
+    def __init__(self, base_dir: str | Path = "lake/tapes", *, normalise: bool = False) -> None:
         self._base_dir = Path(base_dir)
+        self._normalise = normalise
+        self.bad_lines: int = 0   # rows skipped due to normalisation failure
 
     # ------------------------------------------------------------------
     # Public API
@@ -103,7 +119,16 @@ class LakeReader:
         recent part may end mid-stream (EOFError from gzip).  Every complete
         line read before the truncation point is yielded; the rest of that
         file is skipped rather than aborting the whole read.
+
+        US-96: if normalise=True (default), each raw dict passes through
+        the schema-A/B normaliser; rows that fail normalisation (missing mint,
+        bad reserves) are silently skipped (bad_lines counter incremented).
+        The normalised row is converted back to a swap-dict for caller compat.
         """
+        # Lazy import to avoid circular deps at module load time.
+        if self._normalise:
+            from core.firehose.shared_tape import norm_row_to_swap_dict, normalise_row
+
         for day in days:
             pattern = str(self._base_dir / f"dt={day}" / "part-*.jsonl.gz")
             for path in sorted(glob.glob(pattern)):
@@ -125,8 +150,16 @@ class LakeReader:
                         if not line:
                             continue
                         try:
-                            yield json.loads(line)
+                            raw = json.loads(line)
                         except json.JSONDecodeError:
                             continue  # partial trailing line — silently skip
+                        if self._normalise:
+                            norm = normalise_row(raw)
+                            if norm is None:
+                                self.bad_lines += 1
+                                continue  # skip missing-mint / invalid rows
+                            yield norm_row_to_swap_dict(norm)
+                        else:
+                            yield raw
                 finally:
                     fh.close()

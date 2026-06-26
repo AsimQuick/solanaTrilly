@@ -1,0 +1,47 @@
+[
+  {
+    "_comment": "Real billy tape row captured 2026-06-26 from /root/tape/dt=2026-06-26/part-1782452210-13.jsonl.gz",
+    "mint": "87ptU7np4H8goqe2WgEW7ups5m4PtsuCJgsXY9Kcpump",
+    "slot": 428959724,
+    "block_time": 1782452209,
+    "received_at": 1782452210.133931,
+    "side": "buy",
+    "sol_amount": 98765431,
+    "token_amount": 3191941405246,
+    "owner": "9zAx7uPk1Rh3khufmFLsYh3RTRoxwvHEb51RwBBx3344",
+    "signature": "5P1gWT4AndXJopS6132jvvZ5fekuH7m49SFv8Rdm8bSbjiVAEM947r3fZ8MsPtJdEir8JuLJCJRqAfbrwYvU5iA8",
+    "virtual_sol_reserves": 31609313819,
+    "virtual_token_reserves": 1018370730358943,
+    "real_sol_reserves": 1609313819
+  },
+  {
+    "_comment": "Second real billy tape row - schema A sell",
+    "mint": "3qiYGHUZiWoFKNA3ZbqMTFrCdfitNZHgofhghy9vpump",
+    "slot": 428959725,
+    "block_time": 1782452209,
+    "received_at": 1782452210.528755,
+    "side": "sell",
+    "sol_amount": 1830371702,
+    "token_amount": 53104975253972,
+    "owner": "4pnjseX8WKazqzjQnQ8hFoBSywSDmC3gandJXK5wUuPY",
+    "signature": "2NwqSFcvxgKTwR31aH6hyhmzYhS2Ln6LUymMVwYEeSd8PZXEuHLz29R1wW1BBztFA8A3kVtfaftwB2ou3oGevpTL",
+    "virtual_sol_reserves": 32406456113,
+    "virtual_token_reserves": 993320586867491,
+    "real_sol_reserves": 2406456113
+  },
+  {
+    "_comment": "Third real billy tape row - another mint",
+    "mint": "A1hnP1hq9FeHMiDajVb1E9W2QHwkjVP2B7hgGjWfpump",
+    "slot": 428959725,
+    "block_time": 1782452209,
+    "received_at": 1782452210.530822,
+    "side": "sell",
+    "sol_amount": 184066355,
+    "token_amount": 2617582822679,
+    "owner": "72t9W6oSwYnE5yk2PTaVeReAm4Xy1YLs1YpmCt2FgrYq",
+    "signature": "4wMGmdgA1TmuE1oX584U3fBmS9AdYA2rNfr3xbJ3c1NRKED2kvMRaaJohYMsXewGc4XFNZwhxzPSxiGKQ41GDKnx",
+    "virtual_sol_reserves": 47485102581,
+    "virtual_token_reserves": 677896822282358,
+    "real_sol_reserves": 17485102581
+  }
+]

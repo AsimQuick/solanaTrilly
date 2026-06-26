@@ -15,9 +15,10 @@
 #   celery-beat: dedicated periodic scheduler container.
 #   VPS is never hand-edited: deploy.yml pulls the GHCR image and brings up this file.
 # created-by: dev-team
-# sprint: sprint-7
-# story: US-6 AC-6.2, US-16 AC-16.3, US-31 AC-31.1, US-48 AC-48.1, US-59 AC-59.1
-# last-updated: 2026-06-18
+# sprint: sprint-15
+# story: US-6 AC-6.2, US-16 AC-16.3, US-31 AC-31.1, US-48 AC-48.1, US-59 AC-59.1,
+#        US-96 (shared firehose: /root/tape :ro mount + TAPE_SOURCE + drop HELIUS from inference_engine)
+# last-updated: 2026-06-26
 # ---
 #
 # Hard isolation rules:
@@ -163,16 +164,24 @@ services:
       - solanatrilly_net
     restart: unless-stopped
 
-  # Persistent, GATED inference engine (US-79). Runs run_firehose unbounded; while
-  # PipelineState.firehose_active is False it idles (no Birdeye/Helius subscriptions,
-  # no spend). The dashboard's Inference Start/Stop flips that flag — no shell, no
-  # container spawning. Writes the live tape to the shared durable lake (AC-3).
+  # Persistent, GATED inference engine (US-79 / US-96). Runs run_firehose unbounded;
+  # while PipelineState.firehose_active is False it idles (no subscriptions, no spend).
+  # US-96 SHARED FIREHOSE: reads solanaBilly's tape READ-ONLY from /root/tape (schema A);
+  # does NOT open its own Helius subscription; does NOT write a self-tape.
+  # HELIUS_API_KEY intentionally absent here (US-96 §5e): inference_engine no longer
+  # needs it for tape collection. listener / celery-worker / copytrade_engine retain it
+  # for detection/settler/price lookups.
+  # Rollback: set TAPE_SOURCE=self and re-add HELIUS_API_KEY to restore self-firehose.
   inference_engine:
     image: ghcr.io/asimquick/solanatrilly:latest
     command: python manage.py run_firehose -v 2
     volumes:
       - /root/solanatrilly/models:/app/models:ro
       - solanatrilly_lake:/app/lake/firehose
+      # US-96: solanaBilly's shared firehose tape (schema A, read-only).
+      # billy writes /root/tape; we mount it at a DISTINCT path so the source
+      # is unambiguous and we can never mutate billy's lake.
+      - /root/tape:/app/lake/billy_tape:ro
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
@@ -181,7 +190,10 @@ services:
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-140.82.43.36,localhost,127.0.0.1}
       REDIS_URL: redis://redis:6379/0
       BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
-      HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+      # US-96: default shared_billy; set self for self-firehose fallback escape hatch.
+      TAPE_SOURCE: ${TAPE_SOURCE:-shared_billy}
+      # HELIUS_API_KEY is intentionally ABSENT from inference_engine (US-96 §5e):
+      # under TAPE_SOURCE=shared_billy inference_engine does not open Helius.
       # Live-trading wallet + RPC (US-80). Read ONLY when trading_enabled=True;
       # inert in observe/paper. Secret lives in the VPS .env (gitignored).
       TRADING_WALLET_KEY: ${TRADING_WALLET_KEY:-}
@@ -201,6 +213,9 @@ services:
     volumes:
       - /root/solanatrilly/models:/app/models:ro
       - solanatrilly_lake:/app/lake/firehose
+      # US-96: read-only access to solanaBilly's shared tape for the curvestage
+      # settler and US-78 swaps export (schema-A normalisation).
+      - /root/tape:/app/lake/billy_tape:ro
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@db:5432/solanatrilly
@@ -212,6 +227,8 @@ services:
       # Without the key it returns empty -> NOTHING settles -> zero copy PnL.
       BIRDEYE_API_KEY: ${BIRDEYE_API_KEY:-}
       HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+      # US-96: default shared_billy (allows future settler/export reads from billy_tape).
+      TAPE_SOURCE: ${TAPE_SOURCE:-shared_billy}
     depends_on:
       db:
         condition: service_healthy

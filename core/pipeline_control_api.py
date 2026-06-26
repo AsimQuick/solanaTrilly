@@ -1,11 +1,11 @@
 # ---
 # module: core.pipeline_control_api
-# sprint: sprint-14
-# story: US-79 (operator dashboard control — inference start/stop)
+# sprint: sprint-15
+# story: US-79 (operator dashboard control), US-96 (shared firehose freshness gate)
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-20
-# dependencies: djangorestframework, core.models
+# last-updated: 2026-06-26
+# dependencies: djangorestframework, core.models, core.firehose.shared_tape
 # ---
 """Operator control API for the live inference pipeline (Start/Stop from the UI).
 
@@ -85,6 +85,20 @@ def inference_control_view(request):
     on = body["on"]
     if not isinstance(on, bool):
         return Response({"error": "'on' must be a boolean."}, status=400)
+
+    # US-96 freshness precondition: when enabling inference under TAPE_SOURCE=shared_billy,
+    # check that solanaBilly's tape is live BEFORE flipping the flag.
+    # If stale → refuse with the verbatim warning; do NOT flip firehose_active.
+    if on:
+        from django.conf import settings as django_settings
+        tape_source = getattr(django_settings, "TAPE_SOURCE", "shared_billy")
+        if tape_source == "shared_billy":
+            from core.firehose.shared_tape import STALE_WARNING, billy_firehose_is_live
+            if not billy_firehose_is_live():
+                return Response(
+                    {"error": STALE_WARNING},
+                    status=409,
+                )
 
     from core.models import PipelineState
 

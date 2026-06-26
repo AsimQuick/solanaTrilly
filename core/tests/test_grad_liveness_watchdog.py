@@ -1,10 +1,10 @@
 # ---
 # module: core.tests.test_grad_liveness_watchdog
-# sprint: hotfix-grad-liveness-watchdog
-# story: hotfix-grad-liveness-watchdog
+# sprint: sprint-15
+# story: hotfix-grad-liveness-watchdog, US-96 (tape_source=self for legacy test seam)
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-23
+# last-updated: 2026-06-26
 # dependencies: pytest, pytest-django, asyncio, threading, unittest.mock,
 #               core.management.commands.run_firehose, core.models, core.clock
 # ---
@@ -392,6 +392,9 @@ def test_crashed_helius_task_triggers_recovery():
         clock=VirtualClock(datetime(2026, 6, 23, tzinfo=timezone.utc)),
         wallet_bank=None,
     )
+    # US-96: force TAPE_SOURCE=self so _run_active runs _helius_loop (which is
+    # overridden to crash in this test) rather than _shared_billy_loop.
+    daemon._tape_source = "self"
 
     # Override the watchdog factory so we get a non-os._exit recovery.
     def _watchdog_factory():
