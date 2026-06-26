@@ -4,7 +4,7 @@
 # story: US-87
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-26
+# last-updated: 2026-06-26  (fix: test_v7_booster_files_present decorated @_REQUIRE_BOOSTERS)
 # dependencies: pytest, json, pathlib, numpy, core.v7_scorer
 # ---
 """US-87 — trilly_pregrad_v7 vendor verification + offline parity harness.
@@ -117,8 +117,9 @@ def test_v7_model_handoff_present() -> None:
     assert handoff.is_file(), f"MODEL_HANDOFF.md missing at {handoff}"
 
 
+@_REQUIRE_BOOSTERS
 def test_v7_booster_files_present() -> None:
-    """8 booster files present under models/trilly_pregrad_v7/selection/."""
+    """8 booster files present under models/trilly_pregrad_v7/selection/ (host-local)."""
     assert _V7_SELECTION.is_dir(), (
         f"selection/ dir missing at {_V7_SELECTION}. 8 boosters required."
     )
