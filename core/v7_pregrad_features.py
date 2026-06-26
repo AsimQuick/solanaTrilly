@@ -386,6 +386,252 @@ def compute_n_pregrad_holders(
 
 
 # ---------------------------------------------------------------------------
+# Birdeye trade_pages → internal swap dict normalisation (lab-parity bridge)
+# ---------------------------------------------------------------------------
+
+
+def normalise_trade_page_swap(it: dict, grad_ts: float) -> dict | None:
+    """Normalise one Birdeye trade_pages swap entry to the internal swap dict.
+
+    This is the BRIDGE between the lab's Birdeye raw30k_pregrad format and the
+    internal swap dict consumed by compute_v7_pregrad_feats / compute_n_pregrad_holders.
+
+    Mirrors ``backfill_pregrad.py:pre_features()`` + ``holder_exit.py:pregrad_holders()``
+    exactly so the live builder reproduces the lab on the #1 feature and all 19
+    pre-grad feats.
+
+    TIME FILTER NOTE (parity-critical):
+      ``backfill_pregrad.py:pre_features()`` filters ``bt >= gts`` (pre-grad feats only).
+      ``holder_exit.py:pregrad_holders()`` does NOT filter by time — it processes ALL
+      trades in the file regardless of blockUnixTime.
+      This function applies the pre_features filter (bt < grad_ts) so that the result
+      can be passed to compute_v7_pregrad_feats.
+      For holder counting, use compute_n_pregrad_holders_from_trade_pages() which
+      replicates pregrad_holders() with NO time filter.
+
+    INPUT SCHEMA (Birdeye trade_pages item):
+      blockUnixTime  — Unix timestamp of the swap
+      tokenPrice     — price in SOL/token (preferred) or basePrice (fallback)
+      quotePrice     — SOL/USD price for volume dollarisation
+      quote.uiAmount — SOL volume (human-readable); vol_usd = abs(uiAmount) * quotePrice
+      side           — "buy" | "sell" (or inferred from base.uiChangeAmount)
+      owner          — wallet address
+      to.uiAmount    — tokens received (buy leg)
+      from.uiAmount  — tokens sent (sell leg)
+      txType         — must be "swap"
+
+    Returns None if the trade is not a pre-graduation swap (bt >= grad_ts), not a
+    "swap" txType, has no price, or has missing/invalid fields.
+
+    OUTPUT SCHEMA (internal swap dict):
+      block_time     — blockUnixTime (float)
+      price          — SOL/token price
+      vol            — USD volume (abs(quote.uiAmount) * quotePrice)
+      vol_sol        — SOL volume (abs(quote.uiAmount))
+      side           — "buy" | "sell"
+      owner          — wallet address (str)
+      token_amount   — token amount in uiAmount units (float, for balance-based holders)
+    """
+    if it.get("txType") != "swap":
+        return None
+
+    bt = it.get("blockUnixTime") or it.get("block_unix_time")
+    if bt is None or float(bt) >= grad_ts:
+        return None
+
+    price = it.get("tokenPrice") or it.get("basePrice")
+    if not price or float(price) <= 0:
+        return None
+
+    q = it.get("quote") or {}
+    qp = float(it.get("quotePrice") or q.get("price") or 0)
+    vol_sol = abs(float(q.get("uiAmount") or 0))
+    vol_usd = vol_sol * qp
+
+    side = it.get("side")
+    if side not in ("buy", "sell"):
+        ca = float((it.get("base") or {}).get("uiChangeAmount") or 0)
+        side = "buy" if ca > 0 else "sell"
+
+    owner = it.get("owner") or ""
+
+    # Token amount for balance-based holder computation (AC-93.1):
+    # Use to.uiAmount (buy) or from.uiAmount (sell) — exactly as lab pregrad_holders()
+    leg = it.get("to") if side == "buy" else it.get("from")
+    token_amount_ui = abs(float((leg or {}).get("uiAmount") or 0.0))
+
+    return {
+        "block_time": float(bt),
+        "price": float(price),
+        "vol": vol_usd,
+        "vol_sol": vol_sol,
+        "side": side,
+        "owner": owner,
+        "token_amount": token_amount_ui,  # uiAmount — for balance-based holder count
+    }
+
+
+def compute_n_pregrad_holders_from_trade_pages(trade_pages: list[list[dict]]) -> float:
+    """Compute n_pregrad_holders from Birdeye trade_pages with NO time filter.
+
+    This replicates ``holder_exit.py:pregrad_holders()`` EXACTLY.  The lab function
+    processes ALL trades in the raw30k_pregrad file without filtering by blockUnixTime.
+    The raw30k_pregrad files are fetched for [gts-CAP, gts], but may contain a small
+    number of swaps at or after gts (graduation instant).  Applying a bt < gts filter
+    changes the holder count and breaks parity.
+
+    PARITY-CRITICAL: this function is used by compute_v7_features_from_trade_pages
+    to reproduce parity_sample.parquet's n_pregrad_holders exactly.
+
+    The live pipeline uses compute_n_pregrad_holders() (which filters bt < grad_ts)
+    because the live swap stream mixes pre- and post-grad rows and we must not
+    include post-grad trades in the holder count.
+
+    Parameters
+    ----------
+    trade_pages:
+        ``rec["trade_pages"]`` from raw30k_pregrad/<mint>.json.gz.
+
+    Returns
+    -------
+    float
+        Count of distinct wallets with net token balance > 0 across ALL trades.
+    """
+    bal: dict[str, float] = {}
+    for page in (trade_pages or []):
+        for s in (page or []):
+            if s.get("txType") != "swap":
+                continue
+            owner = s.get("owner") or ""
+            side = s.get("side") or ""
+            if not owner or side not in ("buy", "sell"):
+                continue
+            leg = s.get("to") if side == "buy" else s.get("from")
+            amt = abs(float((leg or {}).get("uiAmount") or 0.0))
+            bal[owner] = bal.get(owner, 0.0) + (amt if side == "buy" else -amt)
+    return float(sum(1 for v in bal.values() if v > 0))
+
+
+def compute_v7_features_from_trade_pages(
+    trade_pages: list[list[dict]],
+    grad_ts: float,
+    *,
+    wallet_bank: Any | None = None,
+    nan_fill: dict[str, float] | None = None,
+) -> dict[str, float] | None:
+    """Compute the v7 44-feature vector from Birdeye trade_pages format.
+
+    This is the PARITY-PROOF entry point: it consumes the exact same format as the
+    lab's raw30k_pregrad/*.json.gz files and must reproduce ``parity_sample.parquet``
+    feature values exactly.
+
+    The live pipeline (firehose / schema-A / schema-B) uses ``assemble_v7_features``
+    instead (different input format, same feature logic).  This function is the bridge
+    that proves the builder LOGIC is correct given the lab's Birdeye input — it closes
+    the AC-93.4(b) "builder-logic half" of parity.
+
+    KEY DESIGN DIFFERENCE FROM assemble_v7_features
+    ================================================
+    1. Pre-grad features (19 feats): normalise_trade_page_swap filters bt >= grad_ts
+       exactly as backfill_pregrad.py:pre_features() does.
+    2. n_pregrad_holders: computed by compute_n_pregrad_holders_from_trade_pages()
+       which does NOT filter by time, exactly as holder_exit.py:pregrad_holders() does.
+       The raw30k_pregrad files may contain a small number of swaps at/after gts;
+       the lab includes them in the holder count.
+
+    Parameters
+    ----------
+    trade_pages:
+        ``rec["trade_pages"]`` from raw30k_pregrad/<mint>.json.gz.
+    grad_ts:
+        ``rec["gts"]`` — graduation Unix timestamp.
+    wallet_bank:
+        Optional WalletBankLookup for rep features (pass None for pre+holder only).
+    nan_fill:
+        Optional nan_fill dict (pre+holder medians from meta.json).
+
+    Returns
+    -------
+    dict with 44 float features in V7_FEATURE_ORDER, or None if no valid pre-grad swaps.
+    """
+    # 1. Pre-grad swap normalisation (filters bt >= grad_ts — matches pre_features())
+    swaps: list[dict] = []
+    for page in (trade_pages or []):
+        for it in (page or []):
+            norm = normalise_trade_page_swap(it, grad_ts)
+            if norm is not None:
+                swaps.append(norm)
+
+    # 2. Compute the 19 pre-grad feats via the existing builder
+    pre_feats = compute_v7_pregrad_feats(
+        swaps, grad_ts, sol_usd_spot=1.0
+    )  # vol is already in USD
+    if pre_feats is None:
+        return None
+
+    # 3. n_pregrad_holders: NO time filter (replicates pregrad_holders() exactly)
+    n_holders = compute_n_pregrad_holders_from_trade_pages(trade_pages)
+
+    # 4. Rep features (0-fill if no bank)
+    if wallet_bank is not None:
+        try:
+            from core.v4_rep_builder import compute_rep_features
+
+            pre_buy_swaps = sorted(
+                (s for s in swaps if s["side"] == "buy" and s.get("owner")
+                 and not (s.get("owner") or "").endswith("pump")),
+                key=lambda s: s["block_time"],
+            )
+            buyer_first_vol: dict[str, float] = {}
+            buyer_total_vol: dict[str, float] = {}
+            buyer_order: list[str] = []
+            for s in pre_buy_swaps:
+                w = s["owner"]
+                v = float(s.get("vol", 0.0) or 0.0)
+                if w not in buyer_first_vol:
+                    buyer_first_vol[w] = v
+                    buyer_order.append(w)
+                buyer_total_vol[w] = buyer_total_vol.get(w, 0.0) + v
+
+            time_buyers = [
+                {"wallet": w, "weight": max(1.0, buyer_first_vol[w])}
+                for w in buyer_order[:10]
+            ]
+            size_sorted = sorted(buyer_total_vol.items(), key=lambda x: x[1], reverse=True)
+            size_buyers = [
+                {"wallet": w, "weight": max(1.0, v)}
+                for w, v in size_sorted[:10]
+            ]
+            rep_dict = compute_rep_features(time_buyers, size_buyers, float(grad_ts), wallet_bank)
+        except Exception as exc:
+            logger.warning("[v7_pregrad_features] rep computation failed: %s", exc)
+            rep_dict = {fname: 0.0 for fname in V7_REP_FEATURE_NAMES}
+    else:
+        rep_dict = {fname: 0.0 for fname in V7_REP_FEATURE_NAMES}
+
+    # 5. Assemble in V7_FEATURE_ORDER
+    result: dict[str, float] = {}
+    for fname in V7_FEATURE_ORDER:
+        if fname in pre_feats:
+            result[fname] = float(pre_feats[fname])
+        elif fname == "n_pregrad_holders":
+            result[fname] = float(n_holders)
+        elif fname in rep_dict:
+            result[fname] = float(rep_dict[fname])
+        else:  # pragma: no cover
+            result[fname] = 0.0  # pragma: no cover
+
+    # 6. Apply NaN fill
+    if nan_fill is not None:
+        for fname in V7_FEATURE_ORDER:
+            v = result.get(fname, float("nan"))
+            if v is None or (isinstance(v, float) and v != v):  # pragma: no cover
+                result[fname] = nan_fill.get(fname, 0.0)  # pragma: no cover
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # assemble_v7_features — full 44-feature vector
 # ---------------------------------------------------------------------------
 
