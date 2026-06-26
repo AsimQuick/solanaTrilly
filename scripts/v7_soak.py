@@ -919,46 +919,37 @@ def main(argv: Optional[list[str]] = None) -> None:
         context="Documented in MANIFEST.md and copytrade/firehose_harness.py",
     )
 
-    # BUG #2b: 'vol' field on schema-B rows contains SOL notional (NOT USD)
-    # compute_v7_pregrad_feats reads 'vol' as if it were USD, then falls back to
-    # vol_sol * sol_usd_spot ONLY when vol == 0.  On schema-B rows, vol == vol_sol
-    # (same SOL notional value), so the fallback is NEVER triggered.  This means
-    # all dollar features (pre_vol_usd, pre_buy_vol_usd, etc.) are in SOL units
-    # on schema-B tapes, not USD.  At $84/SOL, the error is ~84x on raw volumes.
+    # BUG #2b: [RESOLVED in commit 6bdf593, US-91] dollar-basis parity break.
+    # compute_v7_pregrad_feats used to read the overloaded 'vol' key as USD; since
+    # norm_row_to_swap_dict sets vol=vol_sol (non-zero SOL notional), the
+    # vol_sol*sol_usd_spot fallback never fired and the 7 dollar features came out
+    # ~140x too small vs the USD the model was trained on (gate rate inflated to
+    # 52.4%).  FIXED: USD = vol_usd if vol_usd>0 else vol_sol*sol_usd_spot.
     report.add_bug(
         loc="core/v7_pregrad_features.py:compute_v7_pregrad_feats (vol field)",
         description=(
-            "The 'vol' field in schema-B firehose rows contains SOL notional "
-            "(same as vol_sol), NOT USD volume. "
-            "compute_v7_pregrad_feats reads `vol` as USD and only falls back to "
-            "vol_sol * sol_usd_spot when vol == 0. Since vol == vol_sol != 0 on "
-            "schema-B rows, the sol_usd_spot multiplier is NEVER applied. "
-            "Result: all dollar features (pre_vol_usd, pre_buy_vol_usd, "
-            "pre_max_trade_usd, pre_mean_trade_usd, pre_net_flow_usd, "
-            "pre_vol_last60, pre_vol_last300) are in SOL units, not USD. "
-            "This is an ~84x error in the dollar-denominated features. "
-            "The model was trained on Birdeye USD prices; the live features are in SOL. "
-            "This is the ROOT CAUSE of the gate-rate inflation (feature values are "
-            "~84x smaller than training data -> model scores differently)."
+            "[RESOLVED — commit 6bdf593] Dollar-basis parity break: the dollar "
+            "features were computed from the overloaded 'vol' key (= vol_sol on "
+            "normalised rows), so the SOL->USD conversion never applied and all 7 "
+            "dollar features were ~140x too small vs the USD training data. This was "
+            "the root cause of the 52.4% gate rate. The builder now derives USD as "
+            "`vol_usd if vol_usd > 0 else vol_sol * sol_usd_spot` and never trusts "
+            "the ambiguous 'vol' key. Retained here as a regression marker."
         ),
-        severity="CRITICAL (parity break)",
+        severity="RESOLVED (was CRITICAL parity break)",
         proposed_fix=(
-            "In compute_v7_pregrad_feats, ALWAYS compute vol as vol_sol * sol_usd_spot "
-            "for schema-B rows (where vol_usd=0 and vol=vol_sol_notional). "
-            "Fix: change the vol computation from:\n"
-            "  `vol = float(s.get('vol', 0.0) or 0.0)`\n"
-            "  `if vol == 0.0: vol = vol_sol * sol_usd_spot`\n"
-            "to:\n"
-            "  `vol_usd = float(s.get('vol_usd', 0.0) or 0.0)`\n"
-            "  `vol = vol_usd if vol_usd > 0.0 else vol_sol * sol_usd_spot`\n"
-            "This reads vol_usd (populated on schema-A/Birdeye rows) and falls back "
-            "to vol_sol * sol_usd_spot (correct for schema-B pre rows)."
+            "APPLIED in commit 6bdf593: compute_v7_pregrad_feats + "
+            "assemble_v7_features now use "
+            "`vol_usd = float(s.get('vol_usd', 0.0) or 0.0); "
+            "usd = vol_usd if vol_usd > 0.0 else vol_sol * sol_usd_spot`. "
+            "Covered by test_schema_a_adapter_produces_usd_scale_features "
+            "(fails on pre-fix code, passes on fix)."
         ),
         context=(
-            "In schema-A (solanaBilly shared_billy) rows: vol = vol_usd (USD, correct). "
-            "In schema-B (self-recorded firehose) rows: vol = vol_sol (SOL notional, wrong for USD features). "
-            "This explains gate_rate ~52% vs expected ~25%: dollar features are ~84x smaller "
-            "than training -> most tokens look 'cheap' to the model -> inflated scores."
+            "Live shared_billy (schema-A) pre rows carry vol_usd=0, so USD is "
+            "reconstructed from vol_sol * sol_usd_spot (live sol_usd_spot ~$140 via "
+            "get_sol_usd; the Jun 20-23 soak uses the era-correct ~$84). "
+            "Post-fix soak gate rate dropped from 52.4% toward the designed ~25%."
         ),
     )
 
