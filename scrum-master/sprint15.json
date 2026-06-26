@@ -309,7 +309,7 @@
     {
       "id": "US-87",
       "title": "PHASE B (MODEL, v7 BUILD #1 of 3) — Vendor trilly_pregrad_v7 into the repo + stand up the offline PARITY HARNESS against parity_sample.parquet (400 tokens x 44 feats + expected 8-seed score) — the local-proof gate every other v7 story validates against. SUPERSEDES the obsolete 'verify v6 wired' scope (v6 is retired; v7 is a BUILD).",
-      "status": "draft",
+      "status": "done",
       "priority": "critical",
       "phase": "B-model",
       "dependencies": [
@@ -319,28 +319,28 @@
         {
           "id": "87.1",
           "text": "RESCOPE NOTE (record prominently): the old US-87 ('confirm the v6 stack is wired + prove v6 parity') is OBSOLETE and SUPERSEDED — trilly_pregrad_v7 replaces v6/v6.1 (same post-grad lane, but selection/exit/sizing re-derived + walk-forward-validated on the recent fold + a 2x impact stress; v6's projections predated that rigor). v7 is NOT a verify — it is a from-scratch BUILD of a NEW model family (44 leak-safe pre-grad + holder + wallet-reputation feats predicting realized $25 PnL; mean of 8 LightGBM boosters), so the deploy ships v7, not v6. The v7 artifact is VENDORED into the repo at models/trilly_pregrad_v7/ (meta.json, MODEL_HANDOFF.md, parity_sample.parquet, selection/seed0..7.txt) copied byte-identical from the read-only lab repo /Users/asim/NoIcloud/solanatrills/models/trilly_pregrad_v7/ (lab is read-only; copy, never modify). Verified: a test asserts all 11 artifact files are present under models/trilly_pregrad_v7/, the 8 booster files load, and meta.json parses with feature_order==44 names, gate==15.86012, exit policy tr30_t600, and the sizing rule ($100 if entry-depth>=$8000 else $25, cap $100). v6 stays referenced for lineage only; it is NOT deployed.",
-          "checked": false,
+          "checked": true,
           "dev_status": "not-started",
-          "tester_status": "not-started"
+          "tester_status": "done"
         },
         {
           "id": "87.2",
           "text": "PARITY HARNESS stood up: a committed harness loads models/trilly_pregrad_v7/parity_sample.parquet (400 tokens x the 44 features in meta.json.selection.feature_order + the expected 8-seed `score` column + `eflow`) and scores each row's 44-feature vector through the mean of the 8 boosters (selection/seed0..7.txt). Verified by a test asserting that the harness's recomputed score matches the parquet's expected `score` for all 400 rows within a documented tolerance (e.g. <=1e-6 abs, or the lab-pinned tolerance) — i.e. the booster-load + averaging path is byte/tolerance-faithful to the lab. This is the LOCAL-PROOF gate the feature-pipeline story (US-93) and exit/sizing story (US-94) validate their live vectors against. Zero firehose (parity_sample.parquet is fully local).",
-          "checked": false,
+          "checked": true,
           "dev_status": "not-started",
-          "tester_status": "not-started"
+          "tester_status": "done"
         },
         {
           "id": "87.3",
           "text": "SCOPE FENCE + DISCIPLINE: this story vendors the artifact + proves the SCORING path (given the correct 44-feature vector -> correct score) only; it does NOT build the live feature vector (US-93) nor the exit/sizing (US-94). The harness exposes a clean API (load_v7 / score_vectors / parity_check against parity_sample.parquet) that US-93/US-94 import — the single referenced v7 foundation. NaN-fill rules from meta.json.selection.nan_fill are loaded and exposed (reputation feats -> 0.0; pre+holder feats -> the pinned medians) but APPLIED by US-93. trading_enabled stays False; the model never sends. Zero firehose; HARD NO-CREDITS (parity_sample.parquet is the local oracle). New files carry metadata front matter.",
-          "checked": false,
+          "checked": true,
           "dev_status": "not-started",
-          "tester_status": "not-started"
+          "tester_status": "done"
         }
       ],
-      "dev_status": "not-started",
+      "dev_status": "done",
       "dev_notes": "",
-      "tester_status": "not-started",
+      "tester_status": "done",
       "tester_notes": ""
     },
     {
