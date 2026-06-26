@@ -993,7 +993,7 @@ class FirehoseDaemon:
                 # No active model yet — try the conventional path so a pre-promote
                 # VPS with the bank already in place can still warm the cache.
                 bank_path = (
-                    Path(__file__).resolve().parents[4]
+                    Path(__file__).resolve().parents[3]
                     / "models"
                     / "trilly_pregrad_v4"
                     / _V4_BANK_FILENAME
@@ -1024,7 +1024,7 @@ class FirehoseDaemon:
         dict by _try_load_v7_model.
         """
         model_dir = (
-            Path(__file__).resolve().parents[4]
+            Path(__file__).resolve().parents[3]
             / "models"
             / "trilly_pregrad_v7"
         )
