@@ -1,12 +1,13 @@
 # ---
 # module: core.tasks
-# sprint: sprint-7, sprint-8, sprint-9, sprint-10
-# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1/31.2/31.3; US-38 AC-38.1/38.2/38.3; US-43 AC-43.3; US-51 AC-51.2
+# sprint: sprint-7, sprint-8, sprint-9, sprint-10, sprint-15
+# story: US-1 AC-1.5, US-16 AC-16.2, US-31 AC-31.1/31.2/31.3; US-38 AC-38.1/38.2/38.3;
+#         US-43 AC-43.3; US-51 AC-51.2; US-89
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-17
+# last-updated: 2026-06-26
 # dependencies: celery, core.detection.birdeye_sweep, core.feature_builder, core.models,
-#               core.scorer, core.dashboard.annotation_export
+#               core.scorer, core.dashboard.annotation_export, config.settings
 # ---
 """Core Celery tasks — autodiscovered by the Celery worker on startup."""
 from celery import shared_task
@@ -345,17 +346,33 @@ def export_data_contract(
     into the contract schema — it performs no scoring, no feature math, and NEVER
     touches scoring_enabled / trading_enabled.
 
+    US-89 PRE-CONDITION FIX:
+        Under TAPE_SOURCE=shared_billy, the self-tape (lake/firehose) is NOT written
+        by the recorder.  The swaps surface must read pre-grad rows from the shared
+        billy tape (lake/billy_tape).  The lake path is now config-driven via
+        TAPE_SOURCE: shared_billy reads lake/billy_tape, self reads lake/firehose.
+
+        LakeReader is instantiated with normalise=True so that schema-A rows
+        (solanaBilly raw-reserves) are normalised to the same swap-dict format
+        as schema-B rows before being yielded.  Without normalise=True the
+        schema-A rows lack the 'price' / 'vol_sol' fields the export expects.
+
     Args:
         out_dir: Export root.  Surfaces are written under {out_dir}/{surface}/.
             Defaults to /tmp/data_contract.
         surfaces: Iterable of surface names to build.  Defaults to
             ("swaps", "tokens", "predictions_positions").
-        lake_base_dir: Root of the raw lake tree (defaults to 'lake/tapes').
+        lake_base_dir: Root of the raw lake tree.  When None, the value is
+            resolved from TAPE_SOURCE (config-driven, Principle #1):
+              - shared_billy -> "lake/billy_tape"  (solanaBilly's shared tape)
+              - self          -> "lake/firehose"    (solanatrilly's own tape)
         dataset_prefix: Prefix for each surface's manifest dataset_id.
 
     Returns:
         {"out_dir": str, "surfaces": {surface: <result dict>}}
     """
+    from django.conf import settings as django_settings
+
     from core.data_contract import (
         build_predictions_positions_dataset,
         build_swaps_dataset,
@@ -367,10 +384,14 @@ def export_data_contract(
     if out_dir is None:
         out_dir = "/tmp/data_contract"
     if lake_base_dir is None:
-        # The firehose tape sink (AC-3) writes the live tape to lake/firehose — a
-        # DEDICATED lake kept out of the dashboard's lake/tapes (which is scanned in
-        # full by the candle/cohort APIs). The swaps surface reads the firehose lake.
-        lake_base_dir = "lake/firehose"
+        # US-89: config-driven lake path based on TAPE_SOURCE.
+        # shared_billy -> read the billy tape (schema-A rows with normalise=True).
+        # self         -> read the solanatrilly self-tape (schema-B rows).
+        tape_source = getattr(django_settings, "TAPE_SOURCE", "shared_billy")
+        if tape_source == "shared_billy":
+            lake_base_dir = "lake/billy_tape"
+        else:
+            lake_base_dir = "lake/firehose"
     if surfaces is None:
         surfaces = ("swaps", "tokens", "predictions_positions")
     surfaces = tuple(surfaces)
@@ -396,7 +417,11 @@ def export_data_contract(
 
     results = {}
     if "swaps" in surfaces:
-        reader = LakeReader(base_dir=lake_base_dir)
+        # US-89: normalise=True so schema-A (billy) rows are normalised before export.
+        # Under shared_billy the tape is schema-A (raw reserves); normalisation
+        # derives price=vsol/vtok and vol_sol=sol_amount/1e9 so the export sees
+        # the same fields regardless of tape source.
+        reader = LakeReader(base_dir=lake_base_dir, normalise=True)
         results["swaps"] = build_swaps_dataset(
             reader.iter_rows(),
             out_dir=out_dir,

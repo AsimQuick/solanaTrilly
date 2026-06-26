@@ -1,12 +1,12 @@
 # ---
 # module: copytrade.curvestage_train
 # sprint: sprint-15
-# story: US-84
+# story: US-84, US-89
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-23
+# last-updated: 2026-06-26
 # dependencies: lightgbm, numpy, copytrade.entry_features, copytrade.pgrad_calibration,
-#               copytrade.firehose_harness, copytrade.pgrad_classifier
+#               copytrade.firehose_harness, copytrade.pgrad_classifier, config.settings
 # ---
 """Weekly retrain of the curvestage P(grad) classifier from the recorder's OWN lake.
 
@@ -41,12 +41,38 @@ import json
 import logging
 from datetime import date
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger("copytrade")
 
-LAKE_DIR = "/app/lake/firehose"
 MIN_LAKE_DAYS = 7
 MODEL_DIR = "/app/models/copy_2026-06-22_curvestage"
+
+# US-89: LAKE_DIR is now config-driven via TAPE_SOURCE (Principle #1).
+# Use get_lake_dir() at call-time to read the current Django setting.
+# Callers that pass an explicit lake_dir override this (e.g. tests, CLI).
+# The module-level LAKE_DIR constant is preserved as the FALLBACK for when
+# the Django settings cannot be loaded (outside-container / test context).
+LAKE_DIR = "/app/lake/firehose"  # fallback only — prefer get_lake_dir()
+
+
+def get_lake_dir() -> str:
+    """Return the config-driven pre-grad lake path for retrain.
+
+    Reads TAPE_SOURCE from Django settings (Principle #1 — config-driven).
+    Under ``shared_billy`` the retrain reads solanaBilly's shared tape at
+    ``/app/lake/billy_tape``; under ``self`` it reads the solanatrilly
+    self-tape at ``/app/lake/firehose``.
+
+    Returns the constant LAKE_DIR fallback when Django settings are
+    unavailable (tests outside Docker, standalone scripts).
+    """
+    try:
+        from django.conf import settings as _s
+        tape_source = getattr(_s, "TAPE_SOURCE", "shared_billy")
+        return "/app/lake/billy_tape" if tape_source == "shared_billy" else "/app/lake/firehose"
+    except Exception:  # noqa: BLE001 — outside Django context
+        return LAKE_DIR
 
 # LGBM params — verbatim from the seed (etg_room_classifier.py); parity-load-bearing.
 LGBM_PARAMS = dict(
@@ -61,8 +87,14 @@ CURVE_FRAC_THETA = 0.60
 MIN_TRAIN_SAMPLES = 200
 
 
-def _lake_age_days(lake_dir: str = LAKE_DIR) -> int:
-    """Span in days between the earliest and latest dt= partition in the lake."""
+def _lake_age_days(lake_dir: Optional[str] = None) -> int:
+    """Span in days between the earliest and latest dt= partition in the lake.
+
+    US-89: lake_dir defaults to get_lake_dir() (config-driven via TAPE_SOURCE)
+    so retraining reads the correct pre-grad source under each TAPE_SOURCE mode.
+    """
+    if lake_dir is None:
+        lake_dir = get_lake_dir()
     try:
         dts = sorted(
             p.name.split("=", 1)[1]
@@ -82,8 +114,13 @@ def _lake_age_days(lake_dir: str = LAKE_DIR) -> int:
         return 0
 
 
-def _lake_date_strs(lake_dir: str = LAKE_DIR) -> list[str]:
-    """Return sorted list of YYYY-MM-DD date strings present in the lake."""
+def _lake_date_strs(lake_dir: Optional[str] = None) -> list[str]:
+    """Return sorted list of YYYY-MM-DD date strings present in the lake.
+
+    US-89: lake_dir defaults to get_lake_dir() (config-driven via TAPE_SOURCE).
+    """
+    if lake_dir is None:
+        lake_dir = get_lake_dir()
     try:
         dts = sorted(
             p.name.split("=", 1)[1]
@@ -96,10 +133,14 @@ def _lake_date_strs(lake_dir: str = LAKE_DIR) -> list[str]:
         return []
 
 
-def retrain_from_lake(lake_dir: str = LAKE_DIR, model_dir: str = MODEL_DIR) -> dict:
+def retrain_from_lake(lake_dir: Optional[str] = None, model_dir: str = MODEL_DIR) -> dict:
     """Retrain the curvestage classifier from the prior week's lake on-curve entries.
 
     DATE GATE: no-op (keeps the seed) until the lake has >= MIN_LAKE_DAYS of history.
+
+    US-89: lake_dir defaults to get_lake_dir() (config-driven via TAPE_SOURCE).
+    Under shared_billy the retrain reads solanaBilly's shared tape at
+    /app/lake/billy_tape; under self it reads lake/firehose.
 
     Returns a dict with keys:
         retrained: bool
@@ -109,6 +150,9 @@ def retrain_from_lake(lake_dir: str = LAKE_DIR, model_dir: str = MODEL_DIR) -> d
         n_held_out: int (0 if no-op)
         recalibrated_threshold: float | None
     """
+    # US-89: resolve config-driven default when caller passes None.
+    if lake_dir is None:
+        lake_dir = get_lake_dir()
     age = _lake_age_days(lake_dir)
     if age < MIN_LAKE_DAYS:
         logger.info(
