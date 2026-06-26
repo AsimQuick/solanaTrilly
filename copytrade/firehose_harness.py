@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.firehose_harness
 # sprint: sprint-15
-# story: US-81
+# story: US-81, US-92
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-23
+# last-updated: 2026-06-26
 # dependencies: gzip, json, logging, pathlib, collections, typing
 # ---
 """LOCAL validation harness over the Jun 20-23 firehose tapes.
@@ -15,7 +15,7 @@ This is the Phase-A foundation that every Sprint-15 story imports:
   label_graduations() -- FREE graduation labeler: cum buy vol_sol >= GRAD_SOL_THRESHOLD
   to_usd()            -- dollar basis: vol_sol x SOL_price (NEVER vol_usd, which is all-zero)
 
-Schema of a yielded row (from the firehose jsonl.gz lake):
+Schema of a PRE-grad yielded row (TapeRow, from the firehose jsonl.gz lake):
     mint         str   -- token mint address
     block_time   int   -- Unix epoch seconds (INTEGER — lake stores int(raw_bt))
     slot         int   -- Solana slot
@@ -24,16 +24,34 @@ Schema of a yielded row (from the firehose jsonl.gz lake):
     side         str   -- "buy" | "sell"
     vol          float -- raw vol
     vol_sol      float -- SOL notional (THE authoritative quantity)
-    vol_usd      float -- BROKEN: always 0.0 — do NOT use for dollar values
+    vol_usd      float -- PRE rows: always 0.0 — use to_usd() for dollar values
     owner        str   -- wallet address
-    phase        str   -- "pre" | "post" (NOTE: ~100% "pre" in these tapes)
+    phase        str   -- "pre"
+
+Schema of a POST-grad row (PostRow, phase="post", US-92-fixed recorder):
+    mint         str   -- token mint address (stamped by recorder after US-92 fix)
+    block_time   int   -- Unix epoch seconds
+    slot         int   -- Solana slot
+    signature    str   -- transaction signature
+    rel          float -- seconds since graduation (>= 0)
+    price        float -- SOL/token
+    side         str   -- "buy" | "sell"
+    vol          float -- SOL notional
+    vol_usd      float -- populated (POST rows carry real USD vol, unlike PRE rows)
+    owner        str   -- wallet address
+    phase        str   -- "post"
 
 TAPE CAVEATS (from MANIFEST.md, verified 2026-06-23):
-  - vol_usd is ALL ZERO.  Use to_usd(vol_sol, date) for dollar values.
+  - PRE rows: vol_usd is ALL ZERO.  Use to_usd(vol_sol, date) for dollar values.
+  - POST rows: vol_usd IS populated (real USD) — use it or vol_sol*SOL_price consistently.
   - ~2-10%/day are unparseable partial writes (partial lines).  parse() skips and counts.
-  - phase is unreliable (~13 post-grad swaps on Jun-22 only; Jun-20/21/23 have zero).
-    Use label_graduations() for graduation ground truth, NOT the phase field.
-  - Graduation = cumulative BUY vol_sol >= GRAD_SOL_THRESHOLD (= 85 SOL).
+  - phase:'post' rows are VALID post-grad swaps, NOT partial-write corruption.  They use
+    a DIFFERENT schema (rel instead of vol_sol; NO mint in Jun 20-23 historical tapes
+    because the recorder was fixed by US-92 AFTER those tapes were captured).
+    After the US-92 recorder fix, new tapes will carry mint on post rows.
+    Historical Jun 20-23 post rows are NOT re-attributed (forward-only fix).
+  - The bad-line counter counts ONLY genuine unparseable/corrupt lines, NOT valid post rows.
+  - Graduation = cumulative BUY vol_sol >= GRAD_SOL_THRESHOLD (= 85 SOL) from PRE rows.
 """
 from __future__ import annotations
 
@@ -77,7 +95,7 @@ SOL_PRICE_DEFAULT: float = 84.0
 
 @dataclass
 class TapeRow:
-    """A validated row from the firehose tape."""
+    """A validated PRE-grad row from the firehose tape."""
     mint: str
     block_time: int
     slot: int
@@ -86,13 +104,36 @@ class TapeRow:
     side: str
     vol: float
     vol_sol: float
-    vol_usd: float  # NOTE: always 0.0 — here for schema completeness; do NOT use
+    vol_usd: float  # PRE rows: always 0.0 — use to_usd() for dollar values
     owner: str
     phase: str
 
 
+@dataclass
+class PostRow:
+    """A validated POST-grad row from the firehose tape (phase='post').
+
+    US-92: After the recorder fix (2026-06-26 onwards), post rows carry a non-null
+    mint.  Historical Jun 20-23 tapes have mint-less post rows (forward-only fix).
+
+    DOLLAR BASIS: vol_usd IS populated on post rows (unlike PRE rows).
+    Use vol_usd directly, or vol_sol * SOL_price for consistency with PRE rows.
+    """
+    mint: str           # non-empty after US-92 recorder fix; may be "" for historical rows
+    block_time: int
+    slot: int
+    signature: str
+    rel: float          # seconds since graduation (>= 0)
+    price: float
+    side: str
+    vol: float          # SOL notional
+    vol_usd: float      # populated (real USD) — unlike PRE rows
+    owner: str
+    phase: str          # always "post"
+
+
 # ---------------------------------------------------------------------------
-# Parser (AC-81.1)
+# Parser (AC-81.1 + US-92)
 # ---------------------------------------------------------------------------
 
 def parse(
@@ -141,6 +182,7 @@ def parse(
         logger.warning("[firehose_harness] cannot open %s: %s", part_path, exc)
         return rows, bad_count
 
+    post_count: int = 0
     try:
         while True:
             try:
@@ -163,6 +205,14 @@ def parse(
                 logger.debug("[firehose_harness] bad json (partial write), skipped")
                 continue
 
+            # US-92 / AC-81.1 CORRECTION: phase:'post' rows are VALID post-grad swaps,
+            # NOT partial-write corruption.  They carry a different schema (rel field,
+            # populated vol_usd, no vol_sol).  Exclude them from the bad-line counter
+            # and skip them from the PRE-curve analysis WITHOUT counting as corrupt.
+            if _is_post_row(obj):
+                post_count += 1
+                continue  # valid post row — skip for pre-analysis, NOT a bad line
+
             row = _validate_row(obj)
             if row is None:
                 bad_count += 1
@@ -176,8 +226,8 @@ def parse(
         fh.close()
 
     logger.info(
-        "[firehose_harness] parse %s: good=%d bad=%d (%.1f%% bad)",
-        date_str, len(rows), bad_count,
+        "[firehose_harness] parse %s: good=%d bad=%d post=%d (%.1f%% bad)",
+        date_str, len(rows), bad_count, post_count,
         100.0 * bad_count / max(1, len(rows) + bad_count),
     )
     return rows, bad_count
@@ -230,6 +280,10 @@ def iter_parse(
                     counter.bad += 1
                     continue
 
+                # US-92: skip valid post rows without counting as bad
+                if _is_post_row(obj):
+                    continue
+
                 row = _validate_row(obj)
                 if row is None:
                     counter.bad += 1
@@ -246,6 +300,73 @@ class BadLineCounter:
     """Mutable bad-line counter for the streaming parser."""
     def __init__(self) -> None:
         self.bad: int = 0
+
+
+def _is_post_row(obj: dict) -> bool:
+    """Return True if ``obj`` is a valid-schema post-grad row.
+
+    Post rows carry ``phase='post'`` OR have a ``rel`` field (seconds-since-grad)
+    but NO ``vol_sol``.  They are VALID rows with a different schema — NOT partial
+    writes.  The bad-line counter must NOT include them.
+
+    Detection strategy (order matters):
+      1. If ``phase == 'post'`` — unambiguous.
+      2. If ``rel`` is present and ``vol_sol`` is absent — old-format post rows
+         from the Jun 20-23 historical tapes (pre-US-92, no phase field).
+
+    Callers MUST check this BEFORE calling _validate_row so valid post rows are
+    never incorrectly counted as bad.
+    """
+    if not isinstance(obj, dict):
+        return False
+    if obj.get("phase") == "post":
+        return True
+    # Old-format (pre-US-92): has rel but no vol_sol
+    if "rel" in obj and "vol_sol" not in obj:
+        return True
+    return False
+
+
+def _validate_post_row(obj: dict) -> "PostRow | None":
+    """Validate a parsed JSON dict against the PostRow schema.
+
+    Returns None if the dict does not match the post-grad schema.
+    Used by parse_post_rows() for callers that want to process post-grad swaps.
+
+    US-92: After the recorder fix, post rows carry a non-null ``mint``.
+    Historical rows (Jun 20-23) have an empty/missing mint — this is forward-only.
+    """
+    try:
+        mint = str(obj.get("mint", ""))          # may be "" for historical rows
+        block_time = int(obj["block_time"])
+        slot = int(obj.get("slot", 0))
+        signature = str(obj.get("signature", ""))
+        rel = float(obj["rel"])
+        price = float(obj.get("price", 0.0) or 0.0)
+        side = str(obj.get("side", ""))
+        vol = float(obj.get("vol", 0.0) or 0.0)
+        vol_usd = float(obj.get("vol_usd", 0.0) or 0.0)
+        owner = str(obj.get("owner", ""))
+        phase = str(obj.get("phase", "post"))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if side not in ("buy", "sell"):
+        return None
+
+    return PostRow(
+        mint=mint,
+        block_time=block_time,
+        slot=slot,
+        signature=signature,
+        rel=rel,
+        price=price,
+        side=side,
+        vol=vol,
+        vol_usd=vol_usd,
+        owner=owner,
+        phase=phase,
+    )
 
 
 def _validate_row(obj: dict) -> TapeRow | None:
@@ -318,10 +439,13 @@ def label_graduations(
     Jun 20-23 firehose window.  It does NOT rely on the ``phase`` field (unreliable)
     or any external API.
 
-    The firehose is bonding-curve-only (phase ~100% "pre").  A token "graduates"
+    The firehose's PRE rows are bonding-curve phase.  A token "graduates"
     (completes the bonding curve and migrates to PumpSwap) when approximately 85 SOL
-    of cumulative BUY vol_sol is deposited.  Post-grad rows are NOT captured here
-    (only 13 on Jun-22), so graduation OUTCOME = this label, not a post-grad tape.
+    of cumulative BUY vol_sol is deposited.  Post-grad rows (phase='post') ARE
+    captured in these tapes (~38k rows on Jun-22) but carry NO mint in the Jun 20-23
+    historical tapes (pre-US-92 recorder fix) — so graduation OUTCOME is derived
+    exclusively from this PRE-row label, not from the post-grad tape (which requires
+    US-92 to be attributable to a token).
 
     Parameters
     ----------
@@ -459,6 +583,7 @@ __all__ = [
     "SOL_PRICE_DEFAULT",
     # Types
     "TapeRow",
+    "PostRow",       # US-92: post-grad row schema
     "GradLabel",
     "BadLineCounter",
     # API
@@ -469,4 +594,6 @@ __all__ = [
     "to_usd",
     "to_usd_with_price",
     "parse_window",
+    "_is_post_row",          # US-92: post-row detector (also useful in tests)
+    "_validate_post_row",    # US-92: post-row validator
 ]

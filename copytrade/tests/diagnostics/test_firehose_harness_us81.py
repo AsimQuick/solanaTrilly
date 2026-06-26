@@ -1,10 +1,10 @@
 # ---
 # module: copytrade.tests.diagnostics.test_firehose_harness_us81
 # sprint: sprint-15
-# story: US-81
-# status: implemented
+# story: US-81, US-92
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-23
+# last-updated: 2026-06-26
 # dependencies: pytest, copytrade.firehose_harness, gzip, json, pathlib
 # ---
 """Tests for the US-81 local validation harness (firehose_harness.py).
@@ -152,24 +152,35 @@ class TestParser:
         assert bad == n_bad
         assert len(rows) == 5
 
-    def test_rows_missing_mint_are_counted_as_bad(self, tmp_path: pathlib.Path) -> None:
-        """Rows with a valid JSON structure but missing 'mint' field are schema-invalid (counted as bad)."""
-        # This matches the real tape: post-grad rows have 'rel' instead of 'mint'
-        no_mint_rows = [
+    def test_post_rows_are_not_counted_as_bad(self, tmp_path: pathlib.Path) -> None:
+        """US-92 / AC-81.1 CORRECTION: phase='post' rows are VALID, NOT bad lines.
+
+        Post-grad rows carry a different schema (rel instead of vol_sol, populated
+        vol_usd, phase='post').  They are valid post-grad swap rows — not partial-write
+        corruption.  The bad-line counter must NOT include them.
+
+        Before US-92 fix: post rows were counted as bad (valid JSON, missing mint).
+        After US-92 fix: post rows are recognised as valid and excluded from bad_count.
+        They are skipped from the PRE-curve analysis without being flagged as corrupt.
+        """
+        # A valid post row (matching the historical Jun 20-23 format)
+        post_row = (
             '{"block_time": 1000, "slot": 1, "signature": "s1", "rel": 4.0, '
             '"price": 0.001, "side": "buy", "vol": 1.0, "vol_usd": 0.0, "owner": "O1", "phase": "post"}'
-        ]
+        )
         good = [_make_valid_row("MINT_A", 1001, "buy", 3.0)]
         part_dir = tmp_path / "dt=2026-06-20"
         part_dir.mkdir(parents=True, exist_ok=True)
         with gzip.open(str(part_dir / "part-0.jsonl.gz"), "wt") as f:
-            for r in no_mint_rows:
-                f.write(r + "\n")
+            f.write(post_row + "\n")
             f.write(json.dumps(good[0]) + "\n")
 
         rows, bad = parse("2026-06-20", tmp_path)
-        # The no-mint row is schema-invalid
-        assert bad >= 1
+        # US-92 FIX: post row is NOT counted as bad — it is a valid post-grad row
+        assert bad == 0, (
+            f"post rows must NOT be counted as bad (US-92 fix), got bad={bad}"
+        )
+        # The post row is skipped from the PRE stream (PRE-curve analysis only)
         assert len(rows) == 1
         assert rows[0].mint == "MINT_A"
 
