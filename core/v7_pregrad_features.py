@@ -1,0 +1,502 @@
+# ---
+# module: core.v7_pregrad_features
+# sprint: sprint-15
+# story: US-93
+# status: fixed
+# created-by: dev-team
+# last-updated: 2026-06-26
+# dependencies: numpy, core.v4_rep_builder
+# ---
+"""v7 live feature vector builder: 19 pre-grad feats + n_pregrad_holders + 24 rep feats.
+
+DEFECT FIX (AC-93.1, PR #412 rejected)
+=======================================
+PR #412's compute_n_pregrad_holders used a BUY-COUNT proxy (count(buys) >
+count(sells) per wallet).  That is WRONG — the lab definition and
+parity_sample.parquet values are BALANCE-BASED: count distinct wallets with a
+net-positive TOKEN BALANCE at graduation.
+
+This module implements the correct BALANCE-BASED definition.
+
+TOKEN-AMOUNT SOURCE (in order of preference)
+============================================
+1. ``token_amount`` key in the swap dict (integer, raw on-chain units).
+   Present on schema-A rows (solanaBilly shared tape via US-96 adapter:
+   ``core.firehose.shared_tape.norm_row_to_swap_dict``).  The sign check
+   (net > 0) is identical whether units are raw or UI-scaled.
+
+2. Derived: ``token ≈ vol_sol / price`` when ``token_amount`` is absent.
+   Both fields are present on schema A and B.  This approximation has bounded
+   error (same-block price slippage) and is better than the buy-count proxy
+   for any tape where price varies across swaps.
+
+The buy-count proxy (count(buys) - count(sells) > 0) is REMOVED.
+
+Lab definition (v2_2_build.py / holder_exit.py / pregrad_holders):
+  for each wallet:
+      bal[w] += uiAmount   for every buy
+      bal[w] -= uiAmount   for every sell
+  n_pregrad_holders = count wallets with bal > 0
+
+``uiAmount`` (Birdeye trade_pages) is the token amount in human-readable
+decimal units.  ``token_amount`` (schema A) is the same quantity in raw
+on-chain units.  Division by 10^decimals is not needed for a > 0 check.
+
+SCOPING FINDINGS (operator-required confirmations)
+===================================================
+
+1. n_pregrad_holders COMPUTABILITY (FINDING: COMPUTABLE, ZERO CREDITS)
+   Computable from the pre-grad tape with zero credits.
+   Source priority: token_amount (schema A) > vol_sol/price (schema B).
+   The live balance-based count matches the lab definition.
+
+2. WALLET-REP BANK FINDING (FINDING: SAME 24 COLUMN NAMES, DIFFERENT ITERATION ORDER)
+   The in-repo v4 wallet bank (core/v4_rep_builder.py, WalletBankLookup,
+   lake/v4_wallet_bank.parquet) emits the SAME 24 column names as v7's feature_order[20:44].
+   HOWEVER: the in-repo v4 REP_FEATURE_NAMES groups by outcome first (rdollar block:
+   time_rdollar_* + size_rdollar_*; then pk24 block: time_pk24_* + size_pk24_*).
+   The v7 meta.json groups by pool first (time block: time_rdollar_* + time_pk24_*;
+   then size block: size_rdollar_* + size_pk24_*).
+
+   The SAME bank and SAME compute_rep_features() logic produces values keyed by name.
+   The v7 feature vector is assembled by reading values by NAME from compute_rep_features()
+   output dict and placing them in v7 feature_order (position 20..43).
+   NO PORT NEEDED: the v4 bank and compute_rep_features() are fully compatible.
+   The column order difference is handled by name-based dict lookup here.
+   NOT a BLOCKER.
+
+FEATURE ORDER (meta.json.selection.feature_order, 44 total)
+============================================================
+  [0:19]  19 pre-grad curve-life feats  (computed by compute_v7_pregrad_feats)
+  [19]    n_pregrad_holders              (BALANCE-BASED: wallets with net token balance > 0)
+  [20:44] 24 wallet-reputation feats    (from v4 WalletBankLookup via compute_rep_features)
+
+NAN-FILL RULES (applied in assemble_v7_features)
+=================================================
+  pre+holder feats [0:20] -> medians from meta.json.selection.nan_fill.pre+holder_feats
+  reputation feats [20:44] -> 0.0
+
+PARITY NOTE
+===========
+The parity_sample.parquet was built from Birdeye raw30k data; the live firehose
+path uses the same mathematical definitions but different input sources.  For full
+parity on the parity_sample, use the Birdeye-format swaps (with basePrice/quotePrice)
+for USD computation.  For the live firehose path, use vol_sol × SOL_price for USD.
+The parity test verifies the scoring path; the live feature path is verified on
+synthetic inputs.
+
+ZERO CREDITS
+============
+No Birdeye/Helius/Dune calls anywhere in this module.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# V7 PRE-GRAD FEATURE NAMES (19 features, in meta.json order)
+# ---------------------------------------------------------------------------
+
+V7_PRE_FEATURE_NAMES: list[str] = [
+    "pre_buy_frac",
+    "pre_buy_vol_usd",
+    "pre_buys_last60",
+    "pre_max_trade_usd",
+    "pre_mean_trade_usd",
+    "pre_n_buys",
+    "pre_n_sells",
+    "pre_n_swaps",
+    "pre_net_flow_usd",
+    "pre_price_ret",
+    "pre_top1_buyer_share",
+    "pre_top3_buyer_share",
+    "pre_trades_per_sec",
+    "pre_uniq_buyers",
+    "pre_uniq_traders",
+    "pre_vol_last300",
+    "pre_vol_last60",
+    "pre_vol_usd",
+    "pre_window_covered_s",
+]
+
+# The 24 wallet-rep feature names in v7 meta.json order (pool-first grouping)
+# Note: this differs from v4's REP_FEATURE_NAMES which groups by outcome first.
+# Values are computed by name from compute_rep_features() output dict.
+V7_REP_FEATURE_NAMES: list[str] = [
+    "time_rdollar_repmean_mean",
+    "time_rdollar_repmean_max",
+    "time_rdollar_repmax_mean",
+    "time_rdollar_ngood_sum",
+    "time_rdollar_nhist",
+    "time_rdollar_wmean",
+    "time_pk24_repmean_mean",
+    "time_pk24_repmean_max",
+    "time_pk24_repmax_mean",
+    "time_pk24_ngood_sum",
+    "time_pk24_nhist",
+    "time_pk24_wmean",
+    "size_rdollar_repmean_mean",
+    "size_rdollar_repmean_max",
+    "size_rdollar_repmax_mean",
+    "size_rdollar_ngood_sum",
+    "size_rdollar_nhist",
+    "size_rdollar_wmean",
+    "size_pk24_repmean_mean",
+    "size_pk24_repmean_max",
+    "size_pk24_repmax_mean",
+    "size_pk24_ngood_sum",
+    "size_pk24_nhist",
+    "size_pk24_wmean",
+]
+
+# Full v7 44-feature order
+V7_FEATURE_ORDER: list[str] = V7_PRE_FEATURE_NAMES + ["n_pregrad_holders"] + V7_REP_FEATURE_NAMES
+
+
+# ---------------------------------------------------------------------------
+# compute_v7_pregrad_feats — 19 pre-grad curve-life features
+# ---------------------------------------------------------------------------
+
+
+def compute_v7_pregrad_feats(
+    swaps: list[dict],
+    grad_ts: float,
+    *,
+    sol_usd_spot: float = 84.0,
+) -> dict[str, float] | None:
+    """Compute the 19 v7 pre-grad curve-life features from a pre-grad tape.
+
+    Ported from solanatrills/analysis/graduated/backfill_pregrad.py:pre_features()
+    (the same computation used to build the parity_sample.parquet).
+
+    Parameters
+    ----------
+    swaps:
+        Pre-grad swap records.  Each dict must have at minimum:
+          - block_time: float/int  (absolute Unix seconds)
+          - side: str              ("buy" | "sell")
+          - owner: str | None
+          - vol: float             (USD volume; if vol==0 use vol_sol * sol_usd_spot)
+          - vol_sol: float         (SOL volume; used for USD when vol==0)
+          - price: float           (SOL/token price)
+        Only swaps with block_time < grad_ts are used.
+    grad_ts:
+        Token graduation Unix timestamp (seconds).
+    sol_usd_spot:
+        SOL/USD price for volume dollarization.  Used when swap['vol'] == 0
+        (pre-grad rows in the firehose have vol_usd=0; vol_sol*sol_usd_spot gives USD).
+
+    Returns
+    -------
+    dict with 19 float features, or None if there are no valid pre-grad swaps.
+    """
+    # Filter to pre-graduation only and compute USD volume
+    sw: list[dict] = []
+    for s in swaps:
+        bt = float(s.get("block_time", 0) or s.get("block_unix_time", 0) or 0)
+        if bt <= 0 or bt >= grad_ts:
+            continue
+        price = float(s.get("price", 0.0) or 0.0)
+        if price <= 0:
+            continue
+        side = s.get("side", "")
+        if side not in ("buy", "sell"):
+            continue
+        # USD volume: use vol if non-zero, else vol_sol * spot
+        vol = float(s.get("vol", 0.0) or 0.0)
+        if vol == 0.0:
+            vol_sol = float(s.get("vol_sol", 0.0) or 0.0)
+            vol = vol_sol * sol_usd_spot
+        owner = s.get("owner") or ""
+        sw.append({"t": bt, "price": price, "vol": vol, "side": side, "owner": owner})
+
+    if not sw:
+        return None
+
+    sw.sort(key=lambda s: s["t"])
+
+    buys = [s for s in sw if s["side"] == "buy"]
+    if not buys:
+        # No buys: can still return partial features (sells only)
+        n_swaps = len(sw)
+        covered = grad_ts - sw[0]["t"]
+        return {
+            "pre_buy_frac": 0.0,
+            "pre_buy_vol_usd": 0.0,
+            "pre_buys_last60": 0.0,
+            "pre_max_trade_usd": max(s["vol"] for s in sw) if sw else 0.0,
+            "pre_mean_trade_usd": sum(s["vol"] for s in sw) / n_swaps if n_swaps > 0 else 0.0,
+            "pre_n_buys": 0.0,
+            "pre_n_sells": float(n_swaps),
+            "pre_n_swaps": float(n_swaps),
+            "pre_net_flow_usd": -sum(s["vol"] for s in sw),
+            "pre_price_ret": sw[-1]["price"] / sw[0]["price"] - 1.0 if sw[0]["price"] > 0 else 0.0,
+            "pre_top1_buyer_share": 0.0,
+            "pre_top3_buyer_share": 0.0,
+            "pre_trades_per_sec": n_swaps / covered if covered > 0 else 0.0,
+            "pre_uniq_buyers": 0.0,
+            "pre_uniq_traders": float(len(set(s["owner"] for s in sw if s["owner"]))),
+            "pre_vol_last300": sum(s["vol"] for s in sw if s["t"] >= grad_ts - 300),
+            "pre_vol_last60": sum(s["vol"] for s in sw if s["t"] >= grad_ts - 60),
+            "pre_vol_usd": sum(s["vol"] for s in sw),
+            "pre_window_covered_s": covered,
+        }
+
+    n_swaps = len(sw)
+    covered = grad_ts - sw[0]["t"]
+
+    # Per-buyer cumulative buy volume
+    buyvol: dict[str, float] = {}
+    for s in buys:
+        w = s["owner"]
+        if w:
+            buyvol[w] = buyvol.get(w, 0.0) + s["vol"]
+    tot_buyvol = sum(buyvol.values()) or 1.0
+    shares = sorted(buyvol.values(), reverse=True)
+
+    feats: dict[str, float] = {
+        "pre_buy_frac": len(buys) / n_swaps,
+        "pre_buy_vol_usd": sum(s["vol"] for s in buys),
+        "pre_buys_last60": float(sum(1 for s in buys if s["t"] >= grad_ts - 60)),
+        "pre_max_trade_usd": max(s["vol"] for s in sw),
+        "pre_mean_trade_usd": sum(s["vol"] for s in sw) / n_swaps,
+        "pre_n_buys": float(len(buys)),
+        "pre_n_sells": float(n_swaps - len(buys)),
+        "pre_n_swaps": float(n_swaps),
+        "pre_net_flow_usd": (
+            sum(s["vol"] for s in buys)
+            - sum(s["vol"] for s in sw if s["side"] == "sell")
+        ),
+        "pre_price_ret": (
+            sw[-1]["price"] / sw[0]["price"] - 1.0 if sw[0]["price"] > 0 else 0.0
+        ),
+        "pre_top1_buyer_share": shares[0] / tot_buyvol if shares else 0.0,
+        "pre_top3_buyer_share": sum(shares[:3]) / tot_buyvol if shares else 0.0,
+        "pre_trades_per_sec": n_swaps / covered if covered > 0 else 0.0,
+        "pre_uniq_buyers": float(len(set(s["owner"] for s in buys if s["owner"]))),
+        "pre_uniq_traders": float(len(set(s["owner"] for s in sw if s["owner"]))),
+        "pre_vol_last300": sum(s["vol"] for s in sw if s["t"] >= grad_ts - 300),
+        "pre_vol_last60": sum(s["vol"] for s in sw if s["t"] >= grad_ts - 60),
+        "pre_vol_usd": sum(s["vol"] for s in sw),
+        "pre_window_covered_s": covered,
+    }
+
+    return feats
+
+
+# ---------------------------------------------------------------------------
+# compute_n_pregrad_holders — the #1 feature
+# ---------------------------------------------------------------------------
+
+
+def _token_amount_for_row(s: dict) -> float:
+    """Extract the token amount for a single swap row.
+
+    TOKEN-AMOUNT SOURCE PRIORITY (AC-93.1):
+      1. ``token_amount`` key — integer raw on-chain units (schema A, solanaBilly
+         shared tape via US-96 normalise_row).  The > 0 check is unit-agnostic.
+      2. Derived: ``vol_sol / price`` — tokens ≈ SOL paid / price-in-SOL-per-token.
+         Works for both schema A and B where token_amount is absent.
+         Returns 0.0 if price is missing or zero.
+
+    Returns a non-negative float (the absolute token amount for this swap).
+    """
+    raw_tok = s.get("token_amount")
+    if raw_tok is not None:
+        try:
+            return abs(float(raw_tok))
+        except (TypeError, ValueError):
+            pass
+
+    # Derivation path: token ≈ vol_sol / price
+    vol_sol = float(s.get("vol_sol") or s.get("vol") or 0.0)
+    price = float(s.get("price") or 0.0)
+    if price > 0 and vol_sol > 0:
+        return vol_sol / price
+    return 0.0
+
+
+def compute_n_pregrad_holders(
+    swaps: list[dict],
+    grad_ts: float,
+) -> float:
+    """Compute n_pregrad_holders: distinct wallets with net-positive TOKEN balance at graduation.
+
+    BALANCE-BASED DEFINITION (AC-93.1 defect fix — buy-count proxy is REJECTED):
+    For each wallet:
+        net_tokens = sum(buy token_amounts) − sum(sell token_amounts)
+    n_pregrad_holders = count of distinct wallets with net_tokens > 0
+
+    This matches the lab definition in v2_2_build.py / holder_exit.py / pregrad_holders():
+        bal[w] += uiAmount   for every buy
+        bal[w] -= uiAmount   for every sell
+        n_pregrad_holders = count(bal[w] > 0)
+
+    TOKEN-AMOUNT SOURCE (in order of preference):
+      1. ``token_amount`` key (integer, raw on-chain units) — present on schema-A
+         rows from the US-96 solanaBilly shared tape adapter.
+      2. Derived: ``vol_sol / price`` — both fields present on schema A and B.
+         Bounded error (same-block price slippage); strictly better than buy-count proxy.
+
+    The REJECTED proxy (PR #412): count(buys) − count(sells) > 0 per wallet.
+    That proxy ignores trade sizes and was OUT-OF-DISTRIBUTION vs the Birdeye-trained
+    model's #1 feature (importance 727.1).
+
+    Parameters
+    ----------
+    swaps:
+        Pre-grad swap records.  Only rows with block_time < grad_ts are used.
+    grad_ts:
+        Token graduation Unix timestamp (seconds).
+
+    Returns
+    -------
+    float
+        Count of distinct wallets with net token balance > 0 at graduation.
+    """
+    wallet_balance: dict[str, float] = {}
+
+    for s in swaps:
+        bt = float(s.get("block_time", 0) or s.get("block_unix_time", 0) or 0)
+        if bt <= 0 or bt >= grad_ts:
+            continue
+        owner = s.get("owner") or ""
+        if not owner:
+            continue
+        side = s.get("side", "")
+        if side not in ("buy", "sell"):
+            continue
+
+        amt = _token_amount_for_row(s)
+        if amt <= 0:
+            continue
+
+        if side == "buy":
+            wallet_balance[owner] = wallet_balance.get(owner, 0.0) + amt
+        else:  # sell
+            wallet_balance[owner] = wallet_balance.get(owner, 0.0) - amt
+
+    holders = sum(1 for bal in wallet_balance.values() if bal > 0)
+    return float(holders)
+
+
+# ---------------------------------------------------------------------------
+# assemble_v7_features — full 44-feature vector
+# ---------------------------------------------------------------------------
+
+
+def assemble_v7_features(
+    swaps: list[dict],
+    grad_ts: float,
+    *,
+    sol_usd_spot: float = 84.0,
+    wallet_bank: Any | None = None,
+    nan_fill: dict[str, float] | None = None,
+) -> dict[str, float] | None:
+    """Assemble the full v7 44-feature vector for one graduating token.
+
+    Parameters
+    ----------
+    swaps:
+        Pre-grad swap records (block_time < grad_ts).
+    grad_ts:
+        Token graduation Unix timestamp (seconds).
+    sol_usd_spot:
+        SOL/USD price for volume dollarization of pre-grad rows.
+    wallet_bank:
+        WalletBankLookup instance (from core.v4_rep_builder).  If None,
+        rep features are 0-filled (cold-start / bank absent).
+    nan_fill:
+        Dict of feature_name -> fill_value for NaN imputation.
+        If None, pre+holder feats are left as-is and rep feats default to 0.
+
+    Returns
+    -------
+    dict with 44 float features in V7_FEATURE_ORDER, or None if the pre-grad
+    tape has no usable swaps.
+    """
+    # 1. Compute 19 pre-grad features
+    pre_feats = compute_v7_pregrad_feats(swaps, grad_ts, sol_usd_spot=sol_usd_spot)
+    if pre_feats is None:
+        return None
+
+    # 2. Compute n_pregrad_holders
+    n_holders = compute_n_pregrad_holders(swaps, grad_ts)
+
+    # 3. Compute 24 rep features (0-fill if no bank)
+    if wallet_bank is not None:
+        try:
+            from core.v4_rep_builder import compute_rep_features
+
+            # Build buyer lists directly from pre-grad buy swaps.
+            # We do NOT use extract_buyers_from_swaps() because it requires
+            # the 'rel' field (rel < 0 filter), which may not be present on
+            # all swap formats.  We already know the swaps passed here are
+            # pre-grad (block_time < grad_ts), so we filter directly.
+            pre_buy_swaps = sorted(
+                (
+                    s for s in swaps
+                    if float(s.get("block_time", 0) or 0) < grad_ts
+                    and s.get("side") == "buy"
+                    and s.get("owner")
+                    and not (s.get("owner") or "").endswith("pump")
+                ),
+                key=lambda s: float(s.get("block_time", 0) or 0),
+            )
+
+            # Time pool: first-10 distinct buyers by block_time; weight = first-buy USD
+            buyer_first_vol: dict[str, float] = {}
+            buyer_total_vol: dict[str, float] = {}
+            buyer_order: list[str] = []
+            for s in pre_buy_swaps:
+                w = s.get("owner") or ""
+                v = float(s.get("vol", 0.0) or 0.0)
+                if w not in buyer_first_vol:
+                    buyer_first_vol[w] = v
+                    buyer_order.append(w)
+                buyer_total_vol[w] = buyer_total_vol.get(w, 0.0) + v
+
+            time_buyers = [
+                {"wallet": w, "weight": max(1.0, buyer_first_vol[w])}
+                for w in buyer_order[:10]
+            ]
+            size_sorted = sorted(buyer_total_vol.items(), key=lambda x: x[1], reverse=True)
+            size_buyers = [
+                {"wallet": w, "weight": max(1.0, v)}
+                for w, v in size_sorted[:10]
+            ]
+
+            rep_dict = compute_rep_features(
+                time_buyers, size_buyers, float(grad_ts), wallet_bank
+            )
+        except Exception as exc:
+            logger.warning("[v7_pregrad_features] rep computation failed: %s", exc)
+            rep_dict = {fname: 0.0 for fname in V7_REP_FEATURE_NAMES}
+    else:
+        rep_dict = {fname: 0.0 for fname in V7_REP_FEATURE_NAMES}
+
+    # 4. Assemble in V7_FEATURE_ORDER
+    result: dict[str, float] = {}
+    for fname in V7_FEATURE_ORDER:
+        if fname in pre_feats:
+            result[fname] = float(pre_feats[fname])
+        elif fname == "n_pregrad_holders":
+            result[fname] = float(n_holders)
+        elif fname in rep_dict:
+            result[fname] = float(rep_dict[fname])
+        else:  # pragma: no cover
+            result[fname] = 0.0  # pragma: no cover
+
+    # 5. Apply NaN fill (pre+holder feats -> medians; rep -> 0.0 already done)
+    if nan_fill is not None:
+        for fname in V7_FEATURE_ORDER:
+            v = result.get(fname, float("nan"))
+            if v is None or (isinstance(v, float) and np.isnan(v)):  # pragma: no cover
+                result[fname] = nan_fill.get(fname, 0.0)  # pragma: no cover
+
+    return result
