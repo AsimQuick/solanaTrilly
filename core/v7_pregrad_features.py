@@ -1,10 +1,10 @@
 # ---
 # module: core.v7_pregrad_features
 # sprint: sprint-15
-# story: US-93, US-94
+# story: US-93, US-94, US-91
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-26  (US-94: deleted dead compute_n_pregrad_holders_from_trade_pages + stale docstring)
+# last-updated: 2026-06-26  (US-91: USD-basis parity fix + grad-crossing-block inclusion)
 # dependencies: numpy, core.v4_rep_builder
 # ---
 """v7 live feature vector builder: 19 pre-grad feats + n_pregrad_holders + 24 rep feats.
@@ -76,14 +76,27 @@ NAN-FILL RULES (applied in assemble_v7_features)
   pre+holder feats [0:20] -> medians from meta.json.selection.nan_fill.pre+holder_feats
   reputation feats [20:44] -> 0.0
 
-PARITY NOTE
-===========
-The parity_sample.parquet was built from Birdeye raw30k data; the live firehose
-path uses the same mathematical definitions but different input sources.  For full
-parity on the parity_sample, use the Birdeye-format swaps (with basePrice/quotePrice)
-for USD computation.  For the live firehose path, use vol_sol × SOL_price for USD.
-The parity test verifies the scoring path; the live feature path is verified on
-synthetic inputs.
+PARITY NOTE (US-91 — CRITICAL PARITY FIX)
+==========================================
+The parity_sample.parquet was built from Birdeye raw30k data where USD volume is
+exact (quotePrice * uiAmount).  The live firehose path uses schema-A rows (shared_billy
+via norm_row_to_swap_dict) where vol_usd=0.0 and vol=vol_sol (SOL notional).
+
+BEFORE US-91 FIX: compute_v7_pregrad_feats read the overloaded 'vol' key as USD.
+Since norm_row_to_swap_dict sets vol=vol_sol (non-zero), the sol_usd_spot fallback
+was NEVER applied.  All 7 dollar features came out ~140x too small (SOL units, not
+USD), causing a 52.4% gate rate instead of the designed ~25%.
+
+AFTER US-91 FIX: compute_v7_pregrad_feats reads vol_usd first; falls back to
+vol_sol * sol_usd_spot.  This is correct for BOTH schemas:
+  schema-A (norm_row_to_swap_dict): vol_usd=0.0 → fallback to vol_sol * spot  ✓
+  schema-B (normalise_trade_page_swap): vol_usd=real USD → used directly  ✓
+
+GRAD-CROSSING-BLOCK FIX (US-91): the original bt >= grad_ts filter excluded the
+crossing block's swaps (block_time == grad_ts).  Changed to bt > grad_ts (inclusive
+upper bound) to include the graduation block, matching the soak harness
+(feature_grad_ts = grad_ts + 1.0) and the live semantics (graduation detected AFTER
+the block).
 
 ZERO CREDITS
 ============
@@ -167,7 +180,7 @@ def compute_v7_pregrad_feats(
     swaps: list[dict],
     grad_ts: float,
     *,
-    sol_usd_spot: float = 84.0,
+    sol_usd_spot: float = 140.0,
 ) -> dict[str, float] | None:
     """Compute the 19 v7 pre-grad curve-life features from a pre-grad tape.
 
@@ -181,25 +194,61 @@ def compute_v7_pregrad_feats(
           - block_time: float/int  (absolute Unix seconds)
           - side: str              ("buy" | "sell")
           - owner: str | None
-          - vol: float             (USD volume; if vol==0 use vol_sol * sol_usd_spot)
-          - vol_sol: float         (SOL volume; used for USD when vol==0)
+          - vol_usd: float         (USD volume; 0.0 on schema-A pre rows)
+          - vol_sol: float         (SOL volume; used for USD when vol_usd == 0)
           - price: float           (SOL/token price)
-        Only swaps with block_time < grad_ts are used.
+        Only swaps with block_time <= grad_ts are used (inclusive: the crossing
+        block's swaps are pre-graduation by construction — graduation is detected
+        AFTER the block, so swaps IN that block are still pre-grad activity).
+
+    US-91 PARITY FIX (dollar-basis):
+        The 'vol' key in schema-B firehose rows and norm_row_to_swap_dict output
+        carries vol_sol (SOL notional), NOT USD.  Reading it as USD causes all 7
+        dollar features to be ~140x too small vs the USD the model was trained on.
+
+        Correct USD derivation (both schemas):
+          vol_usd = float(s.get("vol_usd", 0.0) or 0.0)
+          if vol_usd > 0.0:
+              usd = vol_usd   # schema-A Birdeye rows / normalise_trade_page_swap
+          else:
+              usd = vol_sol * sol_usd_spot  # schema-A/B pre rows (vol_usd=0 discipline)
+
+        This is correct for BOTH schemas:
+          schema-A (shared_billy / norm_row_to_swap_dict): vol_usd=0.0, vol=vol_sol
+            → falls back to vol_sol * sol_usd_spot  ✓
+          schema-B (self-tape / normalise_trade_page_swap): vol=vol_usd (real USD)
+            → uses vol_usd directly  ✓
+
+    US-91 GRAD-CROSSING-BLOCK FIX (first-block inclusion):
+        Original filter: `bt >= grad_ts` excluded swaps at exactly grad_ts.
+        For tokens where ALL pre-grad swaps are in the graduation crossing block
+        (block_time == grad_ts), this resulted in an empty tape → returns None →
+        token silently skipped.
+        Fixed filter: `bt > grad_ts` (exclusive upper bound) so the crossing
+        block's swaps (bt == grad_ts) are INCLUDED in the pre-grad window.
+        This matches the soak harness (scripts/v7_soak.py:_label_graduations) which
+        passes feature_grad_ts = grad_ts + 1.0, and matches the live semantics:
+        graduation is detected AFTER the block, so the crossing block's swaps are
+        pre-graduation activity.
+
     grad_ts:
-        Token graduation Unix timestamp (seconds).
+        Token graduation Unix timestamp (seconds).  Swaps with bt <= grad_ts are
+        included (crossing block is pre-grad by construction).
     sol_usd_spot:
-        SOL/USD price for volume dollarization.  Used when swap['vol'] == 0
-        (pre-grad rows in the firehose have vol_usd=0; vol_sol*sol_usd_spot gives USD).
+        SOL/USD price for volume dollarization.  Used when vol_usd == 0.0.
+        The live path passes get_sol_usd() (cached Birdeye spot, fallback 140.0).
 
     Returns
     -------
     dict with 19 float features, or None if there are no valid pre-grad swaps.
     """
-    # Filter to pre-graduation only and compute USD volume
+    # Filter to pre-graduation only and compute USD volume.
+    # INCLUSIVE upper bound (bt <= grad_ts): the crossing block's swaps are
+    # pre-grad by construction (graduation detected AFTER the block fires).
     sw: list[dict] = []
     for s in swaps:
         bt = float(s.get("block_time", 0) or s.get("block_unix_time", 0) or 0)
-        if bt <= 0 or bt >= grad_ts:
+        if bt <= 0 or bt > grad_ts:
             continue
         price = float(s.get("price", 0.0) or 0.0)
         if price <= 0:
@@ -207,13 +256,17 @@ def compute_v7_pregrad_feats(
         side = s.get("side", "")
         if side not in ("buy", "sell"):
             continue
-        # USD volume: use vol if non-zero, else vol_sol * spot
-        vol = float(s.get("vol", 0.0) or 0.0)
-        if vol == 0.0:
-            vol_sol = float(s.get("vol_sol", 0.0) or 0.0)
-            vol = vol_sol * sol_usd_spot
+        # US-91 dollar-basis fix: use vol_usd if present and non-zero; otherwise
+        # reconstruct from vol_sol * sol_usd_spot.  NEVER trust the overloaded 'vol'
+        # key for USD (norm_row_to_swap_dict sets vol=vol_sol, a SOL notional).
+        vol_usd = float(s.get("vol_usd", 0.0) or 0.0)
+        if vol_usd > 0.0:
+            usd = vol_usd
+        else:
+            vol_sol_val = float(s.get("vol_sol", 0.0) or 0.0)
+            usd = vol_sol_val * sol_usd_spot
         owner = s.get("owner") or ""
-        sw.append({"t": bt, "price": price, "vol": vol, "side": side, "owner": owner})
+        sw.append({"t": bt, "price": price, "vol": usd, "side": side, "owner": owner})
 
     if not sw:
         return None
@@ -489,6 +542,7 @@ def normalise_trade_page_swap(it: dict, grad_ts: float) -> dict | None:
         "block_time": float(bt),
         "price": float(price),
         "vol": vol_usd,
+        "vol_usd": vol_usd,  # explicit USD key so compute_v7_pregrad_feats USD-fix path works
         "vol_sol": vol_sol,
         "side": side,
         "owner": owner,
@@ -531,13 +585,15 @@ def normalise_all_trade_page_swaps(trade_pages: list[list[dict]]) -> list[dict]:
             q = it.get("quote") or {}
             qp = float(it.get("quotePrice") or q.get("price") or 0)
             vol_sol = abs(float(q.get("uiAmount") or 0))
+            vol_usd_val = vol_sol * qp
             result.append({
                 "block_time": bt_f,
                 "side": side,
                 "owner": owner,
                 "token_amount": token_amount_ui,
                 "price": price_f,
-                "vol": vol_sol * qp,
+                "vol": vol_usd_val,
+                "vol_usd": vol_usd_val,  # explicit USD key for compute_v7_pregrad_feats
                 "vol_sol": vol_sol,
             })
     return result
@@ -609,10 +665,13 @@ def compute_v7_features_from_trade_pages(
             if norm is not None:
                 swaps.append(norm)
 
-    # 2. Compute the 19 pre-grad feats via the existing builder
+    # 2. Compute the 19 pre-grad feats via the existing builder.
+    # normalise_trade_page_swap populates vol_usd on every swap (real USD from
+    # quotePrice * uiAmount), so compute_v7_pregrad_feats uses vol_usd directly
+    # and ignores sol_usd_spot.  Pass sol_usd_spot=1.0 as a no-op fallback.
     pre_feats = compute_v7_pregrad_feats(
         swaps, grad_ts, sol_usd_spot=1.0
-    )  # vol is already in USD
+    )
     if pre_feats is None:
         return None
 
@@ -692,7 +751,7 @@ def assemble_v7_features(
     swaps: list[dict],
     grad_ts: float,
     *,
-    sol_usd_spot: float = 84.0,
+    sol_usd_spot: float = 140.0,
     wallet_bank: Any | None = None,
     nan_fill: dict[str, float] | None = None,
 ) -> dict[str, float] | None:
@@ -701,7 +760,7 @@ def assemble_v7_features(
     Parameters
     ----------
     swaps:
-        Pre-grad swap records (block_time < grad_ts).
+        Pre-grad swap records (block_time <= grad_ts; crossing block included).
     grad_ts:
         Token graduation Unix timestamp (seconds).
     sol_usd_spot:
@@ -732,14 +791,15 @@ def assemble_v7_features(
             from core.v4_rep_builder import compute_rep_features
 
             # Build buyer lists directly from pre-grad buy swaps.
+            # Inclusive upper bound (bt <= grad_ts) matches compute_v7_pregrad_feats.
             # We do NOT use extract_buyers_from_swaps() because it requires
             # the 'rel' field (rel < 0 filter), which may not be present on
             # all swap formats.  We already know the swaps passed here are
-            # pre-grad (block_time < grad_ts), so we filter directly.
+            # pre-grad (block_time <= grad_ts), so we filter directly.
             pre_buy_swaps = sorted(
                 (
                     s for s in swaps
-                    if float(s.get("block_time", 0) or 0) < grad_ts
+                    if float(s.get("block_time", 0) or 0) <= grad_ts
                     and s.get("side") == "buy"
                     and s.get("owner")
                     and not (s.get("owner") or "").endswith("pump")
@@ -747,13 +807,19 @@ def assemble_v7_features(
                 key=lambda s: float(s.get("block_time", 0) or 0),
             )
 
-            # Time pool: first-10 distinct buyers by block_time; weight = first-buy USD
+            # Time pool: first-10 distinct buyers by block_time; weight = first-buy USD.
+            # US-91 dollar-basis fix: use vol_usd if non-zero; else vol_sol * sol_usd_spot.
+            # NEVER use the 'vol' key for USD — it carries vol_sol on schema-A/B rows.
             buyer_first_vol: dict[str, float] = {}
             buyer_total_vol: dict[str, float] = {}
             buyer_order: list[str] = []
             for s in pre_buy_swaps:
                 w = s.get("owner") or ""
-                v = float(s.get("vol", 0.0) or 0.0)
+                _vol_usd = float(s.get("vol_usd", 0.0) or 0.0)
+                if _vol_usd > 0.0:
+                    v = _vol_usd
+                else:
+                    v = float(s.get("vol_sol", 0.0) or 0.0) * sol_usd_spot
                 if w not in buyer_first_vol:
                     buyer_first_vol[w] = v
                     buyer_order.append(w)

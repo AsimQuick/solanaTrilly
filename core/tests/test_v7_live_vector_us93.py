@@ -262,23 +262,37 @@ def test_compute_v7_pregrad_feats_values() -> None:
 
 
 def test_compute_v7_pregrad_feats_excludes_post_grad_swaps() -> None:
-    """Swaps at or after grad_ts are excluded from computation."""
+    """Swaps strictly after grad_ts are excluded; the graduation block (bt==grad_ts) is included.
+
+    US-91 grad-crossing-block fix: the boundary is INCLUSIVE at grad_ts.
+    Swaps with block_time <= grad_ts are pre-graduation (the crossing block fires BEFORE
+    graduation is detected — its swaps are pre-grad activity by construction).
+    Only swaps with block_time > grad_ts are post-graduation.
+
+    Pre-fix (old) behavior: bt >= grad_ts was excluded, so grad_ts block was dropped.
+    Fixed behavior: bt > grad_ts is excluded, so bt == grad_ts is INCLUDED.
+    """
     grad_ts = 1_782_000_000.0
     swaps = [
-        # Pre-grad buys
+        # Pre-grad buys (bt < grad_ts)
         {"block_time": grad_ts - 100, "side": "buy", "owner": "w1", "vol": 42.0, "vol_sol": 0.5, "price": 1e-6},
         {"block_time": grad_ts - 50, "side": "buy", "owner": "w2", "vol": 84.0, "vol_sol": 1.0, "price": 1e-6},
-        # Post-grad (must be excluded)
-        {"block_time": grad_ts + 10, "side": "buy", "owner": "w3", "vol": 100.0, "vol_sol": 1.2, "price": 1e-6},
+        # Graduation crossing block (bt == grad_ts): INCLUDED after US-91 fix
         {"block_time": grad_ts, "side": "sell", "owner": "w1", "vol": 50.0, "vol_sol": 0.6, "price": 1e-6},
+        # Post-grad (bt > grad_ts): must be excluded
+        {"block_time": grad_ts + 10, "side": "buy", "owner": "w3", "vol": 100.0, "vol_sol": 1.2, "price": 1e-6},
     ]
     feats = compute_v7_pregrad_feats(swaps, grad_ts, sol_usd_spot=84.0)
     assert feats is not None
-    # Only 2 pre-grad swaps
-    assert feats["pre_n_swaps"] == 2.0, (
-        f"Expected 2 pre-grad swaps (excluding post), got {feats['pre_n_swaps']}"
+    # 3 swaps: 2 pre-grad + 1 at grad_ts (crossing block, INCLUDED after US-91 fix)
+    assert feats["pre_n_swaps"] == 3.0, (
+        f"Expected 3 pre-grad swaps (bt <= grad_ts inclusive after US-91 fix), "
+        f"got {feats['pre_n_swaps']}"
     )
-    assert feats["pre_n_buys"] == 2.0, f"Expected 2 buys, got {feats['pre_n_buys']}"
+    # 2 buys (pre-grad) + 0 at grad_ts buy (sell at grad_ts is the crossing block)
+    assert feats["pre_n_buys"] == 2.0, f"Expected 2 buys (bt < grad_ts), got {feats['pre_n_buys']}"
+    # 1 sell at grad_ts (crossing block sell — included)
+    assert feats["pre_n_sells"] == 1.0, f"Expected 1 sell (at grad_ts), got {feats['pre_n_sells']}"
 
 
 def test_compute_v7_pregrad_feats_dollar_basis() -> None:
