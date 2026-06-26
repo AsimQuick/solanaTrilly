@@ -1,0 +1,189 @@
+{
+  "name": "trilly_pregrad_v7",
+  "lineage": "successor to trilly_pregrad_v6/v6.1; honest-harness rebuild on the 30k graduation tapes",
+  "built": "2026-06-26",
+  "entry": {
+    "trigger": "graduation instant (bonding_complete/CompleteEvent marker)",
+    "fill": "first post-grad swap >= grad+2s within 30s, reject if slip > 15% vs at-grad quote",
+    "delay_refuted": "entering grad+30..300s is monotonically WORSE; enter AT graduation"
+  },
+  "selection": {
+    "model": "8-seed-bagged LightGBM regressor (predict realized $25 pnl under the exit)",
+    "files": [
+      "selection/seed0.txt",
+      "selection/seed1.txt",
+      "selection/seed2.txt",
+      "selection/seed3.txt",
+      "selection/seed4.txt",
+      "selection/seed5.txt",
+      "selection/seed6.txt",
+      "selection/seed7.txt"
+    ],
+    "score": "mean of predict() over the 8 boosters",
+    "n_features": 44,
+    "feature_order": [
+      "pre_buy_frac",
+      "pre_buy_vol_usd",
+      "pre_buys_last60",
+      "pre_max_trade_usd",
+      "pre_mean_trade_usd",
+      "pre_n_buys",
+      "pre_n_sells",
+      "pre_n_swaps",
+      "pre_net_flow_usd",
+      "pre_price_ret",
+      "pre_top1_buyer_share",
+      "pre_top3_buyer_share",
+      "pre_trades_per_sec",
+      "pre_uniq_buyers",
+      "pre_uniq_traders",
+      "pre_vol_last300",
+      "pre_vol_last60",
+      "pre_vol_usd",
+      "pre_window_covered_s",
+      "n_pregrad_holders",
+      "time_rdollar_repmean_mean",
+      "time_rdollar_repmean_max",
+      "time_rdollar_repmax_mean",
+      "time_rdollar_ngood_sum",
+      "time_rdollar_nhist",
+      "time_rdollar_wmean",
+      "time_pk24_repmean_mean",
+      "time_pk24_repmean_max",
+      "time_pk24_repmax_mean",
+      "time_pk24_ngood_sum",
+      "time_pk24_nhist",
+      "time_pk24_wmean",
+      "size_rdollar_repmean_mean",
+      "size_rdollar_repmean_max",
+      "size_rdollar_repmax_mean",
+      "size_rdollar_ngood_sum",
+      "size_rdollar_nhist",
+      "size_rdollar_wmean",
+      "size_pk24_repmean_mean",
+      "size_pk24_repmean_max",
+      "size_pk24_repmax_mean",
+      "size_pk24_ngood_sum",
+      "size_pk24_nhist",
+      "size_pk24_wmean"
+    ],
+    "nan_fill": {
+      "reputation_feats": 0.0,
+      "pre+holder_feats": {
+        "pre_buy_frac": 0.6225135623869801,
+        "pre_buy_vol_usd": 13911.56017812888,
+        "pre_buys_last60": 42.0,
+        "pre_max_trade_usd": 559.568653177768,
+        "pre_mean_trade_usd": 45.136345386102086,
+        "pre_n_buys": 279.0,
+        "pre_n_sells": 163.0,
+        "pre_n_swaps": 325.0,
+        "pre_net_flow_usd": 4350.077757712877,
+        "pre_price_ret": 3.2342797271829324,
+        "pre_top1_buyer_share": 0.0530609305448417,
+        "pre_top3_buyer_share": 0.1253466292672339,
+        "pre_trades_per_sec": 1.04221635883905,
+        "pre_uniq_buyers": 170.0,
+        "pre_uniq_traders": 182.0,
+        "pre_vol_last300": 10279.556072253876,
+        "pre_vol_last60": 3222.372269925096,
+        "pre_vol_usd": 23435.239355120324,
+        "pre_window_covered_s": 471.0,
+        "n_pregrad_holders": 100.0
+      }
+    },
+    "gate": "trade if score >= 15.86012 (calibrated to ~top-25%/day = ~52 trades/day at ~209 enterable graduations/day)",
+    "gate_adaptive_alt": "or per-day top-25% by score (eval method)"
+  },
+  "exit": {
+    "policy": "tr30_t600",
+    "spec": "RIDE: 30% trailing stop off the running post-grad max, hard 600s timer; NO fast scalp (post-grad open is a dump, win~30% \u2014 fast/cut is REFUTED)"
+  },
+  "sizing": {
+    "rule": "size = $100 if entry-depth >= $8000 else $25",
+    "cap": "$100 (do NOT exceed; $200 is the impact-fragile zone)",
+    "depth_measure_offline": "eflow = $-flow in [grad, grad+60]",
+    "depth_measure_live": "graduation-instant AMM pool liquidity (soak must confirm it tracks eflow)"
+  },
+  "economics_walkforward_costhonest_8seed": {
+    "basis": "settle_engine honest fill+impact (2S/(S+flow))+1% fee; recent folds; depth-gated $100; top-25%",
+    "modeled_impact": {
+      "June_usd_day": 570,
+      "June_seed_range": "503..621",
+      "June_CIlo": 6.4,
+      "May_usd_day": 764
+    },
+    "2x_impact_stress": {
+      "June_usd_day": 306,
+      "June_CIlo": 1.2,
+      "May_usd_day": 470,
+      "note": "stays POSITIVE & gate-passing; does NOT invert"
+    },
+    "flat25_anchor": {
+      "June_top25_usd_tr": 2.57,
+      "usd_day": "~130-210 (impact-independent)"
+    }
+  },
+  "top_features": [
+    {
+      "f": "n_pregrad_holders",
+      "imp": 727.1
+    },
+    {
+      "f": "pre_trades_per_sec",
+      "imp": 377.9
+    },
+    {
+      "f": "pre_price_ret",
+      "imp": 373.8
+    },
+    {
+      "f": "pre_max_trade_usd",
+      "imp": 362.8
+    },
+    {
+      "f": "pre_window_covered_s",
+      "imp": 355.9
+    },
+    {
+      "f": "pre_mean_trade_usd",
+      "imp": 347.2
+    },
+    {
+      "f": "pre_buy_frac",
+      "imp": 315.6
+    },
+    {
+      "f": "time_rdollar_repmax_mean",
+      "imp": 314.0
+    },
+    {
+      "f": "pre_net_flow_usd",
+      "imp": 285.9
+    },
+    {
+      "f": "size_pk24_wmean",
+      "imp": 244.2
+    },
+    {
+      "f": "pre_vol_last60",
+      "imp": 244.1
+    },
+    {
+      "f": "pre_buys_last60",
+      "imp": 242.1
+    }
+  ],
+  "caveats": [
+    "RIGHT-TAIL-CARRIED: median trade LOSES (June -$5.4 @1x / -$7.7 @2x); top-5% of trades = 110-190% of profit. Moonshot-dependent.",
+    "BIRDEYE SURVIVORSHIP: 30k is a hand-picked graduate sample -> $/day is an optimistic ceiling; a Birdeye-trained model did NOT transfer to the live firehose (t120 lesson) -> RETRAIN on solanatrilly's own live AMM feed.",
+    "DEPTH-GATE is impact-fragile: the >$500 rests on $100 fills matching 2S/(S+flow); soak must log deep-book fills; $500 vs ~$350 live is a fill-quality question.",
+    "DECAY: lane faded Feb->Jun; recent fold is the only valid read; retrain frequently."
+  ],
+  "deployment_discipline": [
+    "1. OBSERVE soak at FLAT $25 first (impact-independent anchor ~$130-210/day). Confirm no inversion (project law).",
+    "2. Only then ramp to depth-gated $100 while logging reconstructed-firehose deep-book fills vs 2S/(S+flow).",
+    "3. Sizing MULTIPLIES the per-token edge; if selection inverts live, sizing amplifies the loss. Size is the LAST lever. Cap $100.",
+    "4. Grade on the post-grad TAPE + on-chain graduation, not dashboard PnL."
+  ]
+}

@@ -63,6 +63,13 @@ models/
 # Mounted into containers at /app/models/trilly_pregrad_v4/v4_wallet_bank.parquet via models/:ro
 models/trilly_pregrad_v4/v4_wallet_bank.parquet
 models/trilly_pregrad_v4/boosters/
+# US-87 v7-deploy: committed artifacts for CI parity (boosters host-only, not committed)
+!models/trilly_pregrad_v7/
+!models/trilly_pregrad_v7/meta.json
+!models/trilly_pregrad_v7/MODEL_HANDOFF.md
+!models/trilly_pregrad_v7/parity_sample.parquet
+# v7 boosters: host-only (operator/CD scp to VPS; NOT in Git), mounted via models/:ro
+models/trilly_pregrad_v7/selection/
 
 # lake/ data files (large binaries — host-only, not committed to Git)
 lake/
