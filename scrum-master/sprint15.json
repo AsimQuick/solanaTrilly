@@ -384,41 +384,49 @@
     {
       "id": "US-93",
       "title": "PHASE B (MODEL, v7 BUILD #2 of 3) — Build the v7 44-feature LIVE vector: entry trigger on the US-86 detector -> 19 pre-grad curve-life feats + n_pregrad_holders (THE #1 feature) + 24 wallet-reputation feats (reuse the v4 wallet-bank infra / port lab v4_outcome_rep.py) -> exact computation + leak-safe windows per meta.json.feature_order, proven by parity against parity_sample.parquet",
-      "status": "draft",
+      "status": "defect-found",
       "priority": "critical",
       "phase": "B-model",
       "dependencies": [
         "US-81",
         "US-86",
-        "US-87"
+        "US-87",
+        "US-96"
       ],
       "acceptance_criteria": [
         {
           "id": "93.1",
-          "text": "ENTRY TRIGGER + the 19 PRE-GRAD curve-life feats + n_pregrad_holders. Entry fires on the SAME on-chain graduation marker as US-86 (the corrected MigrateV2 + PumpSwap CreatePool detector / bonding_complete) — enter on the first post-grad AMM swap >= grad_ts+2s within 30s (reject slip>15% or a dust-fill < 0.3x local median price); entering later is REFUTED (do not delay). The 19 pre-grad curve-life feats (pre_buy_frac, pre_buy_vol_usd, pre_buys_last60, pre_max_trade_usd, pre_mean_trade_usd, pre_n_buys, pre_n_sells, pre_n_swaps, pre_net_flow_usd, pre_price_ret, pre_top1_buyer_share, pre_top3_buyer_share, pre_trades_per_sec, pre_uniq_buyers, pre_uniq_traders, pre_vol_last300, pre_vol_last60, pre_vol_usd, pre_window_covered_s) are computed from the pre-grad bonding-curve tape (the same kind v4 already computes), all leak-safe / available at graduation. SCOPING FLAG (operator, explicit): n_pregrad_holders is the #1 feature by importance (meta.json top_features imp=727.1, ~2x the next) — a dev-team scoping question MUST CONFIRM it is computable LIVE from the pre-grad tape's cumulative buys-minus-sells per wallet (distinct wallets with a positive balance at graduation), or via a holder snapshot, BEFORE the build commits; flag in dev_notes if neither is available live. Verified by a test asserting the 20 pre+holder features are computed on a fixture tape and (where derivable) match the parity_sample.parquet values within tolerance; dollar quantities derive from vol_sol x SOL_price per phase (US-81.3 for pre rows), never the all-zero pre-row vol_usd.",
+          "text": "ENTRY TRIGGER + the 19 PRE-GRAD curve-life feats + n_pregrad_holders (BALANCE-BASED — DEFECT FIX). Entry fires on the SAME on-chain graduation marker as US-86 (the corrected MigrateV2 + PumpSwap CreatePool detector / bonding_complete) — enter on the first post-grad AMM swap >= grad_ts+2s within 30s (reject slip>15% or a dust-fill < 0.3x local median price); entering later is REFUTED. The 19 pre-grad curve-life feats (pre_buy_frac, pre_buy_vol_usd, pre_buys_last60, pre_max_trade_usd, pre_mean_trade_usd, pre_n_buys, pre_n_sells, pre_n_swaps, pre_net_flow_usd, pre_price_ret, pre_top1_buyer_share, pre_top3_buyer_share, pre_trades_per_sec, pre_uniq_buyers, pre_uniq_traders, pre_vol_last300, pre_vol_last60, pre_vol_usd, pre_window_covered_s) are computed from the pre-grad bonding-curve tape, all leak-safe / available at graduation. DEFECT FIX (the #1 feature — non-negotiable): n_pregrad_holders MUST be computed BALANCE-BASED to match the lab and parity_sample.parquet: for each wallet, net_tokens = sum(buy token_amount) - sum(sell token_amount); n_pregrad_holders = count of distinct wallets with net_tokens > 0 at graduation. PR #412's BUY-COUNT proxy (count(buys) - count(sells) > 0) is REJECTED — it is out-of-distribution vs the Birdeye-trained model's #1 feature (imp 727.1) and the agent's own docstring admits the deviation. DEPENDS ON US-96: schema A (solanaBilly's shared tape, via the US-96 adapter) carries token_amount on every row directly — use it. From schema B (no reserves), token_amount is DERIVABLE (token ~= vol_sol / price); document the derivation + its bounded error. Verified by a test asserting the 20 pre+holder features are computed on a fixture tape, n_pregrad_holders is the BALANCE-based count (NOT buy-count), and where derivable they match parity_sample.parquet values within tolerance. Dollar quantities derive from vol_sol x SOL_price per phase (US-81.3 for pre rows), never the all-zero pre-row vol_usd.",
           "checked": false,
-          "dev_status": "not-started",
-          "tester_status": "not-started"
+          "dev_status": "in-progress",
+          "tester_status": "in-progress"
         },
         {
           "id": "93.2",
           "text": "The 24 WALLET-REPUTATION feats. Build the 24 outcome-weighted wallet-reputation features (whale_outcome_features.csv families: time_rdollar_*, time_pk24_*, size_rdollar_*, size_pk24_* — each repmean_mean/repmean_max/repmax_mean/ngood_sum/nhist/wmean) = the outcome-weighted reputation of the token's early/big buyers' PRIOR graduate picks, leak-safe walk-forward (only picks resolved BEFORE this graduation). SCOPING FLAG (operator, explicit — the HEAVIEST dependency): a dev-team scoping question MUST CONFIRM what wallet-bank infra already exists in solanatrilly vs what must be ported from the lab. KNOWN (PO survey): the v4 wallet-bank infra IS present in-repo (core/v4_rep_builder.py with assemble_v4_features + WalletBankLookup, core/scorer.py, lake/v4_wallet_bank.parquet, wired in core/management/commands/run_firehose.py) and v7's MODEL_HANDOFF says these feats are 'built from the same wallet-bank infra v4/v6 already maintain (analysis/graduated/v4_outcome_rep.py)'. The dev team MUST verify whether the existing v4 bank emits THESE 44-order column names / families as-is, or whether the lab v4_outcome_rep.py (/Users/asim/NoIcloud/solanatrills/analysis/graduated/v4_outcome_rep.py) must be ported to produce the time/size x rdollar/pk24 reputation columns. NaN/unknown reputation -> 0.0 (in-distribution; many tokens have unknown-rep buyers). Verified by a test asserting the 24 rep feats are produced in the meta.json.feature_order positions and match parity_sample.parquet within tolerance for the sampled tokens, with unknown-rep -> 0.0.",
           "checked": false,
-          "dev_status": "not-started",
-          "tester_status": "not-started"
+          "dev_status": "in-progress",
+          "tester_status": "in-progress"
         },
         {
           "id": "93.3",
-          "text": "LOCAL-PROOF — the FULL 44-feature live vector PASSES PARITY end-to-end: assemble the complete 44-feature vector (19 pre + n_pregrad_holders + 24 rep, in meta.json.selection.feature_order), apply the meta.json.selection.nan_fill rules (reputation feats -> 0.0; pre+holder feats -> the pinned medians, NOT 0-filled), score it through the US-87 harness, and assert the live feature vector AND the resulting 8-seed score MATCH parity_sample.parquet within the documented tolerance for the parity tokens reproducible offline. This is the anti-hotfix local-proof: a live feature vector + score must equal the expected before any number is believed (project law: a model's live score must equal its offline score). Document any feature that is NOT offline-reproducible from the local tapes (e.g. if n_pregrad_holders or a rep family needs live state) with its bounded-impact rationale. Zero firehose; HARD NO-CREDITS. New files carry metadata front matter.",
+          "text": "LOCAL-PROOF — the FULL 44-feature live vector PASSES PARITY end-to-end: assemble the complete 44-feature vector (19 pre + n_pregrad_holders + 24 rep, in meta.json.selection.feature_order), apply the meta.json.selection.nan_fill rules (reputation feats -> 0.0; pre+holder feats -> the pinned medians, NOT 0-filled), score it through the US-87 harness, and assert the live feature vector AND the resulting 8-seed score MATCH parity_sample.parquet within the documented tolerance for the parity tokens reproducible offline. This is the anti-hotfix local-proof: a live feature vector + score must equal the expected before any number is believed (project law: a model's live score must equal its offline score). Document any feature that is NOT offline-reproducible from the local tapes (e.g. if n_pregrad_holders or a rep family needs live state) with its bounded-impact rationale. The balance-based n_pregrad_holders (AC-93.1) uses the US-96 schema-A token_amount path. The end-to-end vector parity here COMPLEMENTS the per-feature builder parity in AC-93.4 (features match) and the scorer parity in US-87 (score matches features). Zero firehose; HARD NO-CREDITS. New files carry metadata front matter.",
           "checked": false,
-          "dev_status": "not-started",
-          "tester_status": "not-started"
+          "dev_status": "in-progress",
+          "tester_status": "in-progress"
+        },
+        {
+          "id": "93.4",
+          "text": "NEW — REAL FEATURE-BUILDER PARITY TEST (the defect that let the buy-count proxy pass CI). A committed test RECOMPUTES the features FROM A TAPE for the parity_sample tokens and asserts the LIVE-built feature values MATCH parity_sample.parquet's feature columns within a documented tolerance — at minimum n_pregrad_holders + the 19 pre-grad feats (and the 24 rep feats where offline-reproducible). This is DISTINCT from US-87's scorer-parity (test_v7_feature_vector_score_matches_parity_sample_spot_check), which only reads parity_sample's ALREADY-COMPUTED features and scores them — that test does NOT validate the builder and is exactly why the buy-count deviation passed silently. The new test closes that hole: it proves the live builder reproduces the lab's feature VALUES, not just that the scorer maps golden features to golden scores. Any parity_sample token whose features are NOT offline-reproducible from the local tapes (e.g. a rep family needing live state, or a token absent from the local Jun 20-23 lake) is explicitly documented + excluded with a bounded-impact rationale, and the test asserts a minimum coverage (e.g. >= N reproducible tokens) so the exclusion list cannot silently swallow the whole sample. Zero firehose; HARD NO-CREDITS (parity_sample.parquet + the local tapes are the oracles). Project law restated: a model's live score must equal its offline score — and that requires the live FEATURES to equal the offline features, which only this builder-parity test proves.",
+          "checked": false,
+          "dev_status": "in-progress",
+          "tester_status": "in-progress"
         }
       ],
-      "dev_status": "not-started",
-      "dev_notes": "",
-      "tester_status": "not-started",
-      "tester_notes": ""
+      "dev_status": "in-progress",
+      "dev_notes": "PO REOPEN (2026-06-26) — US-93 was marked done in PR #412 (branch feature/US-87-93-v7-feature-pipeline, NOT merged). IT IS NOT DONE. Two defects:\n(1) WRONG #1 FEATURE DEFINITION. n_pregrad_holders is the model's #1 feature (importance 727.1, ~2x the next). PR #412 implemented it as a BUY-COUNT PROXY (core/v7_pregrad_features.py compute_n_pregrad_holders: count(buys) - count(sells) > 0 per wallet). The lab definition — and the values baked into parity_sample.parquet — is BALANCE-BASED: distinct wallets with a net-positive TOKEN balance (cumulative buy token_amount minus sell token_amount > 0) at graduation. The agent's own docstring (lines 23-29) admits the deviation. Feeding the Birdeye-trained v7 an out-of-distribution #1 feature makes the soak an UNFAITHFUL read of the model's edge.\n(2) NO LIVE-BUILDER PARITY TEST. The only 'parity' test (test_v7_feature_vector_score_matches_parity_sample_spot_check) reads parity_sample.parquet's ALREADY-COMPUTED feature columns and scores them — it validates the SCORER (US-87's job), NOT the live feature builder. There is no test that recomputes the features (incl. n_pregrad_holders) FROM A TAPE and asserts they match parity_sample's feature columns. So the buy-count deviation passes CI silently.\nRESOLUTION REQUIRED: see revised AC-93.1 (balance-based holder count) and the NEW AC-93.4 (feature-builder parity test). US-93 now DEPENDS ON US-96 for the clean token_amount path (schema A carries token_amount directly). US-87 (the scorer parity harness, 0.00 error over 400 rows) is CORRECT and stays done. US-94 still depends on US-93.\n\n--- prior dev_notes (PR #412) ---\n",
+      "tester_status": "in-progress",
+      "tester_notes": "PO REOPENED 2026-06-26 (was wrongly closed in PR #412). Re-validate against revised AC-93.1 + NEW AC-93.4 after the Dev Team resolves. See dev_notes for the two defects.\n\n--- prior tester_notes ---\n"
     },
     {
       "id": "US-94",
@@ -497,6 +505,49 @@
       "tester_notes": ""
     },
     {
+      "id": "US-96",
+      "title": "PHASE B (FIREHOSE, CRITICAL) — SHARED FIREHOSE: read solanaBilly's tapes, stop the duplicate. Mount /root/tape :ro, add TAPE_SOURCE=shared_billy (tail billy's tape, no Helius sub, no self-tape-write), port the schema-A->B adapter, add the one-way file-mtime FRESHNESS precondition ('You must turn on solanaBilly's firehose'), drop HELIUS_API_KEY from inference_engine only. GATES US-89 (the clean deploy must ship the shared-tape architecture, not the duplicate)",
+      "status": "draft",
+      "priority": "critical",
+      "phase": "B-firehose",
+      "dependencies": [
+        "US-81"
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "96.1",
+          "text": "5a MOUNT + 5e DROP HELIUS. In docker-compose.staging.yml, add a READ-ONLY bind mount of solanaBilly's shared firehose lake to BOTH inference_engine and celery-worker: `- /root/tape:/app/lake/billy_tape:ro` — a DISTINCT path (NOT the existing /app/lake/firehose, which stays solanatrilly's own non-firehose volume). Files are world-readable and containers run as root; :ro guarantees solanatrilly can never mutate solanaBilly's lake. SCOPE: never touch /root/solanaBilly; every docker op scoped -p solanatrilly; web stays 8002, dashboard 8003. Remove HELIUS_API_KEY from inference_engine ONLY (KEEP it on listener, celery-worker, and copytrade_engine — they use Helius for detection/settler/price, NOT the firehose tape; confirm each before removing). Open question to resolve on the VPS during build (agents own the VPS): confirm billy's real on-disk schema by `zcat /root/tape/dt=*/part-*.jsonl.gz | head`. Verified (DoD-a): a test/probe confirms inference_engine can `ls /app/lake/billy_tape/dt=*/` and `zcat` a part from inside the container; and a guard test asserts HELIUS_API_KEY is absent from inference_engine but present on listener/celery-worker/copytrade_engine in docker-compose.staging.yml.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "96.2",
+          "text": "5b STOP THE DUPLICATE + 5c SCHEMA-A ADAPTER. Add a TAPE_SOURCE setting (default `shared_billy`; `self` is the fallback escape hatch). Under shared_billy, run_firehose does NOT open the Helius subscription (HeliusBirthTapeSource in _helius_loop, run_firehose.py ~2552) and does NOT write a tape (LakeTapeSink, core/firehose/tape_sink.py); instead it TAILS the shared billy tape at /app/lake/billy_tape (watch for new part-*.jsonl.gz, read newly-appended lines) and feeds the EXISTING consume/scoring loop (_scoring_loop, run_firehose.py ~1502). Today's lake reader is a batch-scan; tailing is NEW. PORT the stdlib-only read_rows() from /Users/asim/NoIcloud/solanatrills/analysis/replay/replay_core.py (it auto-detects schema A vs B and normalizes to one Row) into solanatrilly's lake-line parsing at every site that parses a lake line: the consume loop, core/tape/lake_reader.py, the US-78 swaps export, and the curvestage settler. Schema A is RICHER — it carries exact price=vsol/vtok, exact curve_frac from reserves ((vsol/1e9 - 30)/85), real-book depth (real_sol_reserves), AND token_amount (the clean path US-93's balance-based n_pregrad_holders depends on). SCOPE FENCE: POST-grad swaps are a SEPARATE Birdeye per-mint stream (_postgrad_loop) — NOT in billy's tape — LEAVE IT; US-92 stays orthogonal (post-grad missing-mint is a different stream). Verified (DoD-b): a test re-derives price + curve_frac from a real billy part for a known mint and asserts sanity vs the schema-B path; a unit test asserts read_rows() normalizes both a schema-A and a schema-B sample row to the same Row; bad/partial lines are skip-and-counted (US-81 discipline), never fatal.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "96.3",
+          "text": "5d FRESHNESS PRECONDITION (the WHOLE coordination mechanism — one-way, NO cross-service calls). Coordination is a file-mtime freshness check on the shared tape, NEVER a read of solanaBilly's DB/API/containers (that coupling is exactly what the operator forbids, and the flag can be true while the writer is wedged). Check: newest /app/lake/billy_tape/dt=*/part-*.jsonl.gz mtime < ~10-15 min old (max_age_s tuned ABOVE billy's writer flush/mtime cadence — confirm the cadence on the VPS, §8 open question; if the live part-file mtime updates per write, 600s is safe). Two enforcement points: (i) AT INFERENCE-ENABLE TIME (the admin action / mgmt command / API that flips firehose_active/scoring_enabled True) — if STALE, REFUSE to enable (do not flip the flag) and surface the warning VERBATIM: 'You must turn on solanaBilly's firehose.'; (ii) as an inference_engine STARTUP + MID-RUN guard — if STALE, log the same warning LOUDLY and IDLE (do NOT subscribe to Helius, do NOT fall back to self-firehose) until fresh tapes appear. §8 open question (resolve on VPS): confirm the graduation marker in billy's schema. Verified (DoD-d): a test asserts the freshness check returns False for an all-stale fixture and True for a fresh one, that the enable path returns the EXACT warning string + leaves the flag unflipped when stale, and that the startup guard idles (no Helius subscription, no self-tape-write) when stale.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        },
+        {
+          "id": "96.4",
+          "text": "LOCAL-PROOF PARITY + DEPLOY (DoD-c + DoD-e + rollback). PARITY (DoD-c): in OBSERVE mode, TAPE_SOURCE=shared_billy produces scores that MATCH TAPE_SOURCE=self over an overlapping window — a committed test/script runs the consume+scoring path over a SHARED-tape fixture (schema A) and a SELF-tape fixture (schema B) covering the same mints/window and asserts the resulting scores agree within a documented tolerance (parity by construction — same data, two schemas, one result). Zero firehose; HARD NO-CREDITS (the local tapes + a vendored billy-part fixture are the oracles; the VPS billy-tape verification only READS files, no API spend). DEPLOY (DoD-e): deployed to the VPS staging stack via the CD pipeline (GitHub Actions -> GHCR -> VPS, never hand-edited) and smoke-tested there — inference_engine comes up, mounts the :ro tape, and under shared_billy either scores from billy's live tape or (if billy's firehose is off) idles with the verbatim warning; solanaBilly UNTOUCHED on 8001. ROLLBACK documented + proven reversible: TAPE_SOURCE=self + re-add HELIUS_API_KEY to inference_engine restores the self-firehose path; solanatrilly's own /app/lake/firehose volume is never mutated by this change.",
+          "checked": false,
+          "dev_status": "not-started",
+          "tester_status": "not-started"
+        }
+      ],
+      "dev_status": "not-started",
+      "dev_notes": "DESIGN SOURCE (READ IT): /Users/asim/NoIcloud/solanatrills/docs/solanatrilly_shared_firehose_design.md — authoritative on the infra (mount, schema A vs B, freshness mechanism); treat the code-internals sections as 'where to look + what it must do' and confirm against the run_firehose source before cutting the change. Operator directive: 'we cannot go with 2 firehoses.' A source investigation already answered the design's open questions; the components are well-bounded:\n  5a mount: docker-compose.staging.yml, add `- /root/tape:/app/lake/billy_tape:ro` to inference_engine + celery-worker.\n  5b stop duplicate: TAPE_SOURCE=shared_billy default; no Helius sub (HeliusBirthTapeSource @_helius_loop ~run_firehose.py:2552), no tape write (LakeTapeSink @tape_sink.py); tail billy's tape, feed _scoring_loop (~run_firehose.py:1502). TAPE_SOURCE=self = fallback.\n  5c adapter: port replay_core.read_rows() (auto-detect A/B -> one Row) into the consume loop + core/tape/lake_reader.py + US-78 swaps export + curvestage settler.\n  5d freshness: file-mtime check (newest part < ~10-15 min), refuse-at-enable with the verbatim warning, idle-at-startup; NO solanaBilly DB read.\n  5e drop Helius from inference_engine ONLY.\n§8 OPEN QUESTIONS the dev verifies ON THE VPS during build (agents own the VPS): billy's real on-disk schema (zcat /root/tape/...), the writer's flush/mtime cadence (sets the freshness threshold), and the graduation marker.\nSCOPE: POST-grad swaps are a separate Birdeye per-mint stream (_postgrad_loop), NOT in billy's tape — leave it; US-92 stays orthogonal (post-grad missing-mint is a different stream). Today's lake reader is batch-scan; tailing is new.\nDOWNSTREAM: schema A carries token_amount -> US-93's balance-based n_pregrad_holders gets a clean source (US-93 depends on US-96 for it). US-96 GATES US-89: the clean deploy must ship the shared-tape architecture, not the duplicate.",
+      "tester_notes": "_empty — Tester fills this in_"
+    },
+    {
       "id": "US-92",
       "title": "PHASE B (RECORDER, CRITICAL) — Post-grad firehose rows must carry the token MINT: the recorder writes post rows with NO mint/pool/pair, so post-grad fills are unattributable offline and the live recorder can NEVER self-validate model PnL or the copy ride-to-grad exit -- gates US-89 deploy + US-91 soak",
       "status": "draft",
@@ -552,7 +603,8 @@
         "US-92",
         "US-93",
         "US-94",
-        "US-95"
+        "US-95",
+        "US-96"
       ],
       "acceptance_criteria": [
         {
