@@ -2,11 +2,12 @@
 # module: core.tests.test_v7_soak_us91
 # sprint: sprint-15
 # story: US-91
-# status: implemented
+# status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-26
+# last-updated: 2026-06-26  (US-91 parity fix: USD-basis adapter test + crossing-block fix)
 # dependencies: scripts.v7_soak, core.v7_pregrad_features, core.v7_scorer,
-#               core.v7_ride_exit, core.v4_rep_builder, copytrade.firehose_harness
+#               core.v7_ride_exit, core.v4_rep_builder, copytrade.firehose_harness,
+#               core.firehose.shared_tape
 # ---
 """US-91 local-proof: v7 soak harness tests.
 
@@ -350,81 +351,123 @@ def test_feature_assembly_no_nan_with_nan_fill():
     assert not nan_feats, f"NaN features after nan_fill: {nan_feats}"
 
 
-def test_feature_assembly_uses_vol_sol_not_vol_usd():
-    """Feature USD values are derived from vol_sol * sol_usd_spot, not vol_usd=0.
+def test_feature_assembly_usd_scale_from_vol_sol():
+    """US-91 parity fix: dollar features come out at USD scale, not SOL scale.
 
-    Note: The firehose schema-B rows store vol_sol in the 'vol' key (the raw notional
-    field) as well as the 'vol_sol' key.  compute_v7_pregrad_feats reads 'vol' first
-    and only falls back to 'vol_sol * sol_usd_spot' when vol == 0.0.
-    So when sol_usd_spot changes, the USD features only change for rows where
-    vol == 0 AND vol_sol > 0 (which is NOT the case for schema-B rows where
-    vol == vol_sol by definition).
+    BEFORE US-91 FIX (BUG): compute_v7_pregrad_feats read the overloaded 'vol' key
+    as USD. norm_row_to_swap_dict sets vol=vol_sol (SOL notional, non-zero), so the
+    sol_usd_spot multiplier was NEVER applied. All dollar features were in SOL units.
 
-    This is an important parity note: the 'vol' field in schema-B rows contains
-    SOL notional (NOT USD).  The feature builder treats 'vol' as USD, which means
-    pre_vol_usd is actually in SOL units, not USD.  The sol_usd_spot multiplier
-    only applies to the FALLBACK path (vol == 0.0).
+    AFTER US-91 FIX: the builder reads vol_usd first; falls back to vol_sol * sol_usd_spot.
+    This test verifies the fix is effective: when sol_usd_spot changes on schema-A-shaped
+    rows (vol_usd=0, vol=vol_sol), the dollar features scale proportionally.
 
-    This test documents this behavior rather than asserting the fallback works
-    on schema-B rows (it doesn't, because vol is always non-zero = SOL notional).
+    This proves BOTH:
+    1. sol_usd_spot IS applied on schema-A rows (vol_usd=0 path)
+    2. Dollar scale is correct (USD, not SOL)
     """
     from core.v7_pregrad_features import assemble_v7_features
 
-    fixture = _load_fixture()
-    mint = next(m for m, d in fixture.items() if d.get("graduated"))
-    rows = fixture[mint]["rows"]
-    grad_ts = fixture[mint]["grad_ts"] + 1.0
+    # Schema-A-shaped rows: vol_usd=0.0, vol=vol_sol (as norm_row_to_swap_dict produces)
+    # Simulate the exact swap dict shape norm_row_to_swap_dict returns.
+    vol_sol_per_swap = 1.0  # 1 SOL per swap
+    GRAD_TS = 1782000000.0
+    schema_a_rows = [
+        {
+            "block_time": GRAD_TS - 400 + i * 10,
+            "side": "buy",
+            "vol": vol_sol_per_swap,      # 'vol' = vol_sol (SOL notional — NOT USD)
+            "vol_sol": vol_sol_per_swap,  # explicit vol_sol key
+            "vol_usd": 0.0,               # schema-A pre rows: vol_usd=0 discipline
+            "price": 1e-6,
+            "owner": f"wallet_{i:04d}",
+            "phase": "pre",
+        }
+        for i in range(30)
+    ]
 
-    # With sol_usd_spot=84 → USD features should be non-zero
-    features_with_spot = assemble_v7_features(
-        rows, grad_ts, sol_usd_spot=84.0, wallet_bank=None, nan_fill=None
+    SOL_USD = 140.0
+
+    # With the US-91 fix: vol_usd=0 → fallback to vol_sol * sol_usd_spot
+    # pre_vol_usd should be 30 swaps * 1.0 SOL * 140 USD/SOL = 4200 USD
+    features_140 = assemble_v7_features(
+        schema_a_rows, GRAD_TS, sol_usd_spot=SOL_USD, wallet_bank=None, nan_fill=None
     )
-    assert features_with_spot is not None
-    assert features_with_spot["pre_vol_usd"] > 0.0, (
-        "pre_vol_usd should be > 0 for a graduated token with activity"
+    assert features_140 is not None, "Expected non-None with 30 pre-grad swaps"
+
+    expected_vol_usd = 30 * vol_sol_per_swap * SOL_USD  # = 4200.0
+    actual_vol_usd = features_140["pre_vol_usd"]
+
+    # Dollar features must be in USD range (thousands), NOT SOL range (tens)
+    assert actual_vol_usd == pytest.approx(expected_vol_usd, rel=1e-6), (
+        f"US-91 PARITY FIX FAILED: pre_vol_usd={actual_vol_usd:.2f}, "
+        f"expected {expected_vol_usd:.2f} (={30}×{vol_sol_per_swap}×{SOL_USD}).\n"
+        f"If you see {30 * vol_sol_per_swap:.2f} instead, the sol_usd_spot multiplier "
+        f"is NOT being applied — the vol_usd=0 fallback path is broken."
     )
 
-    # Synthetic rows with vol=0 (to test the sol_usd_spot fallback path)
-    # These are NOT schema-B format (vol=0 is NOT normal on schema-B), but
-    # they test the fallback path is wired correctly.
+    # Also verify that changing sol_usd_spot scales proportionally
+    # (proves the spot IS being used, not bypassed)
+    features_84 = assemble_v7_features(
+        schema_a_rows, GRAD_TS, sol_usd_spot=84.0, wallet_bank=None, nan_fill=None
+    )
+    assert features_84 is not None
+    ratio = features_140["pre_vol_usd"] / features_84["pre_vol_usd"]
+    assert abs(ratio - SOL_USD / 84.0) < 0.001, (
+        f"pre_vol_usd should scale proportionally with sol_usd_spot: "
+        f"ratio={ratio:.4f}, expected {SOL_USD/84.0:.4f}. "
+        f"If ratio≈1.0, sol_usd_spot is being ignored."
+    )
+
+    # Synthetic rows with vol=0 (pure fallback test — not schema-B format)
     synthetic_rows = [
         {
             "block_time": 1000000.0 + i, "side": "buy",
             "vol": 0.0,            # vol=0 → triggers sol_usd_spot fallback
             "vol_sol": 1.0,        # vol_sol=1 SOL
+            "vol_usd": 0.0,
             "price": 1e-4, "owner": f"wallet{i}", "phase": "pre",
         }
         for i in range(25)
     ]
     synthetic_grad_ts = 1000025.0
 
-    features_84 = assemble_v7_features(
+    features_84_syn = assemble_v7_features(
         synthetic_rows, synthetic_grad_ts, sol_usd_spot=84.0, wallet_bank=None, nan_fill=None
     )
-    features_0 = assemble_v7_features(
+    features_0_syn = assemble_v7_features(
         synthetic_rows, synthetic_grad_ts, sol_usd_spot=0.0, wallet_bank=None, nan_fill=None
     )
 
-    assert features_84 is not None
-    assert features_0 is not None
+    assert features_84_syn is not None
+    assert features_0_syn is not None
 
     # With vol=0 and vol_sol=1, pre_vol_usd = 25 * (1.0 * 84.0) = 2100
-    assert features_84["pre_vol_usd"] > 0.0, (
-        "pre_vol_usd should be > 0 with sol_usd_spot=84 on vol=0 rows"
+    assert features_84_syn["pre_vol_usd"] == pytest.approx(25 * 84.0, rel=1e-6), (
+        "pre_vol_usd should be 25 * 1.0 * 84.0 = 2100 with sol_usd_spot=84 on vol=0 rows"
     )
     # With sol_usd_spot=0, vol=0, vol_sol * 0 = 0 → pre_vol_usd = 0
-    assert features_0["pre_vol_usd"] == 0.0, (
+    assert features_0_syn["pre_vol_usd"] == 0.0, (
         "pre_vol_usd should be 0 when sol_usd_spot=0 and vol=0 (fallback path)"
     )
 
 
 def test_feature_assembly_crossing_block_inclusive():
-    """Tokens that graduate in their first recorded block get non-None features.
+    """US-91 grad-crossing-block fix: tokens that graduate in their first recorded block
+    get non-None features when grad_ts matches the crossing block's block_time.
 
-    This is the bug where _label_graduations.grad_ts + 1.0 allows the crossing
-    block's swaps to be included in the feature window (bt < feature_grad_ts).
-    Without the +1 fix, a token graduating in block T with all swaps at block T
-    would return None from assemble_v7_features.
+    BEFORE US-91 FIX (BUG): compute_v7_pregrad_feats filtered `bt >= grad_ts`, which
+    excluded the graduation block's swaps.  A token where ALL swaps are in the crossing
+    block returned None (silently dropped).
+
+    AFTER US-91 FIX: compute_v7_pregrad_feats filters `bt > grad_ts` (inclusive upper
+    bound), so swaps at block_time == grad_ts ARE included.  This matches how the live
+    run_firehose._score_tick computes graduated_block_time (the crossing block IS the
+    grad block; its swaps are pre-graduation by construction — grad is detected AFTER
+    the block fires).
+
+    The soak harness _label_graduations uses feature_grad_ts = grad_ts + 1.0 as a
+    workaround; this fix makes the live builder consistent with the soak harness.
     """
     from core.v7_pregrad_features import assemble_v7_features
 
@@ -440,22 +483,181 @@ def test_feature_assembly_crossing_block_inclusive():
         for i in range(30)  # 30 buys at same block_time
     ]
 
-    # With strict grad_ts (no +1): all rows filtered out → None
-    features_strict = assemble_v7_features(
+    # AFTER US-91 FIX: bt <= grad_ts is included, so same-block swaps ARE included.
+    # This is the correct behavior — the crossing block's swaps are pre-graduation.
+    features_grad_ts = assemble_v7_features(
         rows, SAME_BT, sol_usd_spot=84.0, wallet_bank=None, nan_fill=None
     )
-    # With feature_grad_ts = SAME_BT + 1.0: crossing block included → 44 features
-    features_inclusive = assemble_v7_features(
-        rows, SAME_BT + 1.0, sol_usd_spot=84.0, wallet_bank=None, nan_fill=None
+    assert features_grad_ts is not None, (
+        "After US-91 fix: same-block graduation (bt == grad_ts) must be INCLUDED in "
+        "pre-grad window (bt <= grad_ts filter). assemble_v7_features should return 44 features."
+    )
+    assert len(features_grad_ts) == 44
+
+    # Swaps STRICTLY after grad_ts are excluded (post-grad)
+    post_grad_rows = [
+        {
+            "block_time": SAME_BT + 1.0,  # strictly after
+            "side": "buy", "vol_sol": 10.0, "price": 1e-4,
+            "vol_usd": 0.0, "owner": f"wallet{i}", "vol": 10.0,
+        }
+        for i in range(30)
+    ]
+    features_post = assemble_v7_features(
+        post_grad_rows, SAME_BT, sol_usd_spot=84.0, wallet_bank=None, nan_fill=None
+    )
+    assert features_post is None, (
+        "Swaps strictly after grad_ts (bt > grad_ts) must be excluded → None"
     )
 
-    assert features_strict is None, (
-        "Without +1 fix, same-block graduation should return None from assemble_v7_features"
+    # Also verify: soak harness feature_grad_ts = grad_ts + 1.0 still works
+    features_plus_one = assemble_v7_features(
+        rows, SAME_BT + 1.0, sol_usd_spot=84.0, wallet_bank=None, nan_fill=None
     )
-    assert features_inclusive is not None, (
-        "With feature_grad_ts = grad_ts + 1.0, same-block graduation should succeed"
+    assert features_plus_one is not None
+    assert len(features_plus_one) == 44
+
+
+# ---------------------------------------------------------------------------
+# 4b. CRITICAL ADAPTER PIPELINE TEST (US-91 — this test catches the bug)
+# ---------------------------------------------------------------------------
+# This test drives the REAL adapter end-to-end:
+#   schema-A raw row → normalise_row → norm_row_to_swap_dict → compute_v7_pregrad_feats
+# It MUST fail on the old code (vol read as USD = SOL scale) and pass on the fix.
+# The current test_v7_live_vector_us93.py bypasses norm_row_to_swap_dict and feeds
+# USD directly — that is the wrong-path failure mode that let the bug pass CI.
+# ---------------------------------------------------------------------------
+
+
+def test_schema_a_adapter_produces_usd_scale_features():
+    """US-91 CRITICAL: adapter pipeline (schema-A → normalise_row → norm_row_to_swap_dict
+    → compute_v7_pregrad_feats) produces dollar features at USD scale, not SOL scale.
+
+    This test drives the REAL end-to-end path that _score_tick uses:
+      1. schema-A raw row (virtual reserves / sol_amount / token_amount)
+      2. normalise_row() → NormRow (vol_usd=0.0, vol_sol=sol_amount/1e9)
+      3. norm_row_to_swap_dict() → swap dict (vol=vol_sol, vol_usd=0.0)
+      4. compute_v7_pregrad_feats(..., sol_usd_spot=140.0) → 19 features
+
+    EXPECTED (US-91 fix): pre_vol_usd = sum(vol_sol_per_swap) * 140 USD/SOL
+    WRONG (pre-fix bug): pre_vol_usd = sum(vol_sol_per_swap) (SOL units, ~140x too small)
+
+    The old test_v7_live_vector_us93.py bypassed norm_row_to_swap_dict by feeding
+    USD directly (vol=vol_sol*spot) — this masked the adapter parity break.
+    """
+    import pytest
+
+    from core.firehose.shared_tape import norm_row_to_swap_dict, normalise_row
+    from core.v7_pregrad_features import compute_v7_pregrad_feats
+
+    SOL_USD_SPOT = 140.0
+    GRAD_TS = 1782000000.0
+    N_SWAPS = 30
+
+    # Construct schema-A raw rows (solanaBilly / shared_billy format)
+    # virtual_sol_reserves = vsol (Lamports), virtual_token_reserves = vtok (raw units)
+    # sol_amount = sol_amount (Lamports)
+    # Each swap: 0.5 SOL = 500_000_000 lamports
+    SOL_PER_SWAP = 0.5  # SOL
+    SOL_LAMPORTS_PER_SWAP = int(SOL_PER_SWAP * 1e9)  # 500_000_000 lamports
+
+    # Price: vsol/vtok; typical initial curve price ~30e9 / (1_073_000_000 * 1e6) ≈ 2.8e-5
+    VSOL = 30_000_000_000  # 30 SOL in lamports (initial virtual SOL)
+    VTOK = 1_073_000_000_000_000  # typical initial virtual tokens
+
+    raw_rows = []
+    for i in range(N_SWAPS):
+        raw_rows.append({
+            "mint": "TestMintUS91AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAApump",
+            "block_time": int(GRAD_TS) - N_SWAPS + i,  # spread before grad_ts
+            "slot": 300_000_000 + i,
+            "signature": f"sig_schema_a_{i:04d}",
+            "side": "buy",
+            "virtual_sol_reserves": VSOL + i * SOL_LAMPORTS_PER_SWAP,
+            "virtual_token_reserves": VTOK - i * 1_000_000_000,
+            "sol_amount": SOL_LAMPORTS_PER_SWAP,
+            "token_amount": 50_000_000_000,  # 50B raw tokens (schema-A)
+            "real_sol_reserves": 28_000_000_000,  # 28 SOL real
+            "owner": f"wallet_schema_a_{i:04d}",
+        })
+
+    # Step 1: normalise_row → NormRow
+    norm_rows = []
+    for raw in raw_rows:
+        nr = normalise_row(raw)
+        assert nr is not None, f"normalise_row returned None for row {raw['slot']}"
+        assert nr.vol_usd == 0.0, (
+            f"schema-A pre rows must have vol_usd=0.0, got {nr.vol_usd}"
+        )
+        assert abs(nr.vol_sol - SOL_PER_SWAP) < 0.001, (
+            f"Expected vol_sol={SOL_PER_SWAP}, got {nr.vol_sol}"
+        )
+        norm_rows.append(nr)
+
+    # Step 2: norm_row_to_swap_dict → swap dicts
+    swap_dicts = [norm_row_to_swap_dict(nr) for nr in norm_rows]
+
+    # Verify the swap dict schema: vol=vol_sol (SOL notional), vol_usd=0.0
+    for sd in swap_dicts:
+        assert sd["vol"] == sd["vol_sol"], (
+            f"norm_row_to_swap_dict: vol must equal vol_sol (SOL notional), "
+            f"got vol={sd['vol']}, vol_sol={sd['vol_sol']}"
+        )
+        assert sd["vol_usd"] == 0.0, (
+            f"norm_row_to_swap_dict: vol_usd must be 0.0 on schema-A pre rows, "
+            f"got {sd['vol_usd']}"
+        )
+
+    # Step 3: compute_v7_pregrad_feats with sol_usd_spot=140.0
+    feats = compute_v7_pregrad_feats(swap_dicts, GRAD_TS, sol_usd_spot=SOL_USD_SPOT)
+    assert feats is not None, (
+        "compute_v7_pregrad_feats returned None on 30 valid schema-A swaps"
     )
-    assert len(features_inclusive) == 44
+
+    # CRITICAL ASSERTION: dollar features must be in USD, not SOL
+    # Expected: pre_vol_usd = N_SWAPS * SOL_PER_SWAP * SOL_USD_SPOT = 30 * 0.5 * 140 = 2100
+    expected_vol_usd = N_SWAPS * SOL_PER_SWAP * SOL_USD_SPOT
+
+    actual_vol_usd = feats["pre_vol_usd"]
+    wrong_vol_usd = N_SWAPS * SOL_PER_SWAP  # what the old bug produced (SOL units)
+
+    assert actual_vol_usd == pytest.approx(expected_vol_usd, rel=0.01), (
+        f"\nUS-91 ADAPTER PARITY TEST FAILED:\n"
+        f"  pre_vol_usd = {actual_vol_usd:.2f}\n"
+        f"  Expected (USD, correct): {expected_vol_usd:.2f}\n"
+        f"  Got (SOL, wrong pre-fix): {wrong_vol_usd:.2f}\n"
+        f"  The adapter pipeline (normalise_row → norm_row_to_swap_dict → "
+        f"compute_v7_pregrad_feats) is producing SOL-scale dollar features.\n"
+        f"  ROOT CAUSE: norm_row_to_swap_dict sets vol=vol_sol; if compute_v7_pregrad_feats\n"
+        f"  reads vol as USD and only falls back to vol_sol*spot when vol==0,\n"
+        f"  the spot multiplier is never applied on schema-A rows.\n"
+        f"  FIX: compute_v7_pregrad_feats must read vol_usd first, then fallback."
+    )
+
+    # Also verify order-of-magnitude: USD features should be in thousands, not tens
+    assert actual_vol_usd > 100.0, (
+        f"pre_vol_usd={actual_vol_usd:.2f} is suspiciously small. "
+        f"At {SOL_USD_SPOT}/SOL, {N_SWAPS} swaps of {SOL_PER_SWAP} SOL each = "
+        f"{expected_vol_usd} USD. Got {actual_vol_usd:.2f} — likely in SOL units."
+    )
+
+    # Verify all 7 dollar features are in USD range (not SOL range)
+    USD_FEATS = [
+        "pre_vol_usd", "pre_buy_vol_usd", "pre_max_trade_usd",
+        "pre_mean_trade_usd", "pre_net_flow_usd", "pre_vol_last60",
+        "pre_vol_last300",
+    ]
+    for fname in USD_FEATS:
+        val = feats.get(fname, 0.0)
+        # Each swap is SOL_PER_SWAP * SOL_USD_SPOT = 70 USD
+        # Any non-zero dollar feature should be >= 70 USD (one swap)
+        # or == 0.0 (e.g. net_flow_usd if balanced)
+        if val != 0.0:
+            assert val >= SOL_PER_SWAP * SOL_USD_SPOT * 0.5, (
+                f"{fname}={val:.4f} is too small for USD scale "
+                f"(expected >= {SOL_PER_SWAP * SOL_USD_SPOT:.1f} USD per swap).\n"
+                f"This suggests the feature is in SOL units, not USD."
+            )
 
 
 # ---------------------------------------------------------------------------
