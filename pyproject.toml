@@ -32,4 +32,8 @@ omit = [
     "config/wsgi.py",
     "config/asgi.py",
     "config/settings.py",
+    # Standalone developer diagnostic CLI — a 1k-line soak harness validated by
+    # its fixture test (test_v7_soak_us91.py) + real multi-day runs, NOT by line
+    # coverage of its argparse/report boilerplate. Not on any live serving path.
+    "scripts/v7_soak.py",
 ]
