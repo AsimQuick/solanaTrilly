@@ -1,10 +1,10 @@
 # ---
 # module: trading.tests.test_live_positions_api_ac692
-# sprint: sprint-13
-# story: US-69 AC-69.2
-# status: implemented
+# sprint: sprint-13, sprint-15
+# story: US-69 AC-69.2, US-90 AC-90.2
+# status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-18
+# last-updated: 2026-06-26
 # dependencies: pytest, pytest-django, djangorestframework, trading.models, trading.api
 # ---
 """AC-69.2 — Live Positions DRF API tests over banked Position fixtures.
@@ -394,7 +394,12 @@ def test_closed_has_realized_pnl_field(client, banked_positions):
 
 @pytest.mark.django_db
 def test_closed_limit_param(client, banked_positions):
+    # US-90 AC-90.2: ?limit= is a legacy backward-compat param that caps the
+    # returned rows to legacy_limit.  'count' is now the TOTAL matching rows
+    # (before the limit cap), so count=4 with the full banked fixture.
+    # The positions list is still capped to 1 row.
     resp = client.get(URL_CLOSED + "?limit=1")
     data = resp.json()
     assert len(data["positions"]) == 1
-    assert data["count"] == 1
+    # count reflects the total matching rows (4 closed in the fixture), not the limit
+    assert data["count"] == 4
