@@ -3,10 +3,11 @@
 # sprint: epic-tape-sourcing-escalation
 # story: EPIC-tape-sourcing-escalation Tier 2 + Tier 3,
 #        hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution,
-#        hotfix-grad-liveness-watchdog, hotfix-firehose-drain-and-fairness
+#        hotfix-grad-liveness-watchdog, hotfix-firehose-drain-and-fairness,
+#        US-94 v7 gate + tr30_t600 exit + depth-gated sizing + live wiring
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-23
+# last-updated: 2026-06-26
 # dependencies: django, asyncio, logging, signal, asgiref, os, threading, time,
 #               core.tape.birdeye_graduation_source, core.tape.birdeye_swap_source,
 #               core.tape.birdeye_swap_mapper, core.tape.helius_birth_tape_source,
@@ -14,7 +15,8 @@
 #               core.detection.helius_reconciler, core.firehose.spine, core.clock,
 #               core.resolver, core.models, core.v4_rep_builder,
 #               core.backfill.lake_backfill, core.backfill.birdeye_backfill,
-#               core.pricing.sol_usd
+#               core.pricing.sol_usd, core.v7_pregrad_features, core.v7_scorer,
+#               core.v7_ride_exit
 # ---
 """run_firehose — the gated live daemon that ties the pipeline spine together.
 
@@ -517,10 +519,20 @@ _V4_BANK_FILENAME = "v4_wallet_bank.parquet"
 # Number of enrich features produced by the v3.2 shared builder
 _ENRICH_FEATURE_COUNT = 20
 
+# v7 feature count (44 = 19 pre-grad + 1 n_pregrad_holders + 24 wallet-rep)
+_V7_FEATURE_COUNT = 44
+
+# v7 wallet bank filename (same infra as v4 — different artifact dir)
+_V7_BANK_FILENAME = "v4_wallet_bank.parquet"  # v7 reuses the v4 wallet bank format
+
 # Cache sentinel: WalletBankLookup is expensive to build (~44s, ~27 MB).
 # It is loaded ONCE per FirehoseDaemon instance in __init__, stored as
 # self._wallet_bank.  _try_load_wallet_bank() is the safe loader called there.
 _wallet_bank_module_cache: "dict[str, object]" = {}  # {bank_path_str: WalletBankLookup}
+
+# v7 model singleton cache: V7Model is loaded once per daemon instance.
+# The key is the artifact_dir path string; None means "tried and failed".
+_v7_model_cache: "dict[str, object]" = {}  # {model_dir_str: V7Model | None}
 
 
 def _try_load_wallet_bank(bank_path: Path) -> "object | None":
@@ -561,6 +573,46 @@ def _try_load_wallet_bank(bank_path: Path) -> "object | None":
             exc,
         )
         return None
+
+
+def _try_load_v7_model(model_dir: Path) -> "object | None":
+    """Load the V7Model from model_dir, using a module-level cache.
+
+    Returns the V7Model instance, or None if the boosters are absent (CI / host-
+    local) or the load fails.  Uses a module-level dict so multiple FirehoseDaemon
+    instances in the same process (tests) share the same model in memory.
+
+    This function is a no-cover genuine I/O boundary (lightgbm + disk read).
+    """
+    key = str(model_dir)
+    if key in _v7_model_cache:
+        return _v7_model_cache[key]
+    try:
+        from core.v7_scorer import BOOSTERS_PRESENT, load_v7  # noqa: PLC0415
+
+        if not BOOSTERS_PRESENT:
+            logger.warning(
+                "%s v7 boosters NOT found — v7 scoring path will be skipped (CI / "
+                "host-local gate). Place seed0..7.txt in models/trilly_pregrad_v7/selection/ "
+                "on VPS to enable v7 scoring.",
+                LOG_PREFIX,
+            )
+            _v7_model_cache[key] = None
+            return None
+        v7_model = load_v7(model_dir)
+        _v7_model_cache[key] = v7_model
+        logger.info(
+            "%s V7Model loaded from %s and cached; gate=%.5f",
+            LOG_PREFIX, model_dir, v7_model.gate_threshold,
+        )
+        return v7_model
+    except Exception as exc:  # noqa: BLE001  # pragma: no cover
+        logger.error(
+            "%s V7Model FAILED to load from %s: %s — v7 scoring path skipped.",
+            LOG_PREFIX, model_dir, exc,
+        )
+        _v7_model_cache[key] = None  # pragma: no cover
+        return None  # pragma: no cover
 
 
 def assemble_v4_features(
@@ -888,14 +940,16 @@ class FirehoseDaemon:
         self._postgrad_seen: set[str] = set()
         self._postgrad_sources: dict[str, object] = {}
         # Deferred paper settle: gate-passers whose outcome window has not yet
-        # closed wait here (mint -> (entry_ts_epoch, score, grad_bt)).  Once
-        # wall-clock passes entry+outcome_window_s the paper leg settles over a
-        # fresh full-window Birdeye REST fetch (see _settle_due_pending).
+        # closed wait here (mint -> (entry_ts_epoch, score, grad_bt, model_tag)).
+        # model_tag is "v7" for the US-94 tr30_t600 ride path or "" for others.
+        # Once wall-clock passes entry+outcome_window_s the paper leg settles:
+        #   v7 path: apply_tr30_t600_exit on self._postgrad_tape (live WS stream)
+        #   other:   Birdeye REST fetch over full window (see _settle_due_pending).
         # _settle_inflight dedups the in-flight fetch+settle so two ticks never
         # double-book.  Both are ephemeral per-process; restart-safety comes from
         # Token.status (a token stays DETECTED until its paper leg actually fires,
         # so a restart re-queues it).  The Semaphore caps concurrent REST fetches.
-        self._pending_settle: dict[str, tuple[float, float, int]] = {}
+        self._pending_settle: dict[str, tuple[float, float, int, str]] = {}
         self._settle_inflight: set[str] = set()
         self._postgrad_rest_sem: asyncio.Semaphore | None = None
         # v4 REP+recurrence: WalletBankLookup singleton (~44s build, ~27 MB).
@@ -909,6 +963,9 @@ class FirehoseDaemon:
             self._wallet_bank = wallet_bank
         else:
             self._wallet_bank = self._load_wallet_bank_singleton()
+        # v7 model singleton: loaded at startup, reused per tick.
+        # None when the boosters are absent (CI / host-local gate).
+        self._v7_model: "object | None" = None  # populated in _load_v7_model_singleton()
 
     # ------------------------------------------------------------------
     # v4 wallet bank startup load
@@ -955,6 +1012,22 @@ class FirehoseDaemon:
             )
             return None
         return _try_load_wallet_bank(bank_path)
+
+    @staticmethod
+    def _load_v7_model_singleton() -> "object | None":
+        """Load the V7Model ONCE at daemon startup.
+
+        Resolves the model dir via the conventional v7 path under models/.
+        If boosters are absent (CI), returns None — the v7 scoring path
+        is skipped for that session.  The result is cached in the module-level
+        dict by _try_load_v7_model.
+        """
+        model_dir = (
+            Path(__file__).resolve().parents[4]
+            / "models"
+            / "trilly_pregrad_v7"
+        )
+        return _try_load_v7_model(model_dir)
 
     # ------------------------------------------------------------------
     # PipelineState reads (sync ORM -> async via sync_to_async)
@@ -1066,6 +1139,11 @@ class FirehoseDaemon:
             LOG_PREFIX,
             GRAD_STALE_SECONDS,
         )
+
+        # US-94: load the v7 model singleton on first active run (non-blocking:
+        # if boosters are absent (CI / host) this is a no-op; v7 path is skipped).
+        if self._v7_model is None:
+            self._v7_model = self._load_v7_model_singleton()
 
         # US-96 TAPE_SOURCE branch:
         #   shared_billy → guard freshness first (idle + log warning if stale);
@@ -2045,12 +2123,17 @@ class FirehoseDaemon:
             logger.warning("%s score: cannot build scoring context (%s).", LOG_PREFIX, exc)
             return
 
-        # v4 path: detect by feature count on the active scorer.
+        # Model path detection by feature count on the active scorer.
         # len(scorer.feature_list) == 53 → v4 REP+recurrence path
+        # len(scorer.feature_list) == 44 → v7 post-grad gate+ride path (US-94)
         # len(scorer.feature_list) == 20 → v3.2 enrich-only path (unchanged)
         # getattr fallback: test stubs without feature_list default to the v3.2 path.
         _scorer_feature_list = getattr(scorer, "feature_list", [])
         _is_v4_model = len(_scorer_feature_list) == 53
+        # v7: 44-feature (19 pre-grad + n_pregrad_holders + 24 wallet-rep);
+        # requires self._v7_model loaded (boosters present). If boosters absent
+        # (CI / missing on VPS), falls back to v3.2 path (degraded, non-crashing).
+        _is_v7_model = len(_scorer_feature_list) == _V7_FEATURE_COUNT and self._v7_model is not None
 
         # Per-tick backfill dispatch cap.  The DETECTED backlog can be hundreds of
         # tokens; dispatching a fire-and-forget lake scan for ALL of them at once
@@ -2085,7 +2168,22 @@ class FirehoseDaemon:
             # spot resolved in the scoring context).  vol = vol_sol × spot inside
             # the normalisation layer; reproduces the offline trained feature space
             # and makes pre_insider_sell_ratio parity-true (directives §8/§9).
-            if _is_v4_model:
+            if _is_v7_model:
+                # v7 (US-94): assemble all 44 features (19 pre-grad + n_pregrad_holders
+                # + 24 wallet-rep) from self._tape (pre-only bonding-curve tape).
+                # Uses self._wallet_bank for the 24 rep features; 0-filled if absent.
+                # NaN-fill uses medians from meta.json (NOT 0-fill for pre+holder feats).
+                from core.v7_pregrad_features import assemble_v7_features  # noqa: PLC0415
+
+                nan_fill = getattr(self._v7_model, "nan_fill", None)
+                features = assemble_v7_features(
+                    swaps,
+                    float(graduated_block_time),
+                    sol_usd_spot=sol_usd,
+                    wallet_bank=self._wallet_bank,
+                    nan_fill=nan_fill,
+                )
+            elif _is_v4_model:
                 # v4: assemble all 53 features (enrich20 + REP24 + recurrence9).
                 # Uses self._wallet_bank (singleton loaded at daemon startup).
                 # If bank is absent, REP+recurrence are zero-filled — scorer still
@@ -2154,15 +2252,30 @@ class FirehoseDaemon:
                     )
                 continue
 
-            result = score_pregrad(features, scorer=scorer, ref_dist=ref_dist)
-            blend = float(result["blend_score"])
-            passed = gate_passes(blend, gate=scoring["gate"], threshold=threshold)
+            if _is_v7_model:
+                # US-94 v7 path: score via 8-seed mean, gate at 15.86012.
+                from core.v7_ride_exit import V7_GATE_THRESHOLD, v7_gate_passes  # noqa: PLC0415
+                from core.v7_scorer import score_single  # noqa: PLC0415
+
+                v7_score = score_single(self._v7_model, features)
+                passed = v7_gate_passes(v7_score, threshold=V7_GATE_THRESHOLD)
+                blend = v7_score  # use v7 score as blend for logging/persistence
+                result = {
+                    "blend_score": v7_score,
+                    "label_scores": {"v7": v7_score},
+                    "label_ranks": {},
+                }
+            else:
+                result = score_pregrad(features, scorer=scorer, ref_dist=ref_dist)
+                blend = float(result["blend_score"])
+                passed = gate_passes(blend, gate=scoring["gate"], threshold=threshold)
             # Mark scored ONLY once we've scored — the paper leg may still defer
             # below if the post-grad tape has not arrived yet (re-checked next tick
             # via _scored_mints exclusion being bypassed for the deferred set).
             logger.info(
-                "%s score: mint=%s score=%.4f gate=%s",
+                "%s score: mint=%s score=%.4f gate=%s%s",
                 LOG_PREFIX, mint, blend, "pass" if passed else "fail",
+                " [v7]" if _is_v7_model else "",
             )
 
             # US-78: persist the durable score-time breakdown (predictions_positions
@@ -2188,26 +2301,28 @@ class FirehoseDaemon:
                 continue
 
             # --- Task d: PAPER TRADE — DEFERRED to outcome-window close ---
-            # The paper leg must walk the FULL post-grad outcome window
-            # [entry, entry+timer].  Settling at score time (~grad+120s) walks a
-            # TRUNCATED tape: Birdeye has only indexed swaps up to ~now, so the
-            # settler's AUTO_SELL_TIMER fallback books at the last available swap (a
-            # few seconds past entry) and silently misses the real later TAKE_PROFIT
-            # / RUG_PULL (proven live: 8/9 trades mis-settled).  Register the
-            # gate-passer and DEFER — _settle_due_pending (after this loop) settles
-            # once wall-clock passes entry+outcome_window_s, over a single fresh
-            # full-window Birdeye REST fetch.  The token stays DETECTED (NOT marked
-            # SCORED) until the settle actually fires, so a restart just re-queues
-            # it — restart-safe by construction.
-            entry_ts_epoch = float(graduated_block_time + scoring["score_at_elapsed_s"])
+            # v7 path (US-94): entry is at grad+2s (ENTRY_DELAY_S), exit is the
+            # tr30_t600 ride (30% trailing stop off post-grad max, hard 600s timer).
+            # The paper leg uses self._postgrad_tape (live WS) for the ride exit.
+            # Non-v7: the paper leg walks the FULL post-grad outcome window via
+            # a Birdeye REST fetch once wall-clock passes entry+outcome_window_s.
+            if _is_v7_model:
+                # v7 entry: grad_ts + ENTRY_DELAY_S (2s); size = $25 flat (observe).
+                from core.v7_ride_exit import ENTRY_DELAY_S as _V7_ENTRY_DELAY  # noqa: PLC0415
+
+                entry_ts_epoch = float(graduated_block_time) + _V7_ENTRY_DELAY
+            else:
+                entry_ts_epoch = float(graduated_block_time + scoring["score_at_elapsed_s"])
             if mint not in self._pending_settle:
+                _model_tag = "v7" if _is_v7_model else ""
                 self._pending_settle[mint] = (
-                    entry_ts_epoch, blend, int(graduated_block_time),
+                    entry_ts_epoch, blend, int(graduated_block_time), _model_tag,
                 )
                 logger.info(
                     "%s paper: mint=%s gate=PASS — deferring settle to outcome-window "
-                    "close (entry+%.0fs).",
+                    "close (entry+%.0fs).%s",
                     LOG_PREFIX, mint, float(scoring["outcome_window_s"]),
+                    " [v7 tr30_t600]" if _is_v7_model else "",
                 )
 
         # Settle every gate-passer whose outcome window has now fully elapsed: one
@@ -2390,7 +2505,13 @@ class FirehoseDaemon:
         """
         window_s = float(scoring["outcome_window_s"])
         now_epoch = self._clock.now().timestamp()
-        for mint, (entry_ts_epoch, score, grad_bt) in list(self._pending_settle.items()):
+        for mint, pending_val in list(self._pending_settle.items()):
+            # Unpack 3-tuple (legacy) or 4-tuple (US-94 model_tag)
+            if len(pending_val) == 4:
+                entry_ts_epoch, score, grad_bt, model_tag = pending_val
+            else:
+                entry_ts_epoch, score, grad_bt = pending_val  # type: ignore[misc]
+                model_tag = ""
             if mint in self._settle_inflight:
                 continue
             if now_epoch < entry_ts_epoch + window_s:
@@ -2400,6 +2521,7 @@ class FirehoseDaemon:
                 self._settle_pending_task(
                     mint, entry_ts_epoch, score, grad_bt,
                     window_s, trading_cfg, size_sol, sol_usd, trading_enabled,
+                    model_tag=model_tag,
                 ),
                 name=f"firehose-settle-{mint[:8]}",
             )
@@ -2407,18 +2529,28 @@ class FirehoseDaemon:
     async def _settle_pending_task(
         self, mint, entry_ts_epoch, score, grad_bt,
         window_s, trading_cfg, size_sol, sol_usd, trading_enabled,
+        *,
+        model_tag: str = "",
     ) -> None:
         """Fetch the full post-grad window once and settle the PAPER leg.
 
         OBSERVE/PAPER only (settle_paper_trade asserts trading_enabled is False).
-        Fetches ``[entry-30, entry+window_s]`` via ``BirdeyeBackfiller.run_for_window``
-        (fully indexed by now → the complete tape), converts to settler tuples, and
-        books+settles via the SOLE paper settler.  Un-enterable rows (dead / no
-        quote / slip-miss) are NOT booked (settle_paper_trade returns None), but the
-        token is still marked terminal — the window has closed, so there is nothing
-        more to wait for.  The blocking urllib fetch runs in the shared thread pool
-        (never stalls the event loop — the #377 lesson) and is concurrency-capped by
-        ``self._postgrad_rest_sem``.
+
+        v7 path (model_tag="v7", US-94):
+          Reads self._postgrad_tape (live WS stream) for the mint.  Applies
+          the tr30_t600 ride exit (30% trailing stop, 600s timer) via
+          apply_tr30_t600_exit.  Honest fill = first swap >= trigger+2s.
+          Uses settle_paper_trade for booking.  No Birdeye REST call (ZERO CREDITS).
+
+        Non-v7 path:
+          Fetches ``[entry-30, entry+window_s]`` via ``BirdeyeBackfiller.run_for_window``
+          (fully indexed by now → the complete tape), converts to settler tuples, and
+          books+settles via the SOLE paper settler.  Un-enterable rows (dead / no
+          quote / slip-miss) are NOT booked (settle_paper_trade returns None), but the
+          token is still marked terminal — the window has closed, so there is nothing
+          more to wait for.  The blocking urllib fetch runs in the shared thread pool
+          (never stalls the event loop — the #377 lesson) and is concurrency-capped by
+          ``self._postgrad_rest_sem``.
 
         On a transient fetch/settle error the mint is LEFT in ``self._pending_settle``
         so a later tick retries; on success it is removed and marked SCORED so a
@@ -2427,21 +2559,83 @@ class FirehoseDaemon:
         if self._postgrad_rest_sem is None:
             self._postgrad_rest_sem = asyncio.Semaphore(3)
 
-        from core.backfill.birdeye_backfill import BirdeyeBackfiller  # noqa: PLC0415
-
-        t_from = int(entry_ts_epoch - _POSTGRAD_REST_QUOTE_GAP_S)
-        t_to = int(entry_ts_epoch + window_s)
-        backfiller = BirdeyeBackfiller()
         try:
-            async with self._postgrad_rest_sem:
-                swaps = await sync_to_async(
-                    backfiller.run_for_window, thread_sensitive=False
-                )(mint, t_from, t_to, grad_bt, sol_usd_spot=sol_usd)
-            trades = _swaps_to_trade_tuples(swaps)
-            await sync_to_async(self._paper_trade_sync, thread_sensitive=True)(
-                mint, score, trades, float(entry_ts_epoch),
-                trading_cfg, size_sol, sol_usd, trading_enabled,
-            )
+            if model_tag == "v7":
+                # US-94 v7 settle: use postgrad_tape (live WS), tr30_t600 ride exit.
+                # ZERO CREDITS — no Birdeye REST.
+                from core.v7_ride_exit import (  # noqa: PLC0415
+                    SIZE_SHALLOW_USD,
+                    apply_tr30_t600_exit,
+                    find_entry_fill,
+                )
+
+                postgrad_swaps = self._postgrad_tape.get(mint)
+                entry_fill = find_entry_fill(postgrad_swaps, float(grad_bt))
+                if entry_fill is None:
+                    # No valid entry fill in the post-grad window — not enterable.
+                    logger.info(
+                        "%s paper [v7]: mint=%s no valid entry fill (no swaps in "
+                        "grad+2s..grad+30s window) — not booked.",
+                        LOG_PREFIX, mint,
+                    )
+                    # Mark terminal anyway — window closed, nothing to wait for.
+                    self._scored_mints.add(mint)
+                    await sync_to_async(
+                        self._set_token_status_sync, thread_sensitive=True
+                    )(mint, "SCORED")
+                    self._pending_settle.pop(mint, None)
+                    return
+
+                exit_result = apply_tr30_t600_exit(
+                    postgrad_swaps,
+                    entry_fill.price,
+                    entry_fill.ts,
+                )
+                if exit_result is None:
+                    # Not enough post-grad swaps to determine exit — defer until more
+                    # swaps arrive (handled by the next tick).
+                    logger.info(
+                        "%s paper [v7]: mint=%s no exit result yet — deferring.",
+                        LOG_PREFIX, mint,
+                    )
+                    return
+
+                # Build trade tuple for the paper settler (entry + exit).
+                # Uses the standard settle_paper_trade with 2-leg trades.
+                v7_size_usd = SIZE_SHALLOW_USD  # observe-only flat $25 this sprint
+                v7_size_sol = v7_size_usd / max(sol_usd, 1.0)
+                # Entry + exit as trade tuples (block_time_s, price, usd_volume)
+                entry_trade = (entry_fill.ts, entry_fill.price, v7_size_usd)
+                exit_trade = (exit_result.exit_ts, exit_result.exit_price, v7_size_usd)
+                trades = [entry_trade, exit_trade]
+                logger.info(
+                    "%s paper [v7]: mint=%s entry=%.8f@%.0f exit=%.8f@%.0f reason=%s "
+                    "running_max=%.8f",
+                    LOG_PREFIX, mint,
+                    entry_fill.price, entry_fill.ts,
+                    exit_result.exit_price, exit_result.exit_ts,
+                    exit_result.exit_reason, exit_result.running_max,
+                )
+                await sync_to_async(self._paper_trade_sync, thread_sensitive=True)(
+                    mint, score, trades, float(entry_fill.ts),
+                    trading_cfg, v7_size_sol, sol_usd, trading_enabled,
+                )
+            else:
+                # Non-v7: Birdeye REST full-window fetch.
+                from core.backfill.birdeye_backfill import BirdeyeBackfiller  # noqa: PLC0415
+
+                t_from = int(entry_ts_epoch - _POSTGRAD_REST_QUOTE_GAP_S)
+                t_to = int(entry_ts_epoch + window_s)
+                backfiller = BirdeyeBackfiller()
+                async with self._postgrad_rest_sem:
+                    swaps = await sync_to_async(
+                        backfiller.run_for_window, thread_sensitive=False
+                    )(mint, t_from, t_to, grad_bt, sol_usd_spot=sol_usd)
+                trades = _swaps_to_trade_tuples(swaps)
+                await sync_to_async(self._paper_trade_sync, thread_sensitive=True)(
+                    mint, score, trades, float(entry_ts_epoch),
+                    trading_cfg, size_sol, sol_usd, trading_enabled,
+                )
             # Terminal: window closed + settled (or settler deemed un-enterable).
             self._scored_mints.add(mint)
             await sync_to_async(
@@ -2449,8 +2643,9 @@ class FirehoseDaemon:
             )(mint, "SCORED")
             self._pending_settle.pop(mint, None)
             logger.info(
-                "%s paper: mint=%s settled at window close over %d post-grad swaps.",
+                "%s paper: mint=%s settled at window close over %d post-grad swaps.%s",
                 LOG_PREFIX, mint, len(trades),
+                " [v7 tr30_t600]" if model_tag == "v7" else "",
             )
         except Exception as exc:  # noqa: BLE001 - one settle must not kill the loop
             logger.warning(

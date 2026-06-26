@@ -1,10 +1,10 @@
 # ---
 # module: core.v7_pregrad_features
 # sprint: sprint-15
-# story: US-93
+# story: US-93, US-94
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-26  (train/serve skew fix: removed bt>=grad_ts filter from compute_n_pregrad_holders)
+# last-updated: 2026-06-26  (US-94: deleted dead compute_n_pregrad_holders_from_trade_pages + stale docstring)
 # dependencies: numpy, core.v4_rep_builder
 # ---
 """v7 live feature vector builder: 19 pre-grad feats + n_pregrad_holders + 24 rep feats.
@@ -543,45 +543,18 @@ def normalise_all_trade_page_swaps(trade_pages: list[list[dict]]) -> list[dict]:
     return result
 
 
-def compute_n_pregrad_holders_from_trade_pages(trade_pages: list[list[dict]]) -> float:
-    """Compute n_pregrad_holders from Birdeye trade_pages with NO time filter.
-
-    This replicates ``holder_exit.py:pregrad_holders()`` EXACTLY.  The lab function
-    processes ALL trades in the raw30k_pregrad file without filtering by blockUnixTime.
-    The raw30k_pregrad files are fetched for [gts-CAP, gts], but may contain a small
-    number of swaps at or after gts (graduation instant).  Applying a bt < gts filter
-    changes the holder count and breaks parity.
-
-    PARITY-CRITICAL: this function is used by compute_v7_features_from_trade_pages
-    to reproduce parity_sample.parquet's n_pregrad_holders exactly.
-
-    The live pipeline uses compute_n_pregrad_holders() (which filters bt < grad_ts)
-    because the live swap stream mixes pre- and post-grad rows and we must not
-    include post-grad trades in the holder count.
-
-    Parameters
-    ----------
-    trade_pages:
-        ``rec["trade_pages"]`` from raw30k_pregrad/<mint>.json.gz.
-
-    Returns
-    -------
-    float
-        Count of distinct wallets with net token balance > 0 across ALL trades.
-    """
-    bal: dict[str, float] = {}
-    for page in (trade_pages or []):
-        for s in (page or []):
-            if s.get("txType") != "swap":
-                continue
-            owner = s.get("owner") or ""
-            side = s.get("side") or ""
-            if not owner or side not in ("buy", "sell"):
-                continue
-            leg = s.get("to") if side == "buy" else s.get("from")
-            amt = abs(float((leg or {}).get("uiAmount") or 0.0))
-            bal[owner] = bal.get(owner, 0.0) + (amt if side == "buy" else -amt)
-    return float(sum(1 for v in bal.values() if v > 0))
+# ---------------------------------------------------------------------------
+# NOTE (US-94 cleanup):
+# compute_n_pregrad_holders_from_trade_pages was DELETED here.
+# It was dead code — nothing called it — and its existence risked a future
+# caller reintroducing a time-filter divergence (it had a stale docstring
+# claiming "the live pipeline uses compute_n_pregrad_holders() which filters
+# bt < grad_ts" — that filter was REMOVED in the US-93 fix).
+#
+# The single correct path is:
+#   normalise_all_trade_page_swaps(trade_pages) -> compute_n_pregrad_holders(swaps)
+# Both for the live path AND the parity/lab path.
+# ---------------------------------------------------------------------------
 
 
 def compute_v7_features_from_trade_pages(
