@@ -15,15 +15,26 @@
 //   Export dispatched via /api/copytrade/export/trigger/ to celery-worker (NEVER
 //   web/gunicorn, #289); result polled via existing §6.5 /api/export/result/<task_id>/.
 //
-//   EPIC-copy-paper-fill-repricing additions:
+//   US-90 AC-90.1 PnL HONESTY REWIRE:
+//   - Cohort Summary "Net PnL" now shows repriced_net_pnl_sol (fill_repricing.py
+//     firehose-reconstructed real fills) as the PRIMARY number when available.
+//   - When repriced_net_pnl_sol is null (no repricing run yet), falls back to
+//     legacy net_pnl_sol with a "(curve-sim — not yet repriced)" annotation.
+//   - A "REPRICED fill" / "curve-sim" badge clearly labels the source of each number.
+//   - ENTRY_REJECTED excluded from all denominators (pre-existing).
+//
+//   US-90 AC-90.4: timestamps displayed in Dubai local time (UTC+4, GST).
+//
+//   EPIC-copy-paper-fill-repricing additions (pre-existing):
 //   - Net-PnL cell shows "(curve-sim — not yet repriced)" annotation in yellow
 //     when pnl_is_repriced=false (summary field from API).
 //   - "N signals skipped (slippage)" chip shown when n_rejected>0.
 //   - No FE PnL math change — reads API values as before.
 // created-by: dev-team
-// sprint: sprint-12, epic/copy-paper-fill-repricing
-// story: US-63 AC-63.2, AC-63.3, EPIC-copy-paper-fill-repricing
-// last-updated: 2026-06-21
+// sprint: sprint-12, epic/copy-paper-fill-repricing, sprint-15
+// story: US-63 AC-63.2, AC-63.3, EPIC-copy-paper-fill-repricing, US-90 AC-90.1 AC-90.4
+// status: refactored
+// last-updated: 2026-06-26
 // ---
 
 import { useState, useEffect, useRef } from 'react'
@@ -207,14 +218,52 @@ function fmtHold(seconds) {
   return `${(s / 3600).toFixed(1)}h`
 }
 
+// US-90 AC-90.4: Dubai local time (UTC+4, Asia/Dubai = GST).
+const _DUBAI_TZ = 'Asia/Dubai'
+const _CT_DUBAI_LONG = (typeof Intl !== 'undefined')
+  ? new Intl.DateTimeFormat('en-GB', {
+      timeZone: _DUBAI_TZ,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    })
+  : null
+const _CT_DUBAI_SHORT = (typeof Intl !== 'undefined')
+  ? new Intl.DateTimeFormat('en-GB', {
+      timeZone: _DUBAI_TZ,
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    })
+  : null
+
+function _dubaiParts(fmt, d) {
+  const parts = fmt.formatToParts(d)
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? '00'
+  return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute'), second: get('second') }
+}
+
 function fmtTs(ts) {
   if (!ts) return '—'
-  try { return new Date(ts).toLocaleString() } catch { return ts }
+  try {
+    const d = new Date(ts)
+    if (_CT_DUBAI_LONG) {
+      const p = _dubaiParts(_CT_DUBAI_LONG, d)
+      return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} GST`
+    }
+    return new Date(ts).toLocaleString()
+  } catch { return ts }
 }
 
 function fmtTsShort(ts) {
   if (!ts) return '—'
-  try { return new Date(ts).toLocaleTimeString() } catch { return ts }
+  try {
+    const d = new Date(ts)
+    if (_CT_DUBAI_SHORT) {
+      const p = _dubaiParts(_CT_DUBAI_SHORT, d)
+      return `${p.hour}:${p.minute}:${p.second} GST`
+    }
+    return new Date(ts).toLocaleTimeString()
+  } catch { return ts }
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +450,14 @@ function CohortSummary({ summary }) {
   // EPIC-copy-paper-fill-repricing: trustworthiness annotation
   const pnlIsRepriced = summary.pnl_is_repriced === true
   const nRejected = summary.n_rejected ?? 0
+  const nRepriced = summary.n_repriced ?? 0
+
+  // US-90 AC-90.1: use repriced_net_pnl_sol (fill_repricing.py-sourced) as the
+  // PRIMARY PnL when available.  Falls back to net_pnl_sol (curve-sim) only when
+  // no repricing has been run yet (repriced_net_pnl_sol === null).
+  const hasRepricedPnl = summary.repriced_net_pnl_sol != null
+  const displayPnl = hasRepricedPnl ? summary.repriced_net_pnl_sol : summary.net_pnl_sol
+  const pnlLabel = hasRepricedPnl ? 'Net PnL (fill-repriced)' : 'Net PnL'
 
   return (
     <div>
@@ -414,18 +471,42 @@ function CohortSummary({ summary }) {
           <div style={{ color: STYLE.text, fontSize: '20px', fontWeight: 600 }}>{fmtWinRate(summary.win_rate)}</div>
         </div>
         <div>
-          <div style={labelStyle}>Net PnL</div>
-          <div style={{ fontSize: '20px', fontWeight: 600 }}>{fmtPnl(summary.net_pnl_sol)}</div>
-          {/* EPIC-copy-paper-fill-repricing: warn when PnL is still curve-sim */}
-          {!pnlIsRepriced && (
+          {/* US-90 AC-90.1: primary PnL display — fill_repricing.py sourced when available */}
+          <div style={labelStyle}>{pnlLabel}</div>
+          <div style={{ fontSize: '20px', fontWeight: 600 }}>{fmtPnl(displayPnl)}</div>
+          {hasRepricedPnl ? (
+            /* US-90 AC-90.1: repriced — show source badge */
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px' }}>
+              <span style={{
+                display: 'inline-block',
+                background: '#0d2b1e',
+                color: STYLE.green,
+                border: `1px solid ${STYLE.green}`,
+                borderRadius: '3px',
+                padding: '1px 6px',
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.05em',
+              }}>
+                fill_repricing ({nRepriced} pos)
+              </span>
+            </div>
+          ) : (
+            /* EPIC-copy-paper-fill-repricing: warn when PnL is still curve-sim */
             <div style={{ color: STYLE.yellow, fontSize: '11px', marginTop: '3px', fontStyle: 'italic' }}>
               (curve-sim — not yet repriced)
+            </div>
+          )}
+          {/* Show legacy all-positions PnL as secondary when repriced view differs */}
+          {hasRepricedPnl && !pnlIsRepriced && (
+            <div style={{ color: STYLE.textSecondary, fontSize: '11px', marginTop: '4px' }}>
+              All closed: {summary.net_pnl_sol != null ? `${summary.net_pnl_sol >= 0 ? '+' : ''}${Number(summary.net_pnl_sol).toFixed(4)} SOL` : '—'} (incl. curve-sim)
             </div>
           )}
         </div>
         <div>
           <div style={labelStyle}>Since</div>
-          <div style={{ color: STYLE.textSecondary, fontSize: '14px' }}>{summary.since ? new Date(summary.since).toLocaleString() : '—'}</div>
+          <div style={{ color: STYLE.textSecondary, fontSize: '14px' }}>{summary.since ? fmtTs(summary.since) : '—'}</div>
         </div>
       </div>
 

@@ -1,12 +1,12 @@
 # ---
 # module: copytrade.api
-# sprint: sprint-12, epic/copy-paper-fill-repricing
-# story: US-63 AC-63.1, AC-63.3, EPIC-copy-paper-fill-repricing
+# sprint: sprint-12, epic/copy-paper-fill-repricing, sprint-15
+# story: US-63 AC-63.1, AC-63.3, EPIC-copy-paper-fill-repricing, US-90 AC-90.1
 # status: refactored
 # created-by: dev-team
-# last-updated: 2026-06-21
+# last-updated: 2026-06-26
 # dependencies: djangorestframework, copytrade.models, copytrade.cohort_lifecycle,
-#   copytrade.engine_control, copytrade.validators, copytrade.tasks
+#   copytrade.engine_control, copytrade.validators, copytrade.tasks, copytrade.fill_repricing
 # ---
 """DRF API for the Copy Trade dashboard tab (SPEC §8, AC-63.1) + export (SPEC §11, AC-63.3).
 
@@ -17,6 +17,11 @@ GET endpoints:
   /api/copytrade/positions/       — open positions (CopytradePosition status=open)
   /api/copytrade/trades/          — recent closed trades (exit_reason + mode)
   /api/copytrade/summary/         — cohort summary (total trades, win-rate, PnL, since)
+                                    US-90 AC-90.1: also surfaces repriced_net_pnl_sol —
+                                    the fill_repricing.py-sourced honest PnL (only
+                                    positions with entry_reprice_status=REPRICED); the
+                                    legacy net_pnl_sol is the all-closed aggregate
+                                    (includes curve-sim NO_TAPE positions).
 
 POST/action endpoints:
   /api/copytrade/upload/          — JSON upload → US-58 validate → US-62 wipe+load
@@ -28,6 +33,16 @@ POST/action endpoints:
 No new PnL/price math — reads the copytrade_ rows (Principle #2).
 Export runs OFF the celery container (#289 — NEVER web/gunicorn); result polled via
 the EXISTING §6.5 result endpoint GET /api/export/result/<task_id>/.
+
+US-90 AC-90.1 PnL HONESTY WIRING:
+  repriced_net_pnl_sol in /api/copytrade/summary/ is the fill_repricing-sourced
+  honest number.  It aggregates ONLY positions with entry_reprice_status='REPRICED'
+  (i.e. positions for which fill_repricing.reprice_position() found a real trade in
+  the lake and updated entry_price + exit_price + realized_pnl_sol in-place).
+  Positions with NO_TAPE (curve-sim price kept) and pending positions (null status)
+  are EXCLUDED from repriced_net_pnl_sol so the number is unambiguously honest.
+  The legacy net_pnl_sol field (all closed positions) remains for backward compat
+  but the dashboard primary display uses repriced_net_pnl_sol when n_repriced > 0.
 """
 
 from django.db.models import Count, Q, Sum
@@ -183,6 +198,9 @@ def copytrade_summary_view(request):
                 "total_trades": 0,
                 "win_rate": 0.0,
                 "net_pnl_sol": 0.0,
+                # US-90 AC-90.1: fill_repricing.py-sourced honest PnL (REPRICED positions only).
+                # None when no positions have been repriced yet.
+                "repriced_net_pnl_sol": None,
                 "since": None,
                 "engine_on": settings.engine_on,
                 "mode": settings.mode,
@@ -237,6 +255,23 @@ def copytrade_summary_view(request):
     # (NO_TAPE counts as NOT trusted — curve-sim price kept)
     pnl_is_repriced = (total_trades > 0) and (n_pending == 0) and (n_no_tape == 0)
 
+    # US-90 AC-90.1: repriced_net_pnl_sol — fill_repricing.py-sourced honest PnL.
+    # Aggregates ONLY positions with entry_reprice_status='REPRICED': these are the
+    # positions for which fill_repricing.reprice_position() found a real trade in the
+    # lake and updated entry_price + exit_price + realized_pnl_sol in-place.
+    # NO_TAPE (curve-sim kept) and pending positions are intentionally excluded so
+    # this number is unambiguously sourced from fill_repricing, not the settler.
+    # Returns None (not 0) when no repriced positions exist yet, so the frontend
+    # can distinguish "repriced PnL = $0" from "no repricing has run yet".
+    repriced_agg = closed_qs.filter(
+        entry_reprice_status=CopytradePosition.REPRICE_STATUS_REPRICED,
+    ).aggregate(repriced_pnl=Sum("realized_pnl_sol"))
+    repriced_net_pnl_sol = (
+        float(repriced_agg["repriced_pnl"])
+        if repriced_agg["repriced_pnl"] is not None
+        else None
+    )
+
     n_open = CopytradePosition.objects.filter(
         cohort_id=cohort_id,
         status=CopytradePosition.STATUS_OPEN,
@@ -249,6 +284,10 @@ def copytrade_summary_view(request):
             "total_trades": total_trades,
             "win_rate": win_rate,
             "net_pnl_sol": net_pnl_sol,
+            # US-90 AC-90.1: fill_repricing.py-sourced honest PnL.
+            # REPRICED positions only; None when no repricing has run.
+            # This is the canonical judge — the dashboard primary PnL display.
+            "repriced_net_pnl_sol": repriced_net_pnl_sol,
             "since": since,
             "engine_on": settings.engine_on,
             "mode": settings.mode,
