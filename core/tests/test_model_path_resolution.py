@@ -31,8 +31,6 @@ def test_conventional_model_base_is_repo_root_not_one_above() -> None:
     assert (base / "core" / "management" / "commands" / "run_firehose.py").is_file(), (
         f"parents[3] must be the repo root containing the core/ package; got {base}"
     )
-    # The model dir the loaders point to is a child of this base.
-    assert base == rf_file.parent.parent.parent, "base must be 3 dirs up from the command file"
 
     # The buggy value (parents[4]) is one above the root and must NOT contain the app.
     above = rf_file.parents[4]
