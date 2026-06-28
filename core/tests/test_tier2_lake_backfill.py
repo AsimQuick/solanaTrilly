@@ -646,3 +646,60 @@ def test_zero_lake_rows_leads_to_skipped_status():
 
     tok = Token.objects.get(mint=mint)
     assert tok.status == Token.STATUS_SKIPPED
+
+
+# ---------------------------------------------------------------------------
+# Billy schema-A normalise tier (shared_billy DISK lookup for pf/v7 features)
+# ---------------------------------------------------------------------------
+
+def _schema_a_row(mint: str, block_time: int, side: str = "buy") -> dict:
+    """A solanaBilly schema-A raw-reserves row (NO 'price'/'phase' keys)."""
+    return {
+        "mint": mint,
+        "block_time": block_time,
+        "slot": block_time * 2,
+        "signature": f"sigA_{mint[:4]}_{block_time}",
+        "side": side,
+        "owner": f"w{block_time % 7}",
+        "virtual_sol_reserves": 30_000_000_000 + block_time % 1000,
+        "virtual_token_reserves": 1_000_000_000_000,
+        "sol_amount": 500_000_000,
+        "token_amount": 10_000_000,
+        "real_sol_reserves": 5_000_000_000,
+    }
+
+
+def test_lake_backfill_normalise_reads_schema_a_billy_rows(tmp_path):
+    """shared_billy DISK tier: LakeBackfiller(normalise=True) turns schema-A billy
+    rows into swap-dicts WITH 'price' and phase='pre' so the feature builders work.
+    Without normalise=True the schema-A rows lack 'price' and yield 0 usable swaps —
+    the exact gap that made the pf branch defer forever in shared_billy mode."""
+    grad_bt = 1_782_000_000
+    date_str = datetime.fromtimestamp(grad_bt, tz=timezone.utc).strftime("%Y-%m-%d")
+    rows = [_schema_a_row("MINTPFV2", grad_bt - 300 + i * 10) for i in range(8)]
+    _write_lake_partition(tmp_path, date_str, rows)
+
+    # WITH normalise → schema-A rows become usable pre-grad swaps with 'price'.
+    got = LakeBackfiller(base_dir=tmp_path, normalise=True).run_for_mint("MINTPFV2", grad_bt)
+    assert len(got) == 8, f"expected 8 normalised pre-grad swaps, got {len(got)}"
+    assert all("price" in s and s["price"] > 0 for s in got), "normalise must add 'price'"
+    assert all(s.get("phase") == "pre" for s in got), "schema-A rows normalise to phase=pre"
+
+    # And those swaps feed the pf feature builder (not None).
+    from core.pf_features import compute_pf_features
+
+    feats = compute_pf_features(got, float(grad_bt))
+    assert feats is not None, "pf features must compute from the billy-normalised curve"
+    assert len(feats) == 13
+
+
+def test_lake_backfill_without_normalise_misses_schema_a(tmp_path):
+    """Guard: WITHOUT normalise, schema-A billy rows lack 'price' → LakeReader drops
+    them → 0 swaps. Proves normalise=True is load-bearing for the shared_billy tier."""
+    grad_bt = 1_782_000_000
+    date_str = datetime.fromtimestamp(grad_bt, tz=timezone.utc).strftime("%Y-%m-%d")
+    rows = [_schema_a_row("MINTPFV2", grad_bt - 200 + i * 10) for i in range(5)]
+    _write_lake_partition(tmp_path, date_str, rows)
+
+    got = LakeBackfiller(base_dir=tmp_path, normalise=False).run_for_mint("MINTPFV2", grad_bt)
+    assert got == [], f"un-normalised schema-A rows must yield 0 swaps, got {len(got)}"

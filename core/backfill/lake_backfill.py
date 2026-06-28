@@ -72,11 +72,19 @@ class LakeBackfiller:
                   here to keep the real lake clean.
     """
 
-    def __init__(self, base_dir: Path | str | None = None) -> None:
+    def __init__(
+        self, base_dir: Path | str | None = None, *, normalise: bool = False
+    ) -> None:
         if base_dir is not None:
             self._base_dir = Path(base_dir)
         else:
             self._base_dir = _firehose_lake_base()
+        # normalise=True is REQUIRED when scanning solanaBilly's shared tape
+        # (lake/billy_tape, schema-A raw-reserves): the LakeReader runs
+        # normalise_row so schema-A rows become the same swap-dict shape (with
+        # 'price', 'phase'="pre") the in-memory TapeStore holds.  Without it,
+        # schema-A rows lack 'price' and the pf/v7 feature builders see 0 swaps.
+        self._normalise = normalise
 
     # ------------------------------------------------------------------
     # Public API
@@ -115,7 +123,7 @@ class LakeBackfiller:
         grad_dt = datetime.fromtimestamp(graduated_block_time, tz=timezone.utc)
         date_strs = self._partition_dates(grad_dt, lookback_days=3)
 
-        reader = LakeReader(base_dir=self._base_dir)
+        reader = LakeReader(base_dir=self._base_dir, normalise=self._normalise)
 
         results: list[dict] = []
         rows_scanned = 0
