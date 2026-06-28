@@ -40,7 +40,10 @@ from core.pf_scorer import PfScorer, is_pf_model
 # Model dirs
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# From <root>/core/tests/test_pf_v2_scorer_e2e.py the repo root is parents[2]
+# (= /app in the container). parents[3] is one level above (= "/" in /app),
+# so models/ would resolve to /models and the scorer would silently load as None.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _V2_DIR = _REPO_ROOT / "models" / "trilly_pf_v2"
 _V1_DIR = _REPO_ROOT / "models" / "trilly_pf_v1"
 
@@ -488,3 +491,45 @@ def test_wrong_gate_fails_schema():
     }
     with pytest.raises(ValidationError):
         PipelineConfigSchema(**config_dict)
+
+
+# ---------------------------------------------------------------------------
+# promote_pf management command coverage (dry-run + real DB upsert/activate)
+# ---------------------------------------------------------------------------
+
+
+def test_promote_pf_dry_run_validates_and_makes_no_db_changes() -> None:
+    """`promote_pf --dry-run` validates the artifact + config schema, no DB writes."""
+    from io import StringIO  # noqa: PLC0415
+
+    from django.core.management import call_command  # noqa: PLC0415
+
+    if not _V2_DIR.is_dir():
+        pytest.skip("trilly_pf_v2 artifact dir absent")
+
+    out = StringIO()
+    call_command("promote_pf", "--artifact-dir", str(_V2_DIR), "--dry-run", stdout=out)
+    text = out.getvalue()
+    assert "trilly_pf_v2" in text
+    assert "dry-run" in text.lower()
+
+
+@pytest.mark.django_db
+def test_promote_pf_upserts_and_activates_model() -> None:
+    """`promote_pf` (no dry-run) registers + activates the model so it resolves active."""
+    from io import StringIO  # noqa: PLC0415
+
+    from django.core.management import call_command  # noqa: PLC0415
+
+    from core.models import ModelRegistry  # noqa: PLC0415
+
+    if not _V2_DIR.is_dir():
+        pytest.skip("trilly_pf_v2 artifact dir absent")
+
+    out = StringIO()
+    call_command("promote_pf", "--artifact-dir", str(_V2_DIR), stdout=out)
+
+    row = ModelRegistry.objects.filter(model_version="trilly_pf_v2").first()
+    assert row is not None, "promote_pf must register trilly_pf_v2 in ModelRegistry"
+    assert str(_V2_DIR) in str(row.artifact_dir)
+    assert "Done" in out.getvalue()
