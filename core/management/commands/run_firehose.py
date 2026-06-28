@@ -1,14 +1,15 @@
 # ---
 # module: core.management.commands.run_firehose
-# sprint: sprint-15
+# sprint: sprint-15, sprint-16
 # story: EPIC-tape-sourcing-escalation Tier 2 + Tier 3,
 #        hotfix-single-connection-fanout, hotfix-migrate-mint-rpc-resolution,
 #        hotfix-grad-liveness-watchdog, hotfix-firehose-drain-and-fairness,
 #        US-94 v7 gate + tr30_t600 exit + depth-gated sizing + live wiring,
-#        US-92 post-grad rows carry mint
+#        US-92 post-grad rows carry mint,
+#        pf-v1-serving-lane (trilly_pf_v1 scoring path)
 # status: fixed
 # created-by: dev-team
-# last-updated: 2026-06-26
+# last-updated: 2026-06-28
 # dependencies: django, asyncio, logging, signal, asgiref, os, threading, time,
 #               core.tape.birdeye_graduation_source, core.tape.birdeye_swap_source,
 #               core.tape.birdeye_swap_mapper, core.tape.helius_birth_tape_source,
@@ -17,7 +18,7 @@
 #               core.resolver, core.models, core.v4_rep_builder,
 #               core.backfill.lake_backfill, core.backfill.birdeye_backfill,
 #               core.pricing.sol_usd, core.v7_pregrad_features, core.v7_scorer,
-#               core.v7_ride_exit
+#               core.v7_ride_exit, core.pf_v1_features, core.pf_v1_scorer
 # ---
 """run_firehose — the gated live daemon that ties the pipeline spine together.
 
@@ -2125,11 +2126,17 @@ class FirehoseDaemon:
             return
 
         # Model path detection by feature count on the active scorer.
+        # len(scorer.feature_list) == 1  → pf_v1 (sentinel, "pf_v1" marker) [pf-v1-serving-lane]
         # len(scorer.feature_list) == 53 → v4 REP+recurrence path
         # len(scorer.feature_list) == 44 → v7 post-grad gate+ride path (US-94)
         # len(scorer.feature_list) == 20 → v3.2 enrich-only path (unchanged)
         # getattr fallback: test stubs without feature_list default to the v3.2 path.
         _scorer_feature_list = getattr(scorer, "feature_list", [])
+        # pf_v1: sentinel has feature_list=["pf_v1"] (len=1, unique marker)
+        _is_pf_v1_model = (
+            len(_scorer_feature_list) == 1
+            and _scorer_feature_list[0] == "pf_v1"
+        )
         _is_v4_model = len(_scorer_feature_list) == 53
         # v7: 44-feature (19 pre-grad + n_pregrad_holders + 24 wallet-rep);
         # requires self._v7_model loaded (boosters present). If boosters absent
@@ -2165,6 +2172,74 @@ class FirehoseDaemon:
             if mint in self._pending_settle:
                 continue
             swaps = self._tape.get(mint)
+
+            # --- pf-v1-serving-lane: pf_v1 feature assembly + scoring + gate ---
+            if _is_pf_v1_model:
+                from core.pf_v1_features import compute_pf_v1_features  # noqa: PLC0415
+                from core.pf_v1_scorer import (  # noqa: PLC0415
+                    MODEL_PRESENT as _PF_V1_MODEL_PRESENT,
+                )
+                from core.pf_v1_scorer import gate_passes as pf_v1_gate_passes  # noqa: PLC0415
+                from core.pf_v1_scorer import score as pf_v1_score_fn  # noqa: PLC0415
+
+                pf1_features = compute_pf_v1_features(swaps, float(graduated_block_time))
+                if pf1_features is None:
+                    # No scoreable pre-grad tape yet — defer (same pattern as other models).
+                    logger.info(
+                        "%s score [pf_v1]: mint=%s no pre-grad tape yet (%d swaps) — deferring.",
+                        LOG_PREFIX, mint, len(swaps),
+                    )
+                    continue
+
+                if not _PF_V1_MODEL_PRESENT:
+                    # model.txt absent (CI / pre-deploy): log and skip scoring for this mint.
+                    # Do NOT mark SKIPPED — the model may be placed later.
+                    logger.info(
+                        "%s score [pf_v1]: mint=%s model.txt absent (CI gate) — skipping score.",
+                        LOG_PREFIX, mint,
+                    )
+                    # Still mark as scored in this session to avoid spin on every tick.
+                    self._scored_mints.add(mint)
+                    await sync_to_async(
+                        self._set_token_status_sync, thread_sensitive=True
+                    )(mint, "SCORED")
+                    continue
+
+                pf1_raw_score = pf_v1_score_fn(pf1_features)
+                pf1_passed = pf_v1_gate_passes(pf1_raw_score)
+                pf1_blend = pf1_raw_score
+                pf1_result = {
+                    "blend_score": pf1_raw_score,
+                    "label_scores": {"pf_v1": pf1_raw_score},
+                    "label_ranks": {},
+                }
+                logger.info(
+                    "%s score [pf_v1]: mint=%s score=%.6f threshold=%.8f gate=%s",
+                    LOG_PREFIX, mint, pf1_raw_score, threshold,
+                    "pass" if pf1_passed else "fail",
+                )
+
+                # Persist the Prediction record (model-agnostic, reused as-is).
+                score_time_pf1 = int(graduated_block_time + scoring["score_at_elapsed_s"])
+                try:
+                    await sync_to_async(self._persist_prediction_sync, thread_sensitive=True)(
+                        mint, score_time_pf1, pf1_result, pf1_blend, pf1_passed, scoring, sol_usd,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "%s prediction-persist [pf_v1] failed for mint=%s (%s) — continuing.",
+                        LOG_PREFIX, mint, exc,
+                    )
+
+                # Mark scored; do NOT add to _pending_settle — PnL is offline only.
+                # pf_v1 has NO live post-grad settle path (scope: score + record only).
+                self._scored_mints.add(mint)
+                await sync_to_async(
+                    self._set_token_status_sync, thread_sensitive=True
+                )(mint, "SCORED")
+                continue
+            # --- end pf_v1 path ---
+
             # US-76 BREAK-1: serve in USD via ONE SOL/USD spot (the shared cached
             # spot resolved in the scoring context).  vol = vol_sol × spot inside
             # the normalisation layer; reproduces the offline trained feature space
@@ -2733,11 +2808,22 @@ class FirehoseDaemon:
         US-76 P1.1 guard: if scoring_enabled=True and reference_dist_path is
         null or missing, raises ConfigurationError to block the pool-of-1
         silent-pass path (ref_dist=None -> rank=1.0 for every token).
+        EXCEPTION: pf_v1 models do NOT use reference_dist.json — the P1.1 guard
+        is bypassed when the active model is trilly_pf_v1 (detected via
+        pf_v1_scorer.is_pf_v1_model).
 
         US-76 P2.5: threshold comes from rank_cut in meta.json depth_menu, not
         a hardcoded constant.
+        EXCEPTION: pf_v1 uses flag_threshold from config.json, not depth_menu.
+
+        pf-v1-serving-lane: when the active model is trilly_pf_v1, the scorer
+        returned is a sentinel object with feature_list=["pf_v1"] (len=1) so the
+        _score_tick dispatch routes to the pf_v1 path.  BlendScorer is NOT
+        instantiated for pf_v1 (it would fail — no meta.json contract).
         """
         from core.models import PipelineState
+        from core.pf_v1_scorer import FLAG_THRESHOLD as _PF_V1_THRESHOLD  # noqa: PLC0415
+        from core.pf_v1_scorer import is_pf_v1_model  # noqa: PLC0415
         from core.resolver import get_active_config, get_active_model
         from core.scorer import BlendScorer, ReferenceDistribution
         from trading.models import TradingSettings
@@ -2746,9 +2832,51 @@ class FirehoseDaemon:
         model_entry = get_active_model()
         if model_entry is None:
             raise RuntimeError("no active model in ModelRegistry")
+
+        # pf-v1-serving-lane: detect trilly_pf_v1 artifact BEFORE BlendScorer
+        _artifact_dir = getattr(model_entry, "artifact_dir", None)
+        _is_pf_v1 = is_pf_v1_model(_artifact_dir)
+
+        if _is_pf_v1:
+            # pf_v1 path: no BlendScorer, no reference_dist, threshold from config.json.
+            # Return a sentinel scorer with feature_list=["pf_v1"] (len=1) so
+            # _score_tick's dispatch block routes to the pf_v1 branch.
+            class _PfV1ScorerSentinel:
+                """Sentinel: signals pf_v1 routing to _score_tick dispatch."""
+                feature_list = ["pf_v1"]
+            scorer = _PfV1ScorerSentinel()
+            ref_dist = None  # pf_v1 does not use reference_dist
+
+            scoring = {
+                "gate": config.scoring.gate if config else "topk",
+                "score_at_elapsed_s": config.scoring.score_at_elapsed_s if config else 0,
+                "outcome_window_s": config.outcome.window_s if config else 1800,
+            }
+            trading_cfg = TradingSettings.get().to_schema()
+            from core.pricing.sol_usd import get_sol_usd  # noqa: PLC0415
+            sol_usd = get_sol_usd()
+            paper_size_usd = None
+            if config and config.trading:
+                paper_size_usd = config.trading.paper_size_usd
+            if paper_size_usd:
+                size_sol = float(paper_size_usd) / sol_usd
+            else:
+                size_sol = trading_cfg.position_size_sol
+            threshold = _PF_V1_THRESHOLD  # from config.json selection.flag_threshold
+            # model_id for Prediction persistence
+            _pf1_per_day = (
+                int(getattr(config.scoring, "per_day_target", _DEFAULT_PER_DAY))
+                if config else _DEFAULT_PER_DAY
+            )
+            scoring["per_day_target"] = _pf1_per_day
+            scoring["rank_cut"] = float(threshold)
+            scoring["model_id"] = str(getattr(model_entry, "model_version", "") or "trilly_pf_v1")
+            return scorer, ref_dist, scoring, trading_cfg, size_sol, sol_usd, threshold
+
         scorer = BlendScorer.from_registry(model_entry)
 
         # P1.1 -- require ref_dist when scoring is enabled.
+        # Guard is gated to non-pf_v1 models (pf_v1 handled above).
         state = PipelineState.get()
         if state.scoring_enabled:
             ref_path = config.scoring.reference_dist_path if config else None

@@ -70,6 +70,11 @@ models/trilly_pregrad_v4/boosters/
 !models/trilly_pregrad_v7/parity_sample.parquet
 # v7 boosters: host-only (operator/CD scp to VPS; NOT in Git), mounted via models/:ro
 models/trilly_pregrad_v7/selection/
+# pf-v1-serving-lane: config.json committed; model.txt is host-only (scp to VPS)
+!models/trilly_pf_v1/
+!models/trilly_pf_v1/config.json
+# model.txt is host-only (raw LightGBM booster, not committed to Git)
+models/trilly_pf_v1/model.txt
 
 # lake/ data files (large binaries — host-only, not committed to Git)
 lake/
