@@ -7,7 +7,8 @@
 #        US-94 v7 gate + tr30_t600 exit + depth-gated sizing + live wiring,
 #        US-92 post-grad rows carry mint,
 #        pf-v1-serving-lane (trilly_pf_v1 scoring path),
-#        pf-v2-serving-lane (trilly_pf_v2 contract-driven scoring path)
+#        pf-v2-serving-lane (trilly_pf_v2 contract-driven scoring path),
+#        fix/shared-billy-graduation-consumer (MEME_DATA vs MIGRATE_TX type mismatch)
 # status: fixed
 # created-by: dev-team
 # last-updated: 2026-06-28
@@ -1175,14 +1176,38 @@ class FirehoseDaemon:
             helius_task = asyncio.create_task(self._helius_loop(), name="firehose-helius")
             collection_task = helius_task
 
-        reconciler_task = asyncio.create_task(self._reconciler_loop(), name="firehose-reconciler")
+        # Graduation detection task:
+        #   shared_billy → _shared_billy_graduation_loop (DetectionConsumer over
+        #                  BirdeyeGraduationSource).  This is the ONLY graduation
+        #                  path in shared_billy mode (no Helius key, no Helius sub).
+        #                  _reconciler_loop (MigrateReconciler) is NOT started in
+        #                  shared_billy mode because MigrateReconciler only persists
+        #                  events where event["type"]=="MIGRATE_TX", but
+        #                  BirdeyeGraduationSource emits events with
+        #                  event["type"]=="MEME_DATA" — type mismatch → 0 rows.
+        #   self          → _reconciler_loop (BirdeyeGraduationSource → MigrateReconciler)
+        #                  as the Birdeye gap-fill backstop for the Helius primary.
+        #                  NOTE: the same MEME_DATA vs MIGRATE_TX mismatch means this
+        #                  secondary is also effectively dead in self mode — the Helius
+        #                  primary (DetectionConsumer via HeliusMigrateSource) carries
+        #                  all real graduations there.  It is kept for backward compat
+        #                  and will be fixed separately when self mode needs a live
+        #                  Birdeye backstop.
+        if self._tape_source == "shared_billy":
+            graduation_task = asyncio.create_task(
+                self._shared_billy_graduation_loop(), name="firehose-graduation"
+            )
+        else:
+            graduation_task = asyncio.create_task(
+                self._reconciler_loop(), name="firehose-reconciler"
+            )
         scoring_task = asyncio.create_task(self._scoring_loop(), name="firehose-scoring")
         postgrad_task = asyncio.create_task(self._postgrad_loop(), name="firehose-postgrad")
         flush_task = asyncio.create_task(self._tape_flush_loop(deadline), name="firehose-tape-flush")
         watcher_task = asyncio.create_task(self._flip_watcher(deadline), name="firehose-watcher")
 
         tasks = [
-            helius_task, reconciler_task,
+            helius_task, graduation_task,
             scoring_task, postgrad_task, flush_task, watcher_task,
         ]
         try:
@@ -1195,7 +1220,7 @@ class FirehoseDaemon:
             grad_watchdog.stop()
 
             for t in (
-                helius_task, reconciler_task,
+                helius_task, graduation_task,
                 scoring_task, postgrad_task, flush_task,
             ):
                 t.cancel()
@@ -1838,6 +1863,91 @@ class FirehoseDaemon:
                     LOG_PREFIX,
                 )
                 return
+
+    # ------------------------------------------------------------------
+    # Task b3 — GRADUATION PRIMARY for shared_billy mode
+    #           (BirdeyeGraduationSource → DetectionConsumer)
+    # ------------------------------------------------------------------
+
+    async def _shared_billy_graduation_loop(self) -> None:
+        """Primary graduation detection for TAPE_SOURCE=shared_billy.
+
+        In shared_billy mode there is no Helius subscription, so graduation
+        detection MUST run through Birdeye's SUBSCRIBE_NEW_PAIR stream instead.
+        This loop builds BirdeyeGraduationSource → DetectionConsumer (the correct
+        consumer for MEME_DATA events) and reconnects with exponential backoff on
+        any stream error.
+
+        WHY NOT _reconciler_loop / MigrateReconciler here
+        ==================================================
+        MigrateReconciler.run() only persists events where
+        event["type"] == "MIGRATE_TX".  BirdeyeGraduationSource emits events with
+        event["type"] == "MEME_DATA" (so that DetectionConsumer._is_graduation_event
+        can match them against the active filter).  Running MigrateReconciler over
+        BirdeyeGraduationSource produces a type mismatch: every graduation frame is
+        silently dropped → 0 Token rows persisted.  DetectionConsumer is the correct
+        consumer for MEME_DATA events.
+
+        Returns immediately if BIRDEYE_API_KEY is absent (no source buildable).
+        """
+        backoff = 1.0
+        while not self._stop.is_set():
+            try:
+                consumer, source = await sync_to_async(
+                    self._build_shared_billy_graduation, thread_sensitive=True
+                )()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s graduation-primary: factory failed (%s) — retry in %.0fs.",
+                    LOG_PREFIX, exc, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+                continue
+
+            if consumer is None:
+                logger.info(
+                    "%s graduation-primary: no consumer built — "
+                    "BIRDEYE_API_KEY missing or no active config; graduation disabled.",
+                    LOG_PREFIX,
+                )
+                return
+
+            backoff = 1.0
+            if source is not None:
+                self._active_sources.append(source)
+            logger.info(
+                "%s graduation-primary: started (shared_billy → BirdeyeGraduationSource → DetectionConsumer).",
+                LOG_PREFIX,
+            )
+            try:
+                await consumer.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s graduation-primary: stream error (%s) — will reconnect.",
+                    LOG_PREFIX, exc,
+                )
+            finally:
+                if source is not None:
+                    try:
+                        self._active_sources.remove(source)
+                    except ValueError:
+                        pass
+
+            firehose_active, _, _ = await self._read_state()
+            if self._stop.is_set() or not firehose_active:
+                logger.info(
+                    "%s graduation-primary: stream ended; firehose inactive/stopping — done.",
+                    LOG_PREFIX,
+                )
+                return
+            logger.info(
+                "%s graduation-primary: stream ended — reconnecting in %.0fs.",
+                LOG_PREFIX, backoff,
+            )
+            await asyncio.sleep(backoff)
 
     # ------------------------------------------------------------------
     # Task b2 — GRADUATION SECONDARY (Birdeye gap-fill → MigrateReconciler)
@@ -3111,6 +3221,85 @@ class FirehoseDaemon:
             "%s graduation: primary=HeliusMigrateSource event_source=%s",
             LOG_PREFIX,
             event_source,
+        )
+        return consumer, source
+
+    def _build_shared_billy_graduation(self):
+        """Build the PRIMARY graduation consumer for TAPE_SOURCE=shared_billy.
+
+        Wires BirdeyeGraduationSource → DetectionConsumer (the correct consumer for
+        MEME_DATA events).  This is the only graduation detection path in shared_billy
+        mode because there is no Helius subscription in that mode.
+
+        Config wiring:
+          - Uses the active config's detection section (model_dump()) as the
+            BirdeyeGraduationSource config dict.
+          - graduation_min_liquidity is forced to 0 so every graduation is captured
+            (matching the documented behaviour of the Birdeye backstop).
+          - The event_source stamped on emitted events is driven by
+            _event_source(detection_dict), which resolves:
+              1. detection.event_source  (explicit override)
+              2. detection.filter.source ("pump_dot_fun" in the live config)
+              3. DEFAULT_EVENT_SOURCE    ("pump_dot_fun" hardcoded fallback)
+            This ensures the emitted event["source"] == "pump_dot_fun" which matches
+            the active detection filter (filter.source == "pump_dot_fun"), so
+            DetectionConsumer._is_graduation_event returns True and the Token row is
+            persisted.
+
+        MEME_DATA → DetectionConsumer filter path (verified):
+          BirdeyeGraduationSource.events() yields:
+            {"type": "MEME_DATA", "graduated": True, "source": "pump_dot_fun",
+             "address": <mint>, "poolAddress": <pool>, "blockTime": <epoch>, ...}
+          DetectionConsumer._is_graduation_event checks:
+            event["type"] == "MEME_DATA"          → True ✓
+            event["graduated"] == filter.graduated → True == True ✓
+            event["source"] == filter.source       → "pump_dot_fun" == "pump_dot_fun" ✓
+          → update_or_create Token row persisted.
+
+        No Helius RPC dependency — the SPL mint is in event["address"] directly
+        (from NEW_PAIR base/quote resolution in map_new_pair_frame).
+
+        Returns (consumer, source) or (None, None) if BIRDEYE_API_KEY is absent.
+        """
+        from core.detection.consumer import DetectionConsumer
+        from core.resolver import get_active_config
+        from core.tape.birdeye_graduation_source import BirdeyeGraduationSource
+
+        birdeye_api_key = getattr(settings, "BIRDEYE_API_KEY", None)
+        if not birdeye_api_key:
+            logger.warning(
+                "%s graduation-primary: BIRDEYE_API_KEY missing — graduation detection disabled.",
+                LOG_PREFIX,
+            )
+            return None, None
+
+        config = get_active_config()
+        detection_dict: dict = {}
+        if config is not None:
+            detection_dict = config.detection.model_dump()
+
+        # Force graduation_min_liquidity=0: capture every pump.fun graduation.
+        # The source=="pump_amm" filter in map_new_pair_frame already cuts non-pump
+        # pairs without a liquidity floor; any floor risks silently dropping real
+        # low-liquidity graduations (observed: liquidity=140 at pool-creation time).
+        detection_dict = dict(detection_dict)
+        detection_dict["graduation_min_liquidity"] = 0
+
+        source = BirdeyeGraduationSource(
+            api_key=birdeye_api_key,
+            config=detection_dict,
+            clock=self._clock,
+        )
+        consumer = DetectionConsumer(
+            source=source,
+            clock=self._clock,
+            config_fn=get_active_config,
+        )
+        logger.info(
+            "%s graduation-primary: BirdeyeGraduationSource wired "
+            "event_source=%s min_liquidity=0",
+            LOG_PREFIX,
+            detection_dict.get("event_source") or detection_dict.get("filter", {}).get("source", "pump_dot_fun"),
         )
         return consumer, source
 
