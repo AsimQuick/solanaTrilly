@@ -6,7 +6,8 @@
 #        hotfix-grad-liveness-watchdog, hotfix-firehose-drain-and-fairness,
 #        US-94 v7 gate + tr30_t600 exit + depth-gated sizing + live wiring,
 #        US-92 post-grad rows carry mint,
-#        pf-v1-serving-lane (trilly_pf_v1 scoring path)
+#        pf-v1-serving-lane (trilly_pf_v1 scoring path),
+#        pf-v2-serving-lane (trilly_pf_v2 contract-driven scoring path)
 # status: fixed
 # created-by: dev-team
 # last-updated: 2026-06-28
@@ -18,7 +19,8 @@
 #               core.resolver, core.models, core.v4_rep_builder,
 #               core.backfill.lake_backfill, core.backfill.birdeye_backfill,
 #               core.pricing.sol_usd, core.v7_pregrad_features, core.v7_scorer,
-#               core.v7_ride_exit, core.pf_v1_features, core.pf_v1_scorer
+#               core.v7_ride_exit, core.pf_features, core.pf_scorer,
+#               core.pf_v1_features, core.pf_v1_scorer
 # ---
 """run_firehose — the gated live daemon that ties the pipeline spine together.
 
@@ -2132,10 +2134,13 @@ class FirehoseDaemon:
         # len(scorer.feature_list) == 20 → v3.2 enrich-only path (unchanged)
         # getattr fallback: test stubs without feature_list default to the v3.2 path.
         _scorer_feature_list = getattr(scorer, "feature_list", [])
-        # pf_v1: sentinel has feature_list=["pf_v1"] (len=1, unique marker)
+        # pf (v1 or v2): sentinel has feature_list=["pf"] (len=1, unique marker)
+        # The sentinel was "pf_v1" in the old pf_v1-only path; now generalised to "pf"
+        # so any trilly_pf_v* model routes through the contract-driven pf branch.
+        # The old "pf_v1" sentinel is still supported for backwards-compatibility.
         _is_pf_v1_model = (
             len(_scorer_feature_list) == 1
-            and _scorer_feature_list[0] == "pf_v1"
+            and _scorer_feature_list[0] in ("pf_v1", "pf")
         )
         _is_v4_model = len(_scorer_feature_list) == 53
         # v7: 44-feature (19 pre-grad + n_pregrad_holders + 24 wallet-rep);
@@ -2173,72 +2178,78 @@ class FirehoseDaemon:
                 continue
             swaps = self._tape.get(mint)
 
-            # --- pf-v1-serving-lane: pf_v1 feature assembly + scoring + gate ---
+            # --- pf-serving-lane: contract-driven pf feature assembly + scoring + gate ---
+            # Handles any trilly_pf_v* model (v1 or v2) via core.pf_scorer / pf_features.
             if _is_pf_v1_model:
-                from core.pf_v1_features import compute_pf_v1_features  # noqa: PLC0415
-                from core.pf_v1_scorer import (  # noqa: PLC0415
-                    MODEL_PRESENT as _PF_V1_MODEL_PRESENT,
-                )
-                from core.pf_v1_scorer import gate_passes as pf_v1_gate_passes  # noqa: PLC0415
-                from core.pf_v1_scorer import score as pf_v1_score_fn  # noqa: PLC0415
+                from core.pf_features import compute_pf_features  # noqa: PLC0415
 
-                pf1_features = compute_pf_v1_features(swaps, float(graduated_block_time))
-                if pf1_features is None:
+                # The active pf scorer is cached on scoring context as scorer._pf_scorer
+                # (set in _build_scoring_context_sync for pf models).
+                _pf_scorer = getattr(scorer, "_pf_scorer", None)
+                _pf_model_name = scoring.get("model_id", "pf")
+                _pf_threshold = float(scoring.get("rank_cut", threshold))
+
+                pf_features = compute_pf_features(swaps, float(graduated_block_time))
+                if pf_features is None:
                     # No scoreable pre-grad tape yet — defer (same pattern as other models).
                     logger.info(
-                        "%s score [pf_v1]: mint=%s no pre-grad tape yet (%d swaps) — deferring.",
+                        "%s score [pf]: mint=%s no pre-grad tape yet (%d swaps) — deferring.",
                         LOG_PREFIX, mint, len(swaps),
                     )
                     continue
 
-                if not _PF_V1_MODEL_PRESENT:
-                    # model.txt absent (CI / pre-deploy): log and skip scoring for this mint.
-                    # Do NOT mark SKIPPED — the model may be placed later.
+                if _pf_scorer is None or not _pf_scorer.MODEL_PRESENT:
+                    # model.txt absent (CI / pre-deploy): log and skip for this mint.
+                    # Do NOT mark SKIPPED — model may be placed later.
                     logger.info(
-                        "%s score [pf_v1]: mint=%s model.txt absent (CI gate) — skipping score.",
+                        "%s score [pf]: mint=%s model.txt absent (CI gate) — skipping score.",
                         LOG_PREFIX, mint,
                     )
-                    # Still mark as scored in this session to avoid spin on every tick.
+                    # Mark as scored in this session to avoid spin on every tick.
                     self._scored_mints.add(mint)
                     await sync_to_async(
                         self._set_token_status_sync, thread_sensitive=True
                     )(mint, "SCORED")
                     continue
 
-                pf1_raw_score = pf_v1_score_fn(pf1_features)
-                pf1_passed = pf_v1_gate_passes(pf1_raw_score)
-                pf1_blend = pf1_raw_score
-                pf1_result = {
-                    "blend_score": pf1_raw_score,
-                    "label_scores": {"pf_v1": pf1_raw_score},
+                # Build feature vector in the contract's feature_order
+                feature_vector = {
+                    f: pf_features.get(f, 0.0)
+                    for f in _pf_scorer.feature_order
+                }
+                pf_raw_score = _pf_scorer.score(feature_vector)
+                pf_passed = _pf_scorer.gate_passes(pf_raw_score)
+                pf_result = {
+                    "blend_score": pf_raw_score,
+                    "label_scores": {_pf_model_name: pf_raw_score},
                     "label_ranks": {},
                 }
                 logger.info(
-                    "%s score [pf_v1]: mint=%s score=%.6f threshold=%.8f gate=%s",
-                    LOG_PREFIX, mint, pf1_raw_score, threshold,
-                    "pass" if pf1_passed else "fail",
+                    "%s score [pf]: mint=%s model=%s score=%.6f threshold=%.8f gate=%s",
+                    LOG_PREFIX, mint, _pf_model_name, pf_raw_score, _pf_threshold,
+                    "pass" if pf_passed else "fail",
                 )
 
-                # Persist the Prediction record (model-agnostic, reused as-is).
-                score_time_pf1 = int(graduated_block_time + scoring["score_at_elapsed_s"])
+                # Persist the Prediction record (model-agnostic).
+                score_time_pf = int(graduated_block_time + scoring["score_at_elapsed_s"])
                 try:
                     await sync_to_async(self._persist_prediction_sync, thread_sensitive=True)(
-                        mint, score_time_pf1, pf1_result, pf1_blend, pf1_passed, scoring, sol_usd,
+                        mint, score_time_pf, pf_result, pf_raw_score, pf_passed, scoring, sol_usd,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "%s prediction-persist [pf_v1] failed for mint=%s (%s) — continuing.",
+                        "%s prediction-persist [pf] failed for mint=%s (%s) — continuing.",
                         LOG_PREFIX, mint, exc,
                     )
 
                 # Mark scored; do NOT add to _pending_settle — PnL is offline only.
-                # pf_v1 has NO live post-grad settle path (scope: score + record only).
+                # pf models have NO live post-grad settle path (scope: score + record only).
                 self._scored_mints.add(mint)
                 await sync_to_async(
                     self._set_token_status_sync, thread_sensitive=True
                 )(mint, "SCORED")
                 continue
-            # --- end pf_v1 path ---
+            # --- end pf path ---
 
             # US-76 BREAK-1: serve in USD via ONE SOL/USD spot (the shared cached
             # spot resolved in the scoring context).  vol = vol_sol × spot inside
@@ -2808,22 +2819,23 @@ class FirehoseDaemon:
         US-76 P1.1 guard: if scoring_enabled=True and reference_dist_path is
         null or missing, raises ConfigurationError to block the pool-of-1
         silent-pass path (ref_dist=None -> rank=1.0 for every token).
-        EXCEPTION: pf_v1 models do NOT use reference_dist.json — the P1.1 guard
-        is bypassed when the active model is trilly_pf_v1 (detected via
-        pf_v1_scorer.is_pf_v1_model).
+        EXCEPTION: pf models do NOT use reference_dist.json — the P1.1 guard
+        is bypassed when the active model is any trilly_pf_v* (detected via
+        pf_scorer.is_pf_model).
 
         US-76 P2.5: threshold comes from rank_cut in meta.json depth_menu, not
         a hardcoded constant.
-        EXCEPTION: pf_v1 uses flag_threshold from config.json, not depth_menu.
+        EXCEPTION: pf models use threshold from their contract (contract.json or
+        config.json), not depth_menu.
 
-        pf-v1-serving-lane: when the active model is trilly_pf_v1, the scorer
-        returned is a sentinel object with feature_list=["pf_v1"] (len=1) so the
-        _score_tick dispatch routes to the pf_v1 path.  BlendScorer is NOT
-        instantiated for pf_v1 (it would fail — no meta.json contract).
+        pf-serving-lane: when the active model is any trilly_pf_v*, the scorer
+        returned is a sentinel object with feature_list=["pf"] (len=1) so the
+        _score_tick dispatch routes to the pf path.  BlendScorer is NOT
+        instantiated for pf models (it would fail — no meta.json contract).
+        The actual PfScorer is attached to the sentinel as sentinel._pf_scorer.
         """
         from core.models import PipelineState
-        from core.pf_v1_scorer import FLAG_THRESHOLD as _PF_V1_THRESHOLD  # noqa: PLC0415
-        from core.pf_v1_scorer import is_pf_v1_model  # noqa: PLC0415
+        from core.pf_scorer import PfScorer, is_pf_model  # noqa: PLC0415
         from core.resolver import get_active_config, get_active_model
         from core.scorer import BlendScorer, ReferenceDistribution
         from trading.models import TradingSettings
@@ -2833,23 +2845,33 @@ class FirehoseDaemon:
         if model_entry is None:
             raise RuntimeError("no active model in ModelRegistry")
 
-        # pf-v1-serving-lane: detect trilly_pf_v1 artifact BEFORE BlendScorer
+        # pf-serving-lane: detect trilly_pf_v* artifact BEFORE BlendScorer
         _artifact_dir = getattr(model_entry, "artifact_dir", None)
-        _is_pf_v1 = is_pf_v1_model(_artifact_dir)
+        _is_pf = is_pf_model(_artifact_dir)
 
-        if _is_pf_v1:
-            # pf_v1 path: no BlendScorer, no reference_dist, threshold from config.json.
-            # Return a sentinel scorer with feature_list=["pf_v1"] (len=1) so
-            # _score_tick's dispatch block routes to the pf_v1 branch.
-            class _PfV1ScorerSentinel:
-                """Sentinel: signals pf_v1 routing to _score_tick dispatch."""
-                feature_list = ["pf_v1"]
-            scorer = _PfV1ScorerSentinel()
-            ref_dist = None  # pf_v1 does not use reference_dist
+        if _is_pf:
+            # pf path: no BlendScorer, no reference_dist, threshold from contract.
+            # Load the PfScorer (contract-driven) from the artifact dir.
+            try:
+                _pf_scorer_inst = PfScorer.from_dir(_artifact_dir)
+            except Exception as _pf_exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"Failed to load PfScorer from {_artifact_dir}: {_pf_exc}"
+                ) from _pf_exc
+
+            # Return a sentinel scorer with feature_list=["pf"] (len=1) so
+            # _score_tick's dispatch block routes to the pf branch.
+            # The PfScorer instance is attached as ._pf_scorer for scoring use.
+            class _PfScorerSentinel:
+                """Sentinel: signals pf routing to _score_tick dispatch."""
+                feature_list = ["pf"]
+                _pf_scorer = _pf_scorer_inst
+            scorer = _PfScorerSentinel()
+            ref_dist = None  # pf models do not use reference_dist
 
             scoring = {
-                "gate": config.scoring.gate if config else "topk",
-                "score_at_elapsed_s": config.scoring.score_at_elapsed_s if config else 0,
+                "gate": config.scoring.gate if config else "adaptive_topk",
+                "score_at_elapsed_s": config.scoring.score_at_elapsed_s if config else 1,
                 "outcome_window_s": config.outcome.window_s if config else 1800,
             }
             trading_cfg = TradingSettings.get().to_schema()
@@ -2862,21 +2884,23 @@ class FirehoseDaemon:
                 size_sol = float(paper_size_usd) / sol_usd
             else:
                 size_sol = trading_cfg.position_size_sol
-            threshold = _PF_V1_THRESHOLD  # from config.json selection.flag_threshold
+            threshold = _pf_scorer_inst.threshold  # from contract at runtime
             # model_id for Prediction persistence
-            _pf1_per_day = (
+            _pf_per_day = (
                 int(getattr(config.scoring, "per_day_target", _DEFAULT_PER_DAY))
                 if config else _DEFAULT_PER_DAY
             )
-            scoring["per_day_target"] = _pf1_per_day
+            scoring["per_day_target"] = _pf_per_day
             scoring["rank_cut"] = float(threshold)
-            scoring["model_id"] = str(getattr(model_entry, "model_version", "") or "trilly_pf_v1")
+            scoring["model_id"] = str(
+                getattr(model_entry, "model_version", "") or _pf_scorer_inst.model_name
+            )
             return scorer, ref_dist, scoring, trading_cfg, size_sol, sol_usd, threshold
 
         scorer = BlendScorer.from_registry(model_entry)
 
         # P1.1 -- require ref_dist when scoring is enabled.
-        # Guard is gated to non-pf_v1 models (pf_v1 handled above).
+        # Guard is gated to non-pf models (pf_v* handled above).
         state = PipelineState.get()
         if state.scoring_enabled:
             ref_path = config.scoring.reference_dist_path if config else None
