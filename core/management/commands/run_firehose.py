@@ -2301,11 +2301,50 @@ class FirehoseDaemon:
 
                 pf_features = compute_pf_features(swaps, float(graduated_block_time))
                 if pf_features is None:
-                    # No scoreable pre-grad tape yet — defer (same pattern as other models).
-                    logger.info(
-                        "%s score [pf]: mint=%s no pre-grad tape yet (%d swaps) — deferring.",
-                        LOG_PREFIX, mint, len(swaps),
+                    # No scoreable pre-grad tape IN MEMORY — escalate the same way
+                    # the v7/v3.2 path does: memory miss → Tier-2 lake (billy disk)
+                    # → Tier-3 Birdeye fallback (all inside _lake_backfill_task),
+                    # which loads the mint's pre-grad curve into self._tape so the
+                    # NEXT tick re-scores it.  Past the terminalize deadline →
+                    # SKIPPED.  (Previously pf deferred on the in-memory miss WITHOUT
+                    # dispatching the lake/Birdeye chain, so it could only ever score
+                    # tokens whose full curve was tailed live since daemon start —
+                    # the lookup chain is memory → disk → Birdeye, per design.)
+                    past_deadline_pf = now_epoch > (
+                        graduated_block_time + _terminate_deadline_offset
                     )
+                    if past_deadline_pf:
+                        self._scored_mints.add(mint)
+                        await sync_to_async(
+                            self._set_token_status_sync, thread_sensitive=True
+                        )(mint, "SKIPPED")
+                        logger.info(
+                            "%s score [pf]: mint=%s past deadline (%d swaps) — "
+                            "marking SKIPPED (terminalized, will not re-scan).",
+                            LOG_PREFIX, mint, len(swaps),
+                        )
+                        continue
+                    if (
+                        mint not in self._backfill_pending
+                        and backfills_dispatched < _MAX_BACKFILL_DISPATCH_PER_TICK
+                    ):
+                        self._backfill_pending.add(mint)
+                        backfills_dispatched += 1
+                        asyncio.create_task(
+                            self._lake_backfill_task(mint, graduated_block_time),
+                            name=f"firehose-lake-backfill-{mint[:8]}",
+                        )
+                        logger.info(
+                            "%s score [pf]: mint=%s no pre-grad tape in memory — "
+                            "dispatching backfill (Tier-2 billy lake → Tier-3 Birdeye).",
+                            LOG_PREFIX, mint,
+                        )
+                    else:
+                        logger.info(
+                            "%s score [pf]: mint=%s no pre-grad tape yet (%d swaps) "
+                            "— deferring (backfill pending or tick cap reached).",
+                            LOG_PREFIX, mint, len(swaps),
+                        )
                     continue
 
                 if _pf_scorer is None or not _pf_scorer.MODEL_PRESENT:
@@ -2586,7 +2625,22 @@ class FirehoseDaemon:
             self._lake_backfill_sem = asyncio.Semaphore(2)
 
         try:
-            backfiller = LakeBackfiller()
+            # TAPE_SOURCE branch (the memory→disk→Birdeye lookup chain's DISK tier):
+            #   shared_billy → scan solanaBilly's shared tape (lake/billy_tape,
+            #                  schema-A) with normalise=True so rows become the
+            #                  swap-dict shape (with 'price', phase="pre") the
+            #                  feature builders need.  The self firehose lake is
+            #                  empty in shared_billy mode, so the default base_dir
+            #                  would always miss and fall straight to Birdeye.
+            #   self         → the original self firehose lake (default base_dir).
+            if self._tape_source == "shared_billy":
+                from core.firehose.shared_tape import BILLY_TAPE_DEFAULT_ROOT  # noqa: PLC0415
+
+                backfiller = LakeBackfiller(
+                    base_dir=BILLY_TAPE_DEFAULT_ROOT, normalise=True
+                )
+            else:
+                backfiller = LakeBackfiller()
             # sync_to_async wraps the blocking file I/O so it does not block
             # the event loop during the partition scan; the semaphore bounds how
             # many such scans run concurrently (GIL/loop-starvation guard).
