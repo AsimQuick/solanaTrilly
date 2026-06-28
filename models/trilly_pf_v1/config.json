@@ -1,0 +1,53 @@
+{
+  "name": "trilly_pf_v1",
+  "built": "2026-06-28",
+  "purpose": "post-grad (Raydium) selection+exit, paper-trade DoD reference",
+  "entry": {
+    "trigger": "bonding_complete (graduation instant)",
+    "fill": "first post-grad swap >= gts+2s within 30s, slip<=15% vs at-grad quote, dust-fill guard"
+  },
+  "features_in_order": [
+    "f_value",
+    "f_momentum",
+    "f_size",
+    "f_holders",
+    "f_life",
+    "f_top1"
+  ],
+  "feature_defs": {
+    "f_value": "net_flow_sol = sum(buy SOL)-sum(sell SOL) over pre-grad curve swaps (t<=gts)",
+    "f_momentum": "buyer_accel = uniq buyers in 2nd half of [first_swap,gts] / (uniq buyers 1st half +1)",
+    "f_size": "log1p(total SOL transacted on the curve, t<=gts)",
+    "f_holders": "net_holders = wallets with sum(buy tokens) > sum(sell tokens) by gts",
+    "f_life": "curve_life_s = gts - first_swap_t",
+    "f_top1": "top-1 buyer SOL / total buy SOL"
+  },
+  "label_trained_on": "cum_0 >= 100 SOL post-grad buy-demand at break-even (selection target only)",
+  "selection": {
+    "rule": "flag if score >= flag_threshold (\u2248 top-10%/day)",
+    "flag_threshold": 0.7952236368890475
+  },
+  "exit": {
+    "timer_s": 1200,
+    "trail_pct_from_peak": 0.25,
+    "catastrophic_sl_pct_from_entry": 0.25,
+    "min_hold_s": 15,
+    "take_profit": null,
+    "realizable_price": "drain-VWAP over [t,t+30s]"
+  },
+  "sizing": {
+    "anchor_usd": 25,
+    "target_usd": 100,
+    "fills": "split-impact entry-half x exit-half S/(S+flow), 15s exit-flow window, 1% fee"
+  },
+  "gain_importance_pct": {
+    "f_value": 38.1,
+    "f_momentum": 9.6,
+    "f_size": 6.7,
+    "f_holders": 16.1,
+    "f_life": 11.2,
+    "f_top1": 18.4
+  },
+  "data_parity": "features computed from Helius firehose pre-grad curve (pumpfundata-parity); post-grad label/fills validated on Birdeye raw30k (offline only)",
+  "model_file": "model.txt (LightGBM, trained on all 57 days for forward paper use)"
+}

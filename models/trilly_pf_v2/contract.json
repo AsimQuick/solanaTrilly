@@ -1,0 +1,154 @@
+{
+  "name": "trilly_pf_v2",
+  "version": "2.0",
+  "built": "2026-06-28",
+  "supersedes": "trilly_pf_v1",
+  "status": "OFFLINE-OOT candidate \u2014 PAPER-TRADE is the arbiter. Strongest offline trilly config to date (policy-aware reg label + top-10%, 18/18 OOT days, placebo-clean, fillability-checked). offline\u2260live has burned this project \u2014 ramp from $25 on the live read.",
+  "purpose": "post-grad pump-selection (policy-aware regression label) + trailing exit for solanatrilly graduated-token entries",
+  "changes_vs_v1": [
+    "LABEL = L1 REGRESSION on realized trail-PnL @ $25 (what the exit ACTUALLY banks), rank by predicted $ \u2014 was binary demand proxy (cum_0>=100 SOL). Closes the train/serve objective gap. L1 (not L2) \u2014 outlier-robust on the tail-carried lane (plain L2 hurts).",
+    "OPERATING POINT top-10% (unchanged from v1 nominal, but now profitable to reopen): recall ~doubles 0.11->0.19, $100 +515->+726/day. v1's effective lead had drifted to top-5%; reg label makes top-10% the win.",
+    "FEATURES = locked6 + enrich7 (13) \u2014 added 7 non-leaky pre-grad-curve feats (late-demand/conviction/concentration + price-path). Were marginal under the demand label, LOAD-BEARING under the policy label.",
+    "EXIT = T1800/trail25/SL25 (was T1200). Co-tune confirmed near-optimal; 1800 a sliver better than 1200. Wider trail / longer timer / tighter SL all WORSE.",
+    "WALLET/reputation/holder/cluster features = NO-GO (4 causal constructions, all wash/hurt; redundant with curve flow). Explicitly NOT in the feature set. See WALLET_FEATURES_FINDINGS.md."
+  ],
+  "feature_vector": {
+    "n": 13,
+    "order": [
+      "f_value",
+      "f_momentum",
+      "f_size",
+      "f_holders",
+      "f_life",
+      "f_top1",
+      "new_buyers_last60",
+      "new_buyers_last300",
+      "diamond_frac",
+      "top5_buyer_share",
+      "repeat_buyer_frac",
+      "price_ret",
+      "price_maxrun"
+    ],
+    "source": "build_universe.py \u2014 all leak-free at the graduation instant (gts), from the pre-grad curve t<=gts",
+    "defs": {
+      "f_value": "net_flow_sol = \u03a3 buy SOL \u2212 \u03a3 sell SOL over pre-grad swaps",
+      "f_momentum": "buyer_accel = uniq buyers in 2nd half of [first_swap,gts] / (uniq buyers 1st half + 1)",
+      "f_size": "log1p(total SOL transacted on the curve)",
+      "f_holders": "net_holders = # wallets with \u03a3(buy tokens) > \u03a3(sell tokens) by gts",
+      "f_life": "curve_life_s = gts \u2212 first_swap_t",
+      "f_top1": "top-1 buyer SOL / total buy SOL",
+      "new_buyers_last60": "# buyers whose first buy is within 60s before gts (late fresh demand)",
+      "new_buyers_last300": "# buyers whose first buy is within 300s before gts",
+      "diamond_frac": "fraction of buyers who never sold pre-grad (conviction)",
+      "top5_buyer_share": "top-5 buyers' buy-SOL / total buy-SOL (concentration)",
+      "repeat_buyer_frac": "fraction of buyers with >=2 buys (conviction)",
+      "price_ret": "entry_quote/first_px \u2212 1 over the curve (CONTINUATION \u2014 known live-inverter, watch live)",
+      "price_maxrun": "max(px)/first_px \u2212 1 over the curve (CONTINUATION \u2014 known live-inverter, watch live)"
+    },
+    "banks_required_live": [],
+    "note": "pure pre-grad-curve, live-compliant, NO reputation-bank dependency"
+  },
+  "selection_model": {
+    "file": "model.txt",
+    "type": "lightgbm regression (L1)",
+    "target": "p25_1800_25_25 = realized trail-PnL in $ at $25 sizing under the locked exit (honest split-impact)",
+    "label_source": "pf_exitgrid.parquet (built by pf_exit_label_sweep.py --resettle)",
+    "lgbm_params": {
+      "objective": "regression_l1",
+      "num_leaves": 15,
+      "learning_rate": 0.05,
+      "min_data_in_leaf": 200,
+      "feature_fraction": 0.9,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 1,
+      "seed": 0,
+      "verbose": -1
+    },
+    "train_window": "ALL days (ship); OOT evidence from first 70% train / last 18 days test",
+    "rank": "predict $ per token, take top-10%/day",
+    "feature_importance_gain": {
+      "f_top1": 24.5,
+      "f_value": 12.1,
+      "repeat_buyer_frac": 10.6,
+      "f_holders": 7.9,
+      "price_maxrun": 6.9,
+      "f_life": 6.5,
+      "diamond_frac": 5.3,
+      "new_buyers_last300": 5.2,
+      "new_buyers_last60": 5.1,
+      "f_size": 4.2,
+      "f_momentum": 4.2,
+      "price_ret": 4.1,
+      "top5_buyer_share": 3.5
+    }
+  },
+  "exit_policy": {
+    "type": "trailing stop + hard stop-loss (sell INTO liquidity, no take-profit)",
+    "trailing_pct": 0.25,
+    "stop_loss_pct": 0.25,
+    "take_profit_pct": null,
+    "disaster_cap_pct": null,
+    "min_hold_s": 15,
+    "max_hold_s": 1800,
+    "rule": "sell at first of: price<=peak*(1-0.25) after 15s; OR price<=fill*(1-0.25); OR 1800s",
+    "settle": "honest split-impact: entry-half\u00d7exit-half S/(S+flow), 1% fee, drain-VWAP over [t,t+30s]"
+  },
+  "entry": {
+    "trigger": "pump.fun bonding_complete (graduation instant gts)",
+    "honest_fill": "first post-grad swap at t>=gts+2s within 30s; reject if slip>15% vs at-grad quote or dust (<0.3x local median); else NOT enterable (skip)"
+  },
+  "gate": {
+    "operating_point": "top-10%/day adaptive",
+    "topk_pct": 0.1,
+    "live_pred_threshold": -0.2425,
+    "live_threshold_note": "predicted-$ cutoff (median of per-day 90th pct). Per-token live can't rank a full day; start here and RECALIBRATE on the live predicted-$ distribution to hold ~10%/day."
+  },
+  "sizing": {
+    "anchor_usd": 25,
+    "target_usd": 100,
+    "ramp": "START $25; ramp to $100 ONLY on live read while logging deep-book fill quality (impact-fragile past $100)."
+  },
+  "offline_performance": {
+    "basis": "OOT 18 days, honest split-impact fills, tape-graded, mean of 3 seeds; placebo (shuffled label) top-10% = -$64/day, win 27% -> signal real",
+    "top10pct": {
+      "d25": 209.21237482072692,
+      "d100": 725.8861690781737,
+      "win": 52.43781094527363,
+      "dayspos": [
+        18,
+        18,
+        18
+      ],
+      "nd": 18,
+      "cilo": 531.8168312263242,
+      "recall": 0.18789521228545616,
+      "picks_per_day": 18.61111111111111
+    },
+    "top5pct": {
+      "d25": 137.04234591253626,
+      "d100": 515.0941035398554,
+      "win": 59.304703476482615,
+      "dayspos": [
+        18,
+        17,
+        18
+      ],
+      "nd": 18,
+      "cilo": 378.7955085717158,
+      "recall": 0.10885275519421861,
+      "picks_per_day": 9.055555555555555
+    },
+    "v1_reference": "demand label top-10% $100 = +$528/day -> v2 +726 (+37%)"
+  },
+  "caveats": [
+    "OFFLINE-OOT only; placebo-clean & seed-robust & fillability-checked (exits into $6-8k flow) but the PAPER read is the decider.",
+    "price_ret/price_maxrun are CONTINUATION/momentum = this project's recurring live-inverter; CIlo>0 + seed-robust necessary NOT sufficient.",
+    "label/fills are Birdeye post-grad tapes + modeled split-impact + recent fold; real fills/latency/impact differ, esp. toward $100.",
+    "lane structurally decays \u2014 retrain frequently; the recent fold is the only valid read."
+  ],
+  "docs": [
+    "docs/handoff_solanatrilly_pf_v2.md",
+    "analysis/graduated_pf/WALLET_FEATURES_FINDINGS.md",
+    "analysis/graduated_pf/BASELINE_PF.md"
+  ]
+}
