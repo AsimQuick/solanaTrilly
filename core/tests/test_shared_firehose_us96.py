@@ -642,6 +642,93 @@ class TestBillyTapeTailer:
         assert len(second) == 1
         assert second[0]["mint"] == _SCHEMA_A_ROWS[1]["mint"]
 
+    def _append_rows(self, path: Path, rows: list) -> None:
+        """Append rows to an existing part as a NEW concatenated gzip member.
+
+        Mirrors how solanaBilly appends to its live part-*.jsonl.gz between the
+        tailer's poll cycles.
+        """
+        with gzip.open(str(path), "ab") as gz:
+            for row in rows:
+                gz.write((json.dumps(row) + "\n").encode("utf-8"))
+
+    def test_re_reads_appended_lines_on_live_part(self, tmp_path):
+        """REGRESSION: appended swaps on the LIVE part are tailed on the next poll.
+
+        The poll guard previously compared the COMPRESSED on-disk size against the
+        UNCOMPRESSED read offset (gz.tell()).  Because JSON gzips ~5-10x, the
+        uncompressed offset overshot the compressed size after the first poll, so
+        ``size <= known_offset`` stayed true forever and the live part was skipped
+        permanently — billy's freshly-appended swaps (incl. just-graduated tokens)
+        never reached self._tape, silently starving the in-memory tier and forcing
+        every grad onto the Birdeye REST fallback.  This locks in the fix.
+        """
+        from core.firehose.shared_tape import BillyTapeTailer
+        # A realistically-sized first batch: enough rows that the UNCOMPRESSED read
+        # offset (gz.tell()) exceeds the COMPRESSED on-disk size.  JSON gzips ~5-10x,
+        # so a real billy part hits this after its first poll; tiny single-row
+        # fixtures do NOT (gzip header overhead keeps compressed >= uncompressed),
+        # which is why this batch is large — it is what actually triggers the bug.
+        first_batch = [_SCHEMA_A_ROWS[0]] * 300
+        part = self._write_part(tmp_path, "part-0.jsonl.gz", first_batch)
+        import os
+        tailer = BillyTapeTailer(root=str(tmp_path))
+        first = tailer.poll_once_sync()
+        assert len(first) == 300
+        # Precondition for the bug: uncompressed offset overshoots compressed size.
+        assert tailer._offsets[str(part)] > os.path.getsize(str(part))
+        # billy appends two more swaps to the SAME live part between polls.
+        self._append_rows(part, [_SCHEMA_A_ROWS[1], _SCHEMA_A_ROWS[2]])
+        second = tailer.poll_once_sync()
+        assert len(second) == 2  # would be 0 under the offset-unit bug
+        assert {r["mint"] for r in second} == {
+            _SCHEMA_A_ROWS[1]["mint"], _SCHEMA_A_ROWS[2]["mint"],
+        }
+        # A subsequent poll with no new bytes yields nothing (offset still honoured).
+        assert tailer.poll_once_sync() == []
+
+
+# ===========================================================================
+# 6b. shared_billy deferred in-memory re-check before Birdeye escalation
+# ===========================================================================
+
+class TestSharedBillyDeferredMemoryRetry:
+    """Under shared_billy, _lake_backfill_task re-checks the in-memory tail before
+    paying for Birdeye.  When the tailer already has the curve, it scores from
+    memory and never touches the Birdeye REST fallback (the cost win)."""
+
+    @staticmethod
+    def _swap(mint: str) -> dict:
+        return {
+            "mint": mint, "block_time": 1782452209, "price": 0.001,
+            "vol_sol": 1.0, "side": "buy", "phase": "pre",
+        }
+
+    def test_memory_hit_skips_birdeye(self):
+        """In-memory tail has >=2 swaps → returns without dispatching Birdeye."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from core.management.commands.run_firehose import FirehoseDaemon
+
+        daemon = FirehoseDaemon(tape_sink=MagicMock())
+        assert daemon._tape_source == "shared_billy"
+        mint = "Mint1111111111111111111111111111111111pump"
+        # Simulate the tailer having ingested the pre-grad curve into memory.
+        daemon._tape.add(mint, self._swap(mint))
+        daemon._tape.add(mint, self._swap(mint))
+        daemon._backfill_pending.add(mint)
+
+        with patch(
+            "core.backfill.birdeye_backfill.BirdeyeBackfiller"
+        ) as be_cls:
+            asyncio.run(daemon._lake_backfill_task(mint, 1782452209))
+            # HIT path returns before the Birdeye fallback — never constructed.
+            be_cls.assert_not_called()
+        # Pending cleared so the next _score_tick re-scores from memory.
+        assert mint not in daemon._backfill_pending
+        assert daemon._tape.count(mint) == 2
+
 
 # ===========================================================================
 # 7. LakeReader schema-A normalisation (DoD-b: single normalisation point)

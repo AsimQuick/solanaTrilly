@@ -147,6 +147,18 @@ DEFAULT_MAX_POSTGRAD_SUBSCRIPTIONS = 5
 #: immediately on the deadline is safe.
 _TERMINALIZE_GRACE_S: int = 600  # 10 minutes extra grace after window close
 
+#: shared_billy deferred in-memory re-check before Tier-3 (Birdeye) escalation.
+#: At the instant of graduation the BillyTapeTailer may not yet have ingested the
+#: token's freshest pre-grad swaps (5s poll cadence + billy's gzip-block flush
+#: latency), so a synchronous in-memory miss does NOT mean billy lacks the curve.
+#: Before paying for a Birdeye REST fetch we poll self._tape for a bounded window;
+#: on HIT the buffer is already in memory and the next _score_tick scores it for
+#: free.  Only a genuine miss (curveless/instant-grad token billy never observed)
+#: escalates to Birdeye.  Window is comfortably inside the terminalize deadline.
+_SHARED_BILLY_MEMORY_RETRY_S: float = 45.0
+_SHARED_BILLY_MEMORY_RETRY_INTERVAL_S: float = 5.0  # matches tailer poll cadence
+_SHARED_BILLY_MIN_PREGRAD_SWAPS: int = 2  # training floor (build_universe drops <2)
+
 # ---------------------------------------------------------------------------
 # Graduation-liveness watchdog constant
 # ---------------------------------------------------------------------------
@@ -2639,6 +2651,28 @@ class FirehoseDaemon:
             #       mint-indexed disk lookup can restore this tier later.
             #   self         → the original self firehose lake (default base_dir).
             if self._tape_source == "shared_billy":
+                # DISK tier disabled (a LakeBackfiller scan of billy's shared tape
+                # is a full multi-day unindexed linear scan — see the note above).
+                # billy's live data is served by the in-memory tail (the "memory"
+                # tier).  But the tailer polls every ~5s and billy's gzip blocks
+                # flush with latency, so a freshly-graduated token's swaps may not
+                # be in self._tape at the instant _score_tick first misses.  Before
+                # escalating to the paid Birdeye fallback, give the tail a bounded
+                # window to catch up: on HIT the swaps are already in self._tape and
+                # the next _score_tick scores them for free (no Birdeye spend).
+                deadline = self._clock.now().timestamp() + _SHARED_BILLY_MEMORY_RETRY_S
+                while not self._stop.is_set():
+                    if self._tape.count(mint) >= _SHARED_BILLY_MIN_PREGRAD_SWAPS:
+                        self._backfill_pending.discard(mint)
+                        logger.info(
+                            "%s lake-backfill: mint=%s billy in-memory tail caught "
+                            "up (%d swaps) — scoring from memory, no Birdeye needed.",
+                            LOG_PREFIX, mint, self._tape.count(mint),
+                        )
+                        return  # next _score_tick scores it from self._tape
+                    if self._clock.now().timestamp() >= deadline:
+                        break
+                    await asyncio.sleep(_SHARED_BILLY_MEMORY_RETRY_INTERVAL_S)
                 swaps = []
             else:
                 backfiller = LakeBackfiller()

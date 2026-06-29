@@ -4,7 +4,7 @@
 # story: US-96
 # status: implemented
 # created-by: dev-team
-# last-updated: 2026-06-26
+# last-updated: 2026-06-29
 # dependencies: glob, gzip, json, os, time, logging, dataclasses
 # ---
 """shared_tape.py — solanaBilly shared-tape reader and schema normaliser (US-96).
@@ -334,7 +334,17 @@ class BillyTapeTailer:
     ) -> None:
         self._root = root
         self._poll_interval_s = poll_interval_s
-        self._offsets: dict[str, int] = {}   # path -> byte offset of last read
+        # path -> UNCOMPRESSED stream offset of last read (drives gz.seek/gz.tell).
+        self._offsets: dict[str, int] = {}
+        # path -> COMPRESSED on-disk size at last read.  This is the "has the file
+        # grown?" guard in poll_once_sync.  It MUST be tracked separately from
+        # _offsets: os.path.getsize() returns compressed bytes while gz.tell()
+        # returns the (much larger) uncompressed position, so comparing the two
+        # directly makes the uncompressed offset overshoot the compressed size
+        # almost immediately, after which the live part-file is skipped forever
+        # and billy's freshly-appended swaps (incl. just-graduated tokens) are
+        # never tailed into self._tape — silently starving the in-memory tier.
+        self._seen_size: dict[str, int] = {}
         self.bad_lines: int = 0
         self._bad_line_log_interval = bad_line_log_interval
 
@@ -398,11 +408,14 @@ class BillyTapeTailer:
                 size = os.path.getsize(path)
             except OSError:
                 size = 0
-            known_offset = self._offsets.get(path, 0)
-            if size <= known_offset:
-                continue  # no new bytes
+            # Compare COMPRESSED size against the COMPRESSED size last seen — NOT
+            # against the uncompressed read offset (different units; see __init__).
+            # Skip only when the on-disk file has not grown since the last poll.
+            if size <= self._seen_size.get(path, 0):
+                continue  # no new compressed bytes appended
             for row in self._read_new_lines(path):
                 rows.append(norm_row_to_swap_dict(row))
+            self._seen_size[path] = size
         return rows
 
     async def async_iter(
