@@ -2626,28 +2626,29 @@ class FirehoseDaemon:
 
         try:
             # TAPE_SOURCE branch (the memory→disk→Birdeye lookup chain's DISK tier):
-            #   shared_billy → scan solanaBilly's shared tape (lake/billy_tape,
-            #                  schema-A) with normalise=True so rows become the
-            #                  swap-dict shape (with 'price', phase="pre") the
-            #                  feature builders need.  The self firehose lake is
-            #                  empty in shared_billy mode, so the default base_dir
-            #                  would always miss and fall straight to Birdeye.
+            #   shared_billy → DISK tier DISABLED.  A LakeBackfiller scan of
+            #       solanaBilly's shared tape is a FULL LINEAR scan of the whole
+            #       multi-day tape (~5M rows PER token, observed) because the tape
+            #       is not mint-indexed.  At the live graduation rate this cannot
+            #       keep up: tokens defer until they terminalize (SKIPPED) before
+            #       the scan reaches them — the lane effectively stops scoring.
+            #       billy's LIVE data is already served by the in-memory tail (the
+            #       "memory" tier), and Birdeye REST (Tier-3) is a fast,
+            #       parity-verified fallback (recovers the full pre-grad curve in
+            #       ~3s).  So shared_billy goes memory → Birdeye directly.  A fast
+            #       mint-indexed disk lookup can restore this tier later.
             #   self         → the original self firehose lake (default base_dir).
             if self._tape_source == "shared_billy":
-                from core.firehose.shared_tape import BILLY_TAPE_DEFAULT_ROOT  # noqa: PLC0415
-
-                backfiller = LakeBackfiller(
-                    base_dir=BILLY_TAPE_DEFAULT_ROOT, normalise=True
-                )
+                swaps = []
             else:
                 backfiller = LakeBackfiller()
-            # sync_to_async wraps the blocking file I/O so it does not block
-            # the event loop during the partition scan; the semaphore bounds how
-            # many such scans run concurrently (GIL/loop-starvation guard).
-            async with self._lake_backfill_sem:
-                swaps = await sync_to_async(
-                    backfiller.run_for_mint, thread_sensitive=False
-                )(mint, graduated_block_time)
+                # sync_to_async wraps the blocking file I/O so it does not block
+                # the event loop during the partition scan; the semaphore bounds
+                # how many such scans run concurrently (GIL/loop-starvation guard).
+                async with self._lake_backfill_sem:
+                    swaps = await sync_to_async(
+                        backfiller.run_for_mint, thread_sensitive=False
+                    )(mint, graduated_block_time)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "%s lake-backfill: mint=%s failed (%s) — will retry on next tick.",

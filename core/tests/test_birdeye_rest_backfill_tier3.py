@@ -126,11 +126,18 @@ def test_pagination_two_pages():
 # ---------------------------------------------------------------------------
 
 def test_window_filter_drops_post_grad():
-    """Items with block_time >= graduated_block_time are dropped."""
+    """Post-grad AMM dropped; pre-grad curve incl. the grad block kept.
+
+    Parity with build_universe (timestamp<=gts): curve trades with bt<=grad
+    (source=pump_dot_fun) are kept; same-block post-grad AMM (pump_amm) and
+    anything bt>grad are dropped.
+    """
+    grad_block_amm = _make_rest_item(2, block_time=_GRAD_BT)
+    grad_block_amm["source"] = "pump_amm"            # post-grad AMM in grad block → DROP
     items = [
-        _make_rest_item(1, block_time=_GRAD_BT - 100),   # KEEP
-        _make_rest_item(2, block_time=_GRAD_BT),          # DROP: == grad_bt
-        _make_rest_item(3, block_time=_GRAD_BT + 1),      # DROP: > grad_bt
+        _make_rest_item(1, block_time=_GRAD_BT - 100),   # KEEP (pre-grad curve)
+        grad_block_amm,                                  # DROP: grad-block AMM
+        _make_rest_item(3, block_time=_GRAD_BT + 1),     # DROP: > grad_bt
     ]
 
     from core.backfill import birdeye_backfill
@@ -746,3 +753,65 @@ def test_lake_hit_does_not_call_birdeye():
         "BirdeyeBackfiller.run_for_mint was called after a lake HIT — "
         "Tier-3 should only be reached on lake MISS."
     )
+
+
+# ---------------------------------------------------------------------------
+# Instant / single-block graduation: grad-block curve trades must be INCLUDED
+# (bt == grad AND source==pump_dot_fun), same-block AMM (pump_amm) EXCLUDED.
+# Matches training (build_universe uses timestamp <= gts).  Regression for the
+# strict bt<grad filter that dropped instant grads entirely (0 swaps -> SKIP).
+# ---------------------------------------------------------------------------
+
+def test_instant_grad_includes_grad_block_curve_excludes_amm(monkeypatch):
+    from core import backfill as _pkg  # noqa: F401
+    from core.backfill import birdeye_backfill
+
+    g = _GRAD_BT
+
+    def _curve(n, bt):
+        it = _make_rest_item(n, block_time=bt)
+        it["source"] = "pump_dot_fun"
+        return it
+
+    def _amm(n, bt):
+        it = _make_rest_item(n, block_time=bt)
+        it["source"] = "pump_amm"
+        return it
+
+    # Ascending by block_time: a couple pre-grad curve, then the WHOLE curve in
+    # the grad block (instant grad) interleaved with same-block AMM, then post.
+    items = [
+        _curve(0, g - 20),
+        _curve(1, g - 10),
+        _curve(2, g),        # grad-block curve — MUST be included
+        _curve(3, g),        # grad-block curve — MUST be included
+        _amm(4, g),          # grad-block AMM — MUST be excluded
+        _amm(5, g + 5),      # post-grad AMM — excluded (bt > grad)
+    ]
+
+    monkeypatch.setattr(
+        birdeye_backfill, "_be_get",
+        lambda params, api_key, **kw: _make_page(items),
+    )
+    bf = birdeye_backfill.BirdeyeBackfiller(api_key="k")
+    got = bf.run_for_mint(_MINT, g, sol_usd_spot=_SOL_USD_SPOT)
+
+    bts = sorted(int(s["block_time"]) for s in got)
+    assert len(got) == 4, f"expected 2 pre + 2 grad-block curve = 4, got {len(got)}: {bts}"
+    assert bts == [g - 20, g - 10, g, g], bts
+    # No post-grad / AMM rows leaked in.
+    assert all(int(s["block_time"]) <= g for s in got)
+
+
+def test_strict_pre_grad_still_excludes_post_amm(monkeypatch):
+    """Sanity: a normal token with only pre-grad curve + post AMM keeps just the curve."""
+    from core.backfill import birdeye_backfill
+    g = _GRAD_BT
+    items = [_make_rest_item(i, block_time=g - 100 + i * 10) for i in range(5)]  # all pre, pump_dot_fun
+    post = _make_rest_item(99, block_time=g + 30)
+    post["source"] = "pump_amm"
+    items.append(post)
+    monkeypatch.setattr(birdeye_backfill, "_be_get", lambda params, api_key, **kw: _make_page(items))
+    got = birdeye_backfill.BirdeyeBackfiller(api_key="k").run_for_mint(_MINT, g, sol_usd_spot=_SOL_USD_SPOT)
+    assert len(got) == 5
+    assert all(int(s["block_time"]) < g for s in got)

@@ -180,21 +180,25 @@ def test_lake_backfiller_correct_partition(tmp_path: Path):
 
 
 def test_lake_backfiller_excludes_post_grad_block_time(tmp_path: Path):
-    """Rows with block_time >= graduated_block_time are excluded even if phase=pre."""
+    """bt>grad excluded; same-block POST-grad (phase=post) excluded; grad-block
+    CURVE (phase=pre, bt==grad) INCLUDED (parity w/ training timestamp<=gts)."""
     grad_bt = int(datetime(2024, 3, 15, 0, 0, 0, tzinfo=timezone.utc).timestamp())
     mint = "MINT_POST_BT"
 
-    # Row at exactly grad_bt (NOT strictly before) — must be excluded.
-    row_at_grad = _make_swap(mint, grad_bt, phase="pre")
-    row_after_grad = _make_swap(mint, grad_bt + 100, phase="pre")
-    row_before_grad = _make_swap(mint, grad_bt - 1, phase="pre")
-    _write_lake_partition(tmp_path, "2024-03-15", [row_at_grad, row_after_grad, row_before_grad])
+    row_at_grad_curve = _make_swap(mint, grad_bt, phase="pre")     # INCLUDE (grad-block curve)
+    row_at_grad_amm = _make_swap(mint, grad_bt, phase="post")      # EXCLUDE (grad-block AMM)
+    row_after_grad = _make_swap(mint, grad_bt + 100, phase="pre")  # EXCLUDE (bt > grad)
+    row_before_grad = _make_swap(mint, grad_bt - 1, phase="pre")   # INCLUDE
+    _write_lake_partition(
+        tmp_path, "2024-03-15",
+        [row_at_grad_curve, row_at_grad_amm, row_after_grad, row_before_grad],
+    )
 
     backfiller = LakeBackfiller(base_dir=tmp_path)
     result = backfiller.run_for_mint(mint, grad_bt)
 
-    assert len(result) == 1
-    assert result[0]["block_time"] == grad_bt - 1
+    bts = sorted(int(r["block_time"]) for r in result)
+    assert bts == [grad_bt - 1, grad_bt], bts
 
 
 # ---------------------------------------------------------------------------
@@ -703,3 +707,22 @@ def test_lake_backfill_without_normalise_misses_schema_a(tmp_path):
 
     got = LakeBackfiller(base_dir=tmp_path, normalise=False).run_for_mint("MINTPFV2", grad_bt)
     assert got == [], f"un-normalised schema-A rows must yield 0 swaps, got {len(got)}"
+
+
+def test_lake_backfill_includes_grad_block_curve_excludes_post(tmp_path):
+    """Instant grad: phase='pre' rows AT the grad block (bt == grad) are INCLUDED
+    (match training timestamp<=gts); same-block phase='post' AMM rows EXCLUDED;
+    bt>grad excluded.  Regression for the strict bt<grad drop of instant grads."""
+    g = 1_782_000_000
+    date_str = datetime.fromtimestamp(g, tz=timezone.utc).strftime("%Y-%m-%d")
+    rows = [
+        _make_swap("MINSTANT", g - 20, phase="pre"),
+        _make_swap("MINSTANT", g - 10, phase="pre"),
+        _make_swap("MINSTANT", g, phase="pre"),       # grad-block curve — included
+        _make_swap("MINSTANT", g, phase="post"),      # grad-block AMM — excluded
+        _make_swap("MINSTANT", g + 5, phase="pre"),   # post — excluded (bt>grad)
+    ]
+    _write_lake_partition(tmp_path, date_str, rows)
+    got = LakeBackfiller(base_dir=tmp_path).run_for_mint("MINSTANT", g)
+    bts = sorted(int(s["block_time"]) for s in got)
+    assert bts == [g - 20, g - 10, g], bts

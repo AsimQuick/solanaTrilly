@@ -71,6 +71,13 @@ _OFFSET_RESET_THRESHOLD = 9800
 # at most ~3 days; we use 1 h as the practical pre-grad feature window.
 _PRE_GRAD_LOOKBACK_S: int = 3600
 
+# Birdeye `source` stamp for pre-grad bonding-curve trades (vs post-grad AMM
+# "pump_amm").  Instant/single-block graduations put the WHOLE curve in the
+# graduation block, so we must INCLUDE grad-block trades from this source to
+# match training (build_universe.py filters timestamp <= gts), while still
+# EXCLUDING same-block post-grad AMM trades.
+_PREGRAD_CURVE_SOURCE: str = "pump_dot_fun"
+
 # Per-try sleep multiplier for >=500 errors (seconds).
 _SERVER_ERR_SLEEP_FACTOR: float = 1.5
 
@@ -202,7 +209,10 @@ def _map_rest_item(
         return None
 
     # Pre-grad window filter (belt-and-suspenders; caller also filters).
-    if block_time >= graduated_block_time:
+    # Inclusive upper bound (<= grad) to match training (build_universe uses
+    # timestamp <= gts).  The CALLER excludes same-block post-grad AMM trades by
+    # source; here we only need the window bound, so allow the grad block.
+    if block_time > graduated_block_time:
         return None
     t_from = graduated_block_time - _PRE_GRAD_LOOKBACK_S
     if block_time < t_from:
@@ -506,12 +516,16 @@ class BirdeyeBackfiller:
 
                 last_bt = bt
 
-                # Stop consuming once we pass the graduation time.
+                # Stop consuming once we pass the graduation block entirely.
                 if bt > t_to:
                     break
 
-                # Skip items at or after grad (exclusive window upper bound).
-                if bt >= t_to:
+                # At the graduation BLOCK (bt == grad), include ONLY pre-grad
+                # bonding-curve trades (source=pump_dot_fun) and EXCLUDE same-block
+                # post-grad AMM (pump_amm).  Instant/single-block graduations put
+                # the whole curve in the grad block — a strict bt<grad dropped them
+                # entirely (train/serve skew vs build_universe's timestamp<=gts).
+                if bt == t_to and it.get("source") != _PREGRAD_CURVE_SOURCE:
                     continue
 
                 mapped = _map_rest_item(it, mint, graduated_block_time, sol_usd_spot)

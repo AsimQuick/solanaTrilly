@@ -133,12 +133,17 @@ class LakeBackfiller:
                 # Cross-mint guard: the partition may contain many mints.
                 if row.get("mint") != mint:
                     continue
-                # Pre-grad guard: only rows strictly before graduation.
+                # Pre-grad guard: rows up to AND INCLUDING the graduation block
+                # (bt <= grad) to match training (build_universe uses
+                # timestamp <= gts).  Instant/single-block graduations put the
+                # whole bonding curve in the grad block; a strict bt<grad dropped
+                # them.  Same-block POST-grad AMM rows are still excluded by the
+                # phase guard below (phase=="post"), so this admits only curve rows.
                 try:
                     bt = int(row["block_time"])
                 except (KeyError, TypeError, ValueError):
                     continue
-                if bt >= graduated_block_time:
+                if bt > graduated_block_time:
                     continue
                 # Phase guard: post-grad rows written by the sink carry
                 # phase="post"; feeding them would corrupt the feature vector.
